@@ -62,10 +62,16 @@ type RentalExportRow = {
 
 export default function ExcelExportButton({
   rentals,
+  rows,
 }: {
-  rentals:
-    RentalExportRow[]
+  rentals?: RentalExportRow[]
+  rows?: RentalExportRow[]
 }) {
+  const exportData =
+    rentals ??
+    rows ??
+    []
+
   function vehicleTypeText(
     value?:
       | string
@@ -148,7 +154,7 @@ export default function ExcelExportButton({
 
   function exportExcel() {
     if (
-      rentals.length ===
+      exportData.length ===
       0
     ) {
       alert(
@@ -158,8 +164,8 @@ export default function ExcelExportButton({
       return
     }
 
-    const rows =
-      rentals.map(
+    const excelRows =
+      exportData.map(
         (item) => ({
           客戶編號:
             item.customer_code ||
@@ -226,67 +232,53 @@ export default function ExcelExportButton({
 
     const worksheet =
       XLSX.utils.json_to_sheet(
-        rows
+        excelRows
       )
 
     worksheet[
       '!cols'
     ] = [
       {
-        wch:
-          14,
+        wch: 14,
       },
       {
-        wch:
-          14,
+        wch: 14,
       },
       {
-        wch:
-          15,
+        wch: 15,
       },
       {
-        wch:
-          14,
+        wch: 14,
       },
       {
-        wch:
-          10,
+        wch: 10,
       },
       {
-        wch:
-          18,
+        wch: 18,
       },
       {
-        wch:
-          13,
+        wch: 13,
       },
       {
-        wch:
-          13,
+        wch: 13,
       },
       {
-        wch:
-          12,
+        wch: 12,
       },
       {
-        wch:
-          12,
+        wch: 12,
       },
       {
-        wch:
-          12,
+        wch: 12,
       },
       {
-        wch:
-          13,
+        wch: 13,
       },
       {
-        wch:
-          18,
+        wch: 18,
       },
       {
-        wch:
-          35,
+        wch: 35,
       },
     ]
 

@@ -6,6 +6,8 @@ import MonthlyRentalModal from '@/components/MonthlyRentalModal'
 
 type Rental = {
   id: string
+  parking_lot_id: string
+  customer_code: string | null
   customer_name: string
   phone: string | null
   vehicle_plate: string

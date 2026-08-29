@@ -308,9 +308,16 @@ export default function WaitingListPage() {
         return
       }
 
-      setRows(
-        (data || []) as WaitingRow[]
-      )
+      const normalizedRows: WaitingRow[] =
+        (data || []).map((item: any) => ({
+          ...item,
+          parking_lots:
+            Array.isArray(item.parking_lots)
+              ? item.parking_lots[0] || null
+              : item.parking_lots || null,
+        }))
+
+      setRows(normalizedRows)
     } catch (
       error: any
     ) {
