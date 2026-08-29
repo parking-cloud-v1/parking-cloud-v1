@@ -1,0 +1,1386 @@
+'use client'
+
+import {
+  FormEvent,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
+import { createClient } from '@/lib/supabase/client'
+
+type ParkingLot = {
+  id: string
+  name: string
+}
+
+type ResultValue =
+  | 'yes'
+  | 'no'
+  | ''
+
+type ItemForm = {
+  item_code: string
+  category:
+    | '文件類'
+    | '設備類'
+    | '環境類'
+  item_name: string
+  result: ResultValue
+  item_note: string
+  sort_order: number
+}
+
+const DEFAULT_ITEMS: ItemForm[] = [
+  {
+    item_code:
+      'document_monthly_list',
+    category:
+      '文件類',
+    item_name:
+      '月票車主名冊是否備妥',
+    result: '',
+    item_note:
+      '無則免',
+    sort_order: 1,
+  },
+  {
+    item_code:
+      'document_emergency_phone',
+    category:
+      '文件類',
+    item_name:
+      '緊急通報電話是否備妥',
+    result: '',
+    item_note:
+      '必填',
+    sort_order: 2,
+  },
+  {
+    item_code:
+      'equipment_flood_gate',
+    category:
+      '設備類',
+    item_name:
+      '防水閘門測試功能良好',
+    result: '',
+    item_note:
+      '無則免',
+    sort_order: 3,
+  },
+  {
+    item_code:
+      'equipment_pump',
+    category:
+      '設備類',
+    item_name:
+      '抽水馬達測試功能良好',
+    result: '',
+    item_note:
+      '無則免',
+    sort_order: 4,
+  },
+  {
+    item_code:
+      'equipment_mobile_pump',
+    category:
+      '設備類',
+    item_name:
+      '移動式抽水機測試功能良好',
+    result: '',
+    item_note:
+      '無則免',
+    sort_order: 5,
+  },
+  {
+    item_code:
+      'equipment_generator',
+    category:
+      '設備類',
+    item_name:
+      '緊急發電機測試功能良好',
+    result: '',
+    item_note:
+      '必填',
+    sort_order: 6,
+  },
+  {
+    item_code:
+      'equipment_sandbags',
+    category:
+      '設備類',
+    item_name:
+      '沙包是否備妥',
+    result: '',
+    item_note:
+      '必填',
+    sort_order: 7,
+  },
+  {
+    item_code:
+      'environment_drain',
+    category:
+      '環境類',
+    item_name:
+      '截（排）水溝是否清浚',
+    result: '',
+    item_note:
+      '必填',
+    sort_order: 8,
+  },
+  {
+    item_code:
+      'environment_tree',
+    category:
+      '環境類',
+    item_name:
+      '樹木是否修剪及加固',
+    result: '',
+    item_note:
+      '無則免',
+    sort_order: 9,
+  },
+]
+
+function localDateText() {
+  const now =
+    new Date()
+
+  const year =
+    now.getFullYear()
+
+  const month =
+    String(
+      now.getMonth() + 1
+    ).padStart(
+      2,
+      '0'
+    )
+
+  const day =
+    String(
+      now.getDate()
+    ).padStart(
+      2,
+      '0'
+    )
+
+  return `${year}-${month}-${day}`
+}
+
+export default function NewDisasterInspectionPage() {
+  const supabase =
+    createClient()
+
+  const [
+    parkingLots,
+    setParkingLots,
+  ] =
+    useState<
+      ParkingLot[]
+    >([])
+
+  const [
+    parkingLotId,
+    setParkingLotId,
+  ] =
+    useState('')
+
+  const [
+    eventType,
+    setEventType,
+  ] =
+    useState<
+      'typhoon'
+      | 'heavy_rain'
+    >('typhoon')
+
+  const [
+    lotType,
+    setLotType,
+  ] =
+    useState<
+      | '立體'
+      | '機械'
+      | '平面'
+      | ''
+    >('')
+
+  const [
+    operatorName,
+    setOperatorName,
+  ] =
+    useState(
+      '智驛科技有限公司'
+    )
+
+  const [
+    inspectorName,
+    setInspectorName,
+  ] =
+    useState('')
+
+  const [
+    inspectionDate,
+    setInspectionDate,
+  ] =
+    useState(
+      localDateText()
+    )
+
+  const [
+    parkingLotPhone,
+    setParkingLotPhone,
+  ] =
+    useState('')
+
+  const [
+    emergencyContact1,
+    setEmergencyContact1,
+  ] =
+    useState('')
+
+  const [
+    emergencyPhone1,
+    setEmergencyPhone1,
+  ] =
+    useState('')
+
+  const [
+    emergencyContact2,
+    setEmergencyContact2,
+  ] =
+    useState('')
+
+  const [
+    emergencyPhone2,
+    setEmergencyPhone2,
+  ] =
+    useState('')
+
+  const [
+    reviewer,
+    setReviewer,
+  ] =
+    useState('')
+
+  const [
+    items,
+    setItems,
+  ] =
+    useState<
+      ItemForm[]
+    >(
+      DEFAULT_ITEMS
+    )
+
+  const [
+    saving,
+    setSaving,
+  ] =
+    useState(false)
+
+  const [
+    message,
+    setMessage,
+  ] =
+    useState('')
+
+  const [
+    showPreview,
+    setShowPreview,
+  ] =
+    useState(false)
+
+  useEffect(() => {
+    loadParkingLots()
+  }, [])
+
+  async function loadParkingLots() {
+    const {
+      data,
+      error,
+    } =
+      await supabase
+        .from(
+          'parking_lots'
+        )
+        .select(
+          'id, name'
+        )
+        .eq(
+          'status',
+          'active'
+        )
+        .order(
+          'name'
+        )
+
+    if (
+      error
+    ) {
+      setMessage(
+        '停車場讀取失敗：' +
+          error.message
+      )
+      return
+    }
+
+    const lots =
+      data || []
+
+    setParkingLots(
+      lots
+    )
+
+    if (
+      lots.length >
+      0
+    ) {
+      setParkingLotId(
+        lots[0].id
+      )
+    }
+  }
+
+  const selectedParkingLot =
+    useMemo(
+      () =>
+        parkingLots.find(
+          (lot) =>
+            lot.id ===
+            parkingLotId
+        ),
+      [
+        parkingLots,
+        parkingLotId,
+      ]
+    )
+
+  function updateItemResult(
+    index: number,
+    result: ResultValue
+  ) {
+    setItems(
+      (
+        current
+      ) =>
+        current.map(
+          (
+            item,
+            itemIndex
+          ) =>
+            itemIndex ===
+            index
+              ? {
+                  ...item,
+                  result,
+                }
+              : item
+        )
+    )
+  }
+
+  function updateItemNote(
+    index: number,
+    note: string
+  ) {
+    setItems(
+      (
+        current
+      ) =>
+        current.map(
+          (
+            item,
+            itemIndex
+          ) =>
+            itemIndex ===
+            index
+              ? {
+                  ...item,
+                  item_note:
+                    note,
+                }
+              : item
+        )
+    )
+  }
+
+  async function saveInspection(
+    e: FormEvent
+  ) {
+    e.preventDefault()
+
+    if (
+      saving
+    ) {
+      return
+    }
+
+    setMessage('')
+
+    if (
+      !parkingLotId
+    ) {
+      setMessage(
+        '請選擇停車場'
+      )
+      return
+    }
+
+    if (
+      !lotType
+    ) {
+      setMessage(
+        '請選擇停車場型式'
+      )
+      return
+    }
+
+    if (
+      !inspectorName.trim()
+    ) {
+      setMessage(
+        '請輸入檢查人員'
+      )
+      return
+    }
+
+    if (
+      !inspectionDate
+    ) {
+      setMessage(
+        '請選擇檢查日期'
+      )
+      return
+    }
+
+    setSaving(
+      true
+    )
+
+    try {
+      const {
+        data: {
+          user,
+        },
+      } =
+        await supabase
+          .auth
+          .getUser()
+
+      if (
+        !user
+      ) {
+        setMessage(
+          '登入狀態失效，請重新登入'
+        )
+        return
+      }
+
+      const {
+        data:
+          inspection,
+        error:
+          insertError,
+      } =
+        await supabase
+          .from(
+            'disaster_inspections'
+          )
+          .insert({
+            parking_lot_id:
+              parkingLotId,
+
+            event_type:
+              eventType,
+
+            lot_type:
+              lotType,
+
+            operator_name:
+              operatorName.trim() ||
+              null,
+
+            inspector_name:
+              inspectorName.trim(),
+
+            inspection_date:
+              inspectionDate,
+
+            parking_lot_phone:
+              parkingLotPhone.trim() ||
+              null,
+
+            emergency_contact_1:
+              emergencyContact1.trim() ||
+              null,
+
+            emergency_phone_1:
+              emergencyPhone1.trim() ||
+              null,
+
+            emergency_contact_2:
+              emergencyContact2.trim() ||
+              null,
+
+            emergency_phone_2:
+              emergencyPhone2.trim() ||
+              null,
+
+            status:
+              'draft',
+
+            created_by:
+              user.id,
+
+            updated_at:
+              new Date()
+                .toISOString(),
+          })
+          .select(
+            'id'
+          )
+          .single()
+
+      if (
+        insertError ||
+        !inspection
+      ) {
+        setMessage(
+          '建立檢查表失敗：' +
+            (insertError?.message ||
+              '未知錯誤')
+        )
+        return
+      }
+
+      /*
+       * 主表建立後，資料庫 trigger
+       * 會自動建立 9 個檢查項目。
+       * 這裡只更新使用者實際填寫的結果與備註。
+       */
+      for (
+        const item of
+        items
+      ) {
+        const {
+          error:
+            itemError,
+        } =
+          await supabase
+            .from(
+              'disaster_inspection_items'
+            )
+            .update({
+              result:
+                item.result ||
+                null,
+
+              item_note:
+                item.item_note ||
+                null,
+            })
+            .eq(
+              'inspection_id',
+              inspection.id
+            )
+            .eq(
+              'item_code',
+              item.item_code
+            )
+
+        if (
+          itemError
+        ) {
+          setMessage(
+            '檢查表已建立，但檢查項目儲存失敗：' +
+              itemError.message
+          )
+          return
+        }
+      }
+
+      /*
+       * reviewer 目前先保留在備註欄位需求階段，
+       * 下一步建立正式 PDF 輸出前，
+       * 再依原表欄位補進資料庫。
+       */
+      if (
+        reviewer.trim()
+      ) {
+        console.log(
+          '交通局承辦人員覆核：',
+          reviewer.trim()
+        )
+      }
+
+      window.location.href =
+        `/dashboard/disaster-inspections/${inspection.id}`
+    } catch (
+      error: any
+    ) {
+      setMessage(
+        '儲存失敗：' +
+          (error?.message ||
+            '未知錯誤')
+      )
+    } finally {
+      setSaving(
+        false
+      )
+    }
+  }
+
+  return (
+    <div
+      style={{
+        paddingBottom:
+          40,
+      }}
+    >
+      <div>
+        <h1
+          style={{
+            marginTop: 0,
+            marginBottom: 6,
+          }}
+        >
+          新增防災自主檢查表
+        </h1>
+
+        <p
+          className="muted"
+          style={{
+            margin: 0,
+          }}
+        >
+          欄位依新北市政府交通局颱風前（或豪、大雨）整備工作自主檢查表建立。
+        </p>
+      </div>
+
+      <form
+        onSubmit={
+          saveInspection
+        }
+      >
+        <div
+          className="card"
+          style={{
+            marginTop:
+              20,
+          }}
+        >
+          <h2
+            style={{
+              marginTop: 0,
+            }}
+          >
+            基本資料
+          </h2>
+
+          <div
+            style={{
+              display:
+                'grid',
+              gridTemplateColumns:
+                'repeat(auto-fit, minmax(260px, 1fr))',
+              gap: 16,
+            }}
+          >
+            <div
+              className="field"
+            >
+              <label>
+                停車場名稱 *
+              </label>
+
+              <select
+                value={
+                  parkingLotId
+                }
+                onChange={(
+                  e
+                ) =>
+                  setParkingLotId(
+                    e.target
+                      .value
+                  )
+                }
+                required
+              >
+                {parkingLots.map(
+                  (
+                    lot
+                  ) => (
+                    <option
+                      key={
+                        lot.id
+                      }
+                      value={
+                        lot.id
+                      }
+                    >
+                      {
+                        lot.name
+                      }
+                    </option>
+                  )
+                )}
+              </select>
+            </div>
+
+            <div
+              className="field"
+            >
+              <label>
+                防災類型
+              </label>
+
+              <select
+                value={
+                  eventType
+                }
+                onChange={(
+                  e
+                ) =>
+                  setEventType(
+                    e.target
+                      .value as
+                      | 'typhoon'
+                      | 'heavy_rain'
+                  )
+                }
+              >
+                <option value="typhoon">
+                  颱風前
+                </option>
+
+                <option value="heavy_rain">
+                  豪、大雨
+                </option>
+              </select>
+            </div>
+
+            <div
+              className="field"
+            >
+              <label>
+                停車場型式 *
+              </label>
+
+              <select
+                value={
+                  lotType
+                }
+                onChange={(
+                  e
+                ) =>
+                  setLotType(
+                    e.target
+                      .value as
+                      | '立體'
+                      | '機械'
+                      | '平面'
+                      | ''
+                  )
+                }
+                required
+              >
+                <option value="">
+                  請選擇
+                </option>
+
+                <option value="立體">
+                  立體
+                </option>
+
+                <option value="機械">
+                  機械
+                </option>
+
+                <option value="平面">
+                  平面
+                </option>
+
+              </select>
+            </div>
+
+            <div
+              className="field"
+            >
+              <label>
+                經營廠商
+              </label>
+
+              <input
+                value={
+                  operatorName
+                }
+                onChange={(
+                  e
+                ) =>
+                  setOperatorName(
+                    e.target
+                      .value
+                  )
+                }
+              />
+            </div>
+
+            <div
+              className="field"
+            >
+              <label>
+                檢查人員 *
+              </label>
+
+              <input
+                value={
+                  inspectorName
+                }
+                onChange={(
+                  e
+                ) =>
+                  setInspectorName(
+                    e.target
+                      .value
+                  )
+                }
+                required
+              />
+            </div>
+
+            <div
+              className="field"
+            >
+              <label>
+                檢查日期 *
+              </label>
+
+              <input
+                type="date"
+                value={
+                  inspectionDate
+                }
+                onChange={(
+                  e
+                ) =>
+                  setInspectionDate(
+                    e.target
+                      .value
+                  )
+                }
+                required
+              />
+            </div>
+
+            <div
+              className="field"
+            >
+              <label>
+                停車場電話
+              </label>
+
+              <input
+                value={
+                  parkingLotPhone
+                }
+                onChange={(
+                  e
+                ) =>
+                  setParkingLotPhone(
+                    e.target
+                      .value
+                  )
+                }
+              />
+            </div>
+          </div>
+
+          {selectedParkingLot && (
+            <div
+              className="muted"
+              style={{
+                marginTop:
+                  14,
+              }}
+            >
+              目前選擇：
+              {
+                selectedParkingLot.name
+              }
+            </div>
+          )}
+        </div>
+
+        <div
+          className="card"
+          style={{
+            marginTop:
+              20,
+          }}
+        >
+          <h2
+            style={{
+              marginTop: 0,
+            }}
+          >
+            自主檢查項目
+          </h2>
+
+          <div
+            style={{
+              overflowX:
+                'auto',
+            }}
+          >
+            <table
+              style={{
+                width:
+                  '100%',
+                minWidth:
+                  900,
+                borderCollapse:
+                  'collapse',
+              }}
+            >
+              <thead>
+                <tr>
+                  <th>
+                    工作事項
+                  </th>
+
+                  <th>
+                    檢查項目
+                  </th>
+
+                  <th>
+                    是
+                  </th>
+
+                  <th>
+                    否
+                  </th>
+
+                  <th>
+                    備註
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {items.map(
+                  (
+                    item,
+                    index
+                  ) => (
+                    <tr
+                      key={
+                        item.item_code
+                      }
+                      style={{
+                        borderTop:
+                          '1px solid #e5e7eb',
+                      }}
+                    >
+                      <td
+                        style={{
+                          padding:
+                            10,
+                          fontWeight:
+                            700,
+                          width:
+                            100,
+                        }}
+                      >
+                        {
+                          item.category
+                        }
+                      </td>
+
+                      <td
+                        style={{
+                          padding:
+                            10,
+                          minWidth:
+                            280,
+                        }}
+                      >
+                        {
+                          item.item_name
+                        }
+                      </td>
+
+                      <td
+                        style={{
+                          padding:
+                            10,
+                          textAlign:
+                            'center',
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name={
+                            item.item_code
+                          }
+                          checked={
+                            item.result ===
+                            'yes'
+                          }
+                          onChange={() =>
+                            updateItemResult(
+                              index,
+                              'yes'
+                            )
+                          }
+                        />
+                      </td>
+
+                      <td
+                        style={{
+                          padding:
+                            10,
+                          textAlign:
+                            'center',
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name={
+                            item.item_code
+                          }
+                          checked={
+                            item.result ===
+                            'no'
+                          }
+                          onChange={() =>
+                            updateItemResult(
+                              index,
+                              'no'
+                            )
+                          }
+                        />
+                      </td>
+
+                      <td
+                        style={{
+                          padding:
+                            10,
+                          minWidth:
+                            200,
+                        }}
+                      >
+                        <input
+                          value={
+                            item.item_note
+                          }
+                          onChange={(
+                            e
+                          ) =>
+                            updateItemNote(
+                              index,
+                              e.target
+                                .value
+                            )
+                          }
+                          style={{
+                            width:
+                              '100%',
+                            boxSizing:
+                              'border-box',
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  )
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div
+          className="card"
+          style={{
+            marginTop:
+              20,
+          }}
+        >
+          <h2
+            style={{
+              marginTop: 0,
+            }}
+          >
+            緊急聯絡資料
+          </h2>
+
+          <div
+            style={{
+              display:
+                'grid',
+              gridTemplateColumns:
+                'repeat(auto-fit, minmax(260px, 1fr))',
+              gap: 16,
+            }}
+          >
+            <div
+              className="field"
+            >
+              <label>
+                緊急連絡人 1
+              </label>
+
+              <input
+                value={
+                  emergencyContact1
+                }
+                onChange={(
+                  e
+                ) =>
+                  setEmergencyContact1(
+                    e.target
+                      .value
+                  )
+                }
+              />
+            </div>
+
+            <div
+              className="field"
+            >
+              <label>
+                電話
+              </label>
+
+              <input
+                value={
+                  emergencyPhone1
+                }
+                onChange={(
+                  e
+                ) =>
+                  setEmergencyPhone1(
+                    e.target
+                      .value
+                  )
+                }
+              />
+            </div>
+
+            <div
+              className="field"
+            >
+              <label>
+                緊急連絡人 2
+              </label>
+
+              <input
+                value={
+                  emergencyContact2
+                }
+                onChange={(
+                  e
+                ) =>
+                  setEmergencyContact2(
+                    e.target
+                      .value
+                  )
+                }
+              />
+            </div>
+
+            <div
+              className="field"
+            >
+              <label>
+                電話
+              </label>
+
+              <input
+                value={
+                  emergencyPhone2
+                }
+                onChange={(
+                  e
+                ) =>
+                  setEmergencyPhone2(
+                    e.target
+                      .value
+                  )
+                }
+              />
+            </div>
+
+            <div
+              className="field"
+            >
+              <label>
+                交通局承辦人員覆核
+              </label>
+
+              <input
+                value={
+                  reviewer
+                }
+                onChange={(
+                  e
+                ) =>
+                  setReviewer(
+                    e.target
+                      .value
+                  )
+                }
+                placeholder="可先留空"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div
+          className="card"
+          style={{ marginTop: 20 }}
+        >
+          <h2 style={{ marginTop: 0 }}>佐證照片</h2>
+          <div className="muted">
+            下一步會接照片上傳，並依交通局原表排成第 1 頁 2 張、第 2 頁 4 張。
+          </div>
+        </div>
+
+        <div className="card" style={{ marginTop: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <h2 style={{ marginTop: 0, marginBottom: 6 }}>表單預覽</h2>
+              <div className="muted">預覽版型依交通局原始自主檢查表排列。</div>
+            </div>
+            <button type="button" className="btn" onClick={() => setShowPreview(!showPreview)}>
+              {showPreview ? '關閉預覽' : '預覽交通局表單'}
+            </button>
+          </div>
+
+          {showPreview && (
+            <div style={{ marginTop: 18, background: '#e5e7eb', padding: 18, overflowX: 'auto' }}>
+              <div style={{ width: 760, margin: '0 auto', background: '#fff', color: '#000', padding: 24, boxSizing: 'border-box', fontFamily: '"Microsoft JhengHei", sans-serif' }}>
+                <div style={{ textAlign: 'center', fontSize: 24, fontWeight: 700, marginBottom: 18 }}>
+                  新北市政府交通局颱風前（或豪、大雨）整備工作自主檢查表
+                </div>
+                <div style={{ fontSize: 20, marginBottom: 12 }}>
+                  停車場名稱：{selectedParkingLot?.name || '________________'}
+                </div>
+                <div style={{ fontSize: 20, marginBottom: 16 }}>
+                  停車場型式：{lotType === '立體' ? '☑' : '□'}立體　{lotType === '機械' ? '☑' : '□'}機械　{lotType === '平面' ? '☑' : '□'}平面
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 16 }}>
+                  <thead>
+                    <tr>
+                      <th rowSpan={2} style={{ border: '1px solid #000', padding: 8, width: 90 }}>工作事項</th>
+                      <th rowSpan={2} style={{ border: '1px solid #000', padding: 8 }}>檢查項目</th>
+                      <th colSpan={2} style={{ border: '1px solid #000', padding: 8, width: 130 }}>檢查結果</th>
+                      <th rowSpan={2} style={{ border: '1px solid #000', padding: 8, width: 120 }}>備註</th>
+                    </tr>
+                    <tr>
+                      <th style={{ border: '1px solid #000', padding: 8 }}>是</th>
+                      <th style={{ border: '1px solid #000', padding: 8 }}>否</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((item, index) => {
+                      const previousCategory = index > 0 ? items[index - 1].category : null
+                      const isCategoryStart = previousCategory !== item.category
+                      const rowSpan = items.filter((x) => x.category === item.category).length
+                      return (
+                        <tr key={item.item_code}>
+                          {isCategoryStart && (
+                            <td rowSpan={rowSpan} style={{ border: '1px solid #000', padding: 8, textAlign: 'center', verticalAlign: 'middle' }}>{item.category}</td>
+                          )}
+                          <td style={{ border: '1px solid #000', padding: 8 }}>{item.item_name}</td>
+                          <td style={{ border: '1px solid #000', padding: 8, textAlign: 'center', fontSize: 18 }}>{item.result === 'yes' ? 'V' : ''}</td>
+                          <td style={{ border: '1px solid #000', padding: 8, textAlign: 'center', fontSize: 18 }}>{item.result === 'no' ? 'V' : ''}</td>
+                          <td style={{ border: '1px solid #000', padding: 8, textAlign: 'center' }}>{item.item_note}</td>
+                        </tr>
+                      )
+                    })}
+                    <tr><td colSpan={5} style={{ border: '1px solid #000', padding: 18, textAlign: 'center', fontSize: 20 }}>佐證照片</td></tr>
+                    <tr><td colSpan={5} style={{ border: '1px solid #000', height: 250, textAlign: 'center', color: '#64748b' }}>第 1 頁佐證照片預覽區</td></tr>
+                  </tbody>
+                </table>
+                <div style={{ marginTop: 24, border: '1px solid #000', padding: 12, fontSize: 16, lineHeight: 1.9 }}>
+                  <div>經營廠商：{operatorName || '________________'}</div>
+                  <div>檢查人員：{inspectorName || '________________'}</div>
+                  <div>檢查日期：{inspectionDate || '________________'}</div>
+                  <div>停車場電話：{parkingLotPhone || '________________'}</div>
+                  <div>緊急連絡人1：{emergencyContact1 || '________________'}{emergencyPhone1 ? `　電話：${emergencyPhone1}` : ''}</div>
+                  <div>緊急連絡人2：{emergencyContact2 || '________________'}{emergencyPhone2 ? `　電話：${emergencyPhone2}` : ''}</div>
+                  <div>交通局承辦人員覆核：{reviewer || ''}</div>
+                </div>
+                <div style={{ marginTop: 14, fontSize: 14, lineHeight: 1.8 }}>
+                  <div>備註：</div>
+                  <div>一、經營業者應確實檢查及測試場內各項設施設備，並填寫公司名稱與檢查人員，該表視為公文書，偽造者自負責任。</div>
+                  <div>二、請經營廠商將本表傳回本局各停車場承辦人員，或傳真至2970-1120（並註明承辦人員）。</div>
+                  <div>三、一座停車場填報一張自主檢查表，請勿多場合併填寫。</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {message && (
+          <div
+            style={{
+              marginTop:
+                20,
+              padding:
+                12,
+              borderRadius:
+                8,
+              background:
+                '#fee2e2',
+              color:
+                '#b91c1c',
+            }}
+          >
+            {
+              message
+            }
+          </div>
+        )}
+
+        <div
+          style={{
+            display:
+              'flex',
+            gap: 12,
+            alignItems:
+              'center',
+            marginTop:
+              22,
+          }}
+        >
+          <button
+            type="submit"
+            className="btn"
+            disabled={
+              saving
+            }
+          >
+            {saving
+              ? '儲存中…'
+              : '儲存檢查表'}
+          </button>
+
+          <a
+            href="/dashboard/disaster-inspections"
+            style={{
+              color:
+                '#475569',
+              textDecoration:
+                'none',
+            }}
+          >
+            取消
+          </a>
+        </div>
+      </form>
+    </div>
+  )
+}
