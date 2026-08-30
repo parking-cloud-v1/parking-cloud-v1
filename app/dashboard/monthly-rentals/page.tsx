@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/server'
 import MonthlyRentalActions from '@/components/MonthlyRentalActions'
 import ExcelExportButton from '@/components/ExcelExportButton'
 import CsvImportButton from '@/components/CsvImportButton'
+import MonthlyRentalLotLock from '@/components/MonthlyRentalLotLock'
 
 function formatRentalPeriod(
   startDate?: string | null,
@@ -460,7 +461,11 @@ export default async function MonthlyRentalsPage({
           }}
         >
           <Link
-            href="/dashboard/monthly-rentals/import-legacy"
+            href={
+              lot
+                ? `/dashboard/monthly-rentals/import-legacy?lot=${encodeURIComponent(lot)}`
+                : '/dashboard/monthly-rentals/import-legacy'
+            }
             style={{
               padding:
                 '9px 14px',
@@ -558,7 +563,11 @@ export default async function MonthlyRentalsPage({
           />
 
           <Link
-            href="/dashboard/monthly-rentals/new"
+            href={
+              lot
+                ? `/dashboard/monthly-rentals/new?parking_lot_id=${encodeURIComponent(lot)}`
+                : '/dashboard/monthly-rentals/new'
+            }
             className="btn"
             style={{
               textDecoration:
@@ -569,6 +578,11 @@ export default async function MonthlyRentalsPage({
           </Link>
         </div>
       </div>
+
+      <MonthlyRentalLotLock
+        parkingLots={parkingLotOptions}
+        currentLotId={lot}
+      />
 
       {/* 統計 */}
 
@@ -661,7 +675,7 @@ export default async function MonthlyRentalsPage({
               'grid',
 
             gridTemplateColumns:
-              'minmax(220px,2fr) minmax(180px,1.3fr) minmax(120px,.8fr) minmax(120px,.8fr) auto',
+              'minmax(260px,2fr) minmax(120px,.8fr) minmax(120px,.8fr) auto',
 
             gap: 12,
             alignItems:
@@ -683,39 +697,13 @@ export default async function MonthlyRentalsPage({
             />
           </div>
 
-          <div className="field">
-            <label>
-              停車場
-            </label>
-
-            <select
+          {lot && (
+            <input
+              type="hidden"
               name="lot"
-              defaultValue={
-                lot
-              }
-            >
-              <option value="">
-                全部停車場
-              </option>
-
-              {parkingLotOptions.map(
-                (item) => (
-                  <option
-                    key={
-                      item.id
-                    }
-                    value={
-                      item.id
-                    }
-                  >
-                    {
-                      item.name
-                    }
-                  </option>
-                )
-              )}
-            </select>
-          </div>
+              value={lot}
+            />
+          )}
 
           <div className="field">
             <label>
@@ -786,7 +774,11 @@ export default async function MonthlyRentalsPage({
             </button>
 
             <Link
-              href="/dashboard/monthly-rentals"
+              href={
+                lot
+                  ? `/dashboard/monthly-rentals?lot=${encodeURIComponent(lot)}`
+                  : '/dashboard/monthly-rentals'
+              }
               style={{
                 padding:
                   '9px 14px',
