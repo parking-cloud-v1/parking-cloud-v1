@@ -229,55 +229,36 @@ function extractTransactions(
   const result:
     PaymentRow[] = []
 
+  /*
+   * =====================================================
+   * A. 原本系統使用的「寬格式／合併格式」交易明細
+   * =====================================================
+   *
+   * 這類報表的交易資料落在固定位置：
+   *
+   * 3  停車場
+   * 6  工作站
+   * 8  資料月份
+   * 26 序號
+   * 27 票號
+   * 28 入場時間
+   * 29 出場時間
+   * 30 車號
+   * 31 費率
+   * 37 應收
+   * 38 折扣
+   * 39 實收
+   * 40 付款方式
+   * 42 發票
+   *
+   * 不再限制費率名稱一定要是「月租續約」。
+   */
+
   for (const row of matrix) {
-    /*
-     * 目前報表資料位置：
-     *
-     * 3  停車場
-     * 4  報表／交易明細名稱（不再作為月租判斷條件）
-     * 6  工作站
-     * 8  資料月份
-     *
-     * 26 序號
-     * 27 票號
-     * 28 入場時間
-     * 29 出場時間
-     * 30 車號
-     * 31 費率
-     *
-     * 37 應收
-     * 38 折扣
-     * 39 實收
-     * 40 付款方式
-     * 42 發票
-     */
-
-    /*
-     * 不再限制「費率」一定要叫做「月租續約」。
-     *
-     * 只要這一列具備交易明細的基本結構：
-     * - 有車牌
-     * - 有出場／交易時間
-     * - 可以取得交易日期
-     *
-     * 就先納入候選資料。
-     *
-     * 後續仍會用「停車場 + 車牌」去比對目前有效月租，
-     * 因此一般臨停交易若車牌不在月租名單內，
-     * 只會顯示「未匹配」，不會被寫成已繳。
-     */
-
-    const rateName =
-      text(row[31])
-
     const vehiclePlate =
       text(row[30])
         .replace(/\s/g, '')
         .toUpperCase()
-
-    if (!vehiclePlate) {
-      continue
-    }
 
     const exitTime =
       text(row[29])
@@ -286,6 +267,7 @@ function extractTransactions(
       toDate(exitTime)
 
     if (
+      !vehiclePlate ||
       !exitTime ||
       !paymentDate
     ) {
@@ -317,7 +299,8 @@ function extractTransactions(
 
       vehiclePlate,
 
-      rateName,
+      rateName:
+        text(row[31]),
 
       amountDue:
         numberValue(
@@ -349,7 +332,409 @@ function extractTransactions(
     })
   }
 
-  return result
+  /*
+   * =====================================================
+   * B. 一般「標準表頭格式」交易明細
+   * =====================================================
+   *
+   * 例如：
+   *
+   * 序號,票號,入場時間,出場時間,車號,費率,...
+   * 應收金額,折扣金額,實收金額,統一編號,發票編號,...
+   *
+   * 這種格式不需要停車場名稱。
+   * 後續會用「車牌」去現有月租名單尋找所屬停車場。
+   */
+
+  const headerIndex =
+    matrix.findIndex(
+      (row) => {
+        const headers =
+          row.map(
+            (item) =>
+              text(item)
+          )
+
+        return (
+          headers.includes(
+            '序號'
+          ) &&
+          headers.includes(
+            '票號'
+          ) &&
+          headers.includes(
+            '入場時間'
+          ) &&
+          headers.includes(
+            '出場時間'
+          ) &&
+          headers.includes(
+            '車號'
+          ) &&
+          headers.some(
+            (item) =>
+              item.includes(
+                '實收金額'
+              )
+          )
+        )
+      }
+    )
+
+  if (
+    headerIndex >= 0
+  ) {
+    const header =
+      matrix[
+        headerIndex
+      ].map(
+        (item) =>
+          text(item)
+      )
+
+    function column(
+      ...names: string[]
+    ) {
+      for (
+        const name of
+        names
+      ) {
+        const exact =
+          header.findIndex(
+            (item) =>
+              item === name
+          )
+
+        if (
+          exact >= 0
+        ) {
+          return exact
+        }
+
+        const fuzzy =
+          header.findIndex(
+            (item) =>
+              item.includes(
+                name
+              )
+          )
+
+        if (
+          fuzzy >= 0
+        ) {
+          return fuzzy
+        }
+      }
+
+      return -1
+    }
+
+    const sequenceIndex =
+      column('序號')
+
+    const ticketIndex =
+      column('票號')
+
+    const entryIndex =
+      column('入場時間')
+
+    const exitIndex =
+      column('出場時間')
+
+    const plateIndex =
+      column(
+        '車號',
+        '車牌'
+      )
+
+    const rateIndex =
+      column('費率')
+
+    const amountDueIndex =
+      column(
+        '應收金額',
+        '應收'
+      )
+
+    const discountIndex =
+      column(
+        '折扣金額',
+        '折扣'
+      )
+
+    const amountPaidIndex =
+      column(
+        '實收金額',
+        '實收'
+      )
+
+    const paymentMethodIndex =
+      column(
+        '付款方式',
+        '繳費方式'
+      )
+
+    const invoiceIndex =
+      column(
+        '發票編號',
+        '發票號碼'
+      )
+
+    /*
+     * 從表頭前面的說明列抓資料月份、工作站、停車場名稱。
+     * 有就使用，沒有也沒關係。
+     */
+    let dataMonth = ''
+    let workstation = ''
+    let lotName = ''
+
+    for (
+      let i = 0;
+      i < headerIndex;
+      i++
+    ) {
+      const line =
+        matrix[i]
+          .map(
+            (item) =>
+              text(item)
+          )
+          .filter(Boolean)
+          .join(' ')
+
+      const monthMatch =
+        line.match(
+          /(?:資料日期|資料月份)\s*[:：]\s*(\d{4}[\/\-]\d{1,2})/
+        )
+
+      if (
+        monthMatch
+      ) {
+        dataMonth =
+          monthMatch[1]
+      }
+
+      const stationMatch =
+        line.match(
+          /(?:工作站點|工作站|機號)\s*[:：]\s*([^\s,]+)/
+        )
+
+      if (
+        stationMatch
+      ) {
+        workstation =
+          stationMatch[1]
+      }
+
+      const lotMatch =
+        line.match(
+          /(?:停車場名稱|停車場|場站)\s*[:：]\s*(.+)$/
+        )
+
+      if (
+        lotMatch
+      ) {
+        lotName =
+          text(
+            lotMatch[1]
+          )
+      }
+    }
+
+    for (
+      let i =
+        headerIndex + 1;
+      i < matrix.length;
+      i++
+    ) {
+      const row =
+        matrix[i]
+
+      const vehiclePlate =
+        plateIndex >= 0
+          ? text(
+              row[
+                plateIndex
+              ]
+            )
+              .replace(
+                /\s/g,
+                ''
+              )
+              .toUpperCase()
+          : ''
+
+      const exitTime =
+        exitIndex >= 0
+          ? text(
+              row[
+                exitIndex
+              ]
+            )
+          : ''
+
+      const paymentDate =
+        toDate(
+          exitTime
+        )
+
+      /*
+       * 「總計」或空白列不會有有效車牌與日期，
+       * 因此會自動略過。
+       */
+      if (
+        !vehiclePlate ||
+        !exitTime ||
+        !paymentDate
+      ) {
+        continue
+      }
+
+      result.push({
+        fileName,
+
+        lotName,
+
+        dataMonth,
+
+        workstation,
+
+        sequenceNo:
+          sequenceIndex >= 0
+            ? text(
+                row[
+                  sequenceIndex
+                ]
+              )
+            : '',
+
+        ticketNo:
+          ticketIndex >= 0
+            ? text(
+                row[
+                  ticketIndex
+                ]
+              )
+            : '',
+
+        entryTime:
+          entryIndex >= 0
+            ? text(
+                row[
+                  entryIndex
+                ]
+              )
+            : '',
+
+        exitTime,
+
+        vehiclePlate,
+
+        rateName:
+          rateIndex >= 0
+            ? text(
+                row[
+                  rateIndex
+                ]
+              )
+            : '',
+
+        amountDue:
+          amountDueIndex >= 0
+            ? numberValue(
+                row[
+                  amountDueIndex
+                ]
+              )
+            : 0,
+
+        discountAmount:
+          discountIndex >= 0
+            ? numberValue(
+                row[
+                  discountIndex
+                ]
+              )
+            : 0,
+
+        amountPaid:
+          amountPaidIndex >= 0
+            ? numberValue(
+                row[
+                  amountPaidIndex
+                ]
+              )
+            : 0,
+
+        paymentMethod:
+          paymentMethodIndex >= 0
+            ? text(
+                row[
+                  paymentMethodIndex
+                ]
+              )
+            : '',
+
+        invoiceNumber:
+          invoiceIndex >= 0
+            ? text(
+                row[
+                  invoiceIndex
+                ]
+              )
+            : '',
+
+        paymentDate,
+
+        matched: false,
+        duplicate: false,
+
+        message: '',
+      })
+    }
+  }
+
+  /*
+   * 同一筆資料若同時被兩種 parser 判斷到，
+   * 只保留一次。
+   */
+  const unique =
+    new Map<
+      string,
+      PaymentRow
+    >()
+
+  for (
+    const row of
+    result
+  ) {
+    const key = [
+      row.fileName,
+      row.sequenceNo,
+      row.ticketNo,
+      normalizePlate(
+        row.vehiclePlate
+      ),
+      row.exitTime,
+      row.invoiceNumber,
+      String(
+        row.amountPaid
+      ),
+    ].join('|')
+
+    if (
+      !unique.has(key)
+    ) {
+      unique.set(
+        key,
+        row
+      )
+    }
+  }
+
+  return Array.from(
+    unique.values()
+  )
 }
 
 function cleanLotName(
@@ -699,13 +1084,30 @@ export default function CsvImportButton({
           continue
         }
 
-        const lot =
-          findParkingLot(
-            parkingLots,
-            row.lotName
+        const reportPlate =
+          normalizePlate(
+            row.vehiclePlate
           )
 
-        if (!lot) {
+        /*
+         * 若 CSV 本身有停車場名稱，優先使用停車場名稱。
+         * 若沒有停車場名稱，就直接用車牌跨場搜尋。
+         *
+         * 只有「唯一找到一個停車場」才會自動匹配，
+         * 避免同車牌若出現在多個場站時誤寫資料。
+         */
+        let lot =
+          row.lotName
+            ? findParkingLot(
+                parkingLots,
+                row.lotName
+              )
+            : undefined
+
+        if (
+          row.lotName &&
+          !lot
+        ) {
           checked.push({
             ...row,
 
@@ -718,15 +1120,63 @@ export default function CsvImportButton({
           continue
         }
 
+        if (!lot) {
+          const candidateLots =
+            parkingLots.filter(
+              (candidateLot) => {
+                const candidateRentals =
+                  rentalCache.get(
+                    candidateLot.id
+                  ) || []
+
+                return candidateRentals.some(
+                  (rental) =>
+                    normalizePlate(
+                      rental.vehicle_plate
+                    ) ===
+                    reportPlate
+                )
+              }
+            )
+
+          if (
+            candidateLots.length ===
+            1
+          ) {
+            lot =
+              candidateLots[0]
+          } else if (
+            candidateLots.length >
+            1
+          ) {
+            checked.push({
+              ...row,
+
+              matched: false,
+
+              message:
+                '同一車牌存在於多個停車場，請確認月租資料後再同步',
+            })
+
+            continue
+          } else {
+            checked.push({
+              ...row,
+
+              matched: false,
+
+              message:
+                '找不到對應月租車牌',
+            })
+
+            continue
+          }
+        }
+
         const rentals =
           rentalCache.get(
             lot.id
           ) || []
-
-        const reportPlate =
-          normalizePlate(
-            row.vehiclePlate
-          )
 
         const matches =
           rentals
@@ -1502,7 +1952,7 @@ export default function CsvImportButton({
                       '#64748b',
                   }}
                 >
-                  可一次選擇多個交易明細 CSV。系統不限制交易名稱，會依「停車場＋車牌」比對現有月租；只有成功匹配的月租車牌才可同步，並同時保存繳費歷史。
+                  可一次選擇多個交易明細 CSV，支援原本繳費機格式與一般「序號、票號、車號、實收金額」標準表頭格式。系統不限制交易名稱；有停車場名稱時使用「停車場＋車牌」比對，沒有停車場名稱時會用車牌自動尋找唯一所屬場站。只有成功匹配的月租車牌才可同步，並同時保存繳費歷史。
                 </p>
               </div>
 
