@@ -234,7 +234,7 @@ function extractTransactions(
      * 目前報表資料位置：
      *
      * 3  停車場
-     * 4  當月交易明細
+     * 4  報表／交易明細名稱（不再作為月租判斷條件）
      * 6  工作站
      * 8  資料月份
      *
@@ -252,26 +252,23 @@ function extractTransactions(
      * 42 發票
      */
 
-    if (
-      !text(
-        row[4]
-      ).includes(
-        '當月交易明細'
-      )
-    ) {
-      continue
-    }
+    /*
+     * 不再限制「費率」一定要叫做「月租續約」。
+     *
+     * 只要這一列具備交易明細的基本結構：
+     * - 有車牌
+     * - 有出場／交易時間
+     * - 可以取得交易日期
+     *
+     * 就先納入候選資料。
+     *
+     * 後續仍會用「停車場 + 車牌」去比對目前有效月租，
+     * 因此一般臨停交易若車牌不在月租名單內，
+     * 只會顯示「未匹配」，不會被寫成已繳。
+     */
 
     const rateName =
       text(row[31])
-
-    if (
-      !rateName.includes(
-        '月租續約'
-      )
-    ) {
-      continue
-    }
 
     const vehiclePlate =
       text(row[30])
@@ -284,6 +281,16 @@ function extractTransactions(
 
     const exitTime =
       text(row[29])
+
+    const paymentDate =
+      toDate(exitTime)
+
+    if (
+      !exitTime ||
+      !paymentDate
+    ) {
+      continue
+    }
 
     result.push({
       fileName,
@@ -333,8 +340,7 @@ function extractTransactions(
       invoiceNumber:
         text(row[42]),
 
-      paymentDate:
-        toDate(exitTime),
+      paymentDate,
 
       matched: false,
       duplicate: false,
@@ -554,7 +560,7 @@ export default function CsvImportButton({
         setRows([])
 
         setMessage(
-          '沒有找到「月租續約」交易，請確認選擇的是當月交易明細 CSV。'
+          '沒有找到可辨識的交易明細。請確認 CSV 內包含車牌、出場時間與交易資料。'
         )
 
         return
@@ -959,7 +965,7 @@ export default function CsvImportButton({
         ).length
 
       setMessage(
-        `共找到 ${finalRows.length} 筆月租續約交易，可同步 ${syncCount} 筆，未匹配 ${unmatched} 筆，找零不足（但已繳費） ${zero} 筆，重複 ${duplicate} 筆`
+        `共找到 ${finalRows.length} 筆交易明細，可同步 ${syncCount} 筆，未匹配 ${unmatched} 筆，找零不足（但已繳費） ${zero} 筆，重複 ${duplicate} 筆`
       )
     } catch (
       error: any
@@ -1496,7 +1502,7 @@ export default function CsvImportButton({
                       '#64748b',
                   }}
                 >
-                  可一次選擇多個 CSV，系統會自動抓出「月租續約」交易；同步成功後會同時保存繳費歷史。
+                  可一次選擇多個交易明細 CSV。系統不限制交易名稱，會依「停車場＋車牌」比對現有月租；只有成功匹配的月租車牌才可同步，並同時保存繳費歷史。
                 </p>
               </div>
 
