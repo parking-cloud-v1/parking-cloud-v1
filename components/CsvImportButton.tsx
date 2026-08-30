@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
 type ParkingLot = {
@@ -847,6 +847,216 @@ function buildSourceReference(
   ].join('|')
 }
 
+
+const PAYMENT_FOLDER_DB =
+  'parking-payment-folder-db'
+
+const PAYMENT_FOLDER_STORE =
+  'handles'
+
+const PAYMENT_FOLDER_KEY =
+  'monthly-payment-folder'
+
+const PROCESSED_FILES_KEY =
+  'monthly-payment-folder-processed-v1'
+
+function openFolderDb() {
+  return new Promise<IDBDatabase>(
+    (
+      resolve,
+      reject
+    ) => {
+      const request =
+        indexedDB.open(
+          PAYMENT_FOLDER_DB,
+          1
+        )
+
+      request.onupgradeneeded =
+        () => {
+          const db =
+            request.result
+
+          if (
+            !db.objectStoreNames.contains(
+              PAYMENT_FOLDER_STORE
+            )
+          ) {
+            db.createObjectStore(
+              PAYMENT_FOLDER_STORE
+            )
+          }
+        }
+
+      request.onsuccess =
+        () =>
+          resolve(
+            request.result
+          )
+
+      request.onerror =
+        () =>
+          reject(
+            request.error
+          )
+    }
+  )
+}
+
+async function saveFolderHandle(
+  handle: any
+) {
+  const db =
+    await openFolderDb()
+
+  await new Promise<void>(
+    (
+      resolve,
+      reject
+    ) => {
+      const transaction =
+        db.transaction(
+          PAYMENT_FOLDER_STORE,
+          'readwrite'
+        )
+
+      transaction
+        .objectStore(
+          PAYMENT_FOLDER_STORE
+        )
+        .put(
+          handle,
+          PAYMENT_FOLDER_KEY
+        )
+
+      transaction.oncomplete =
+        () => resolve()
+
+      transaction.onerror =
+        () =>
+          reject(
+            transaction.error
+          )
+    }
+  )
+
+  db.close()
+}
+
+async function loadFolderHandle() {
+  const db =
+    await openFolderDb()
+
+  const result =
+    await new Promise<any>(
+      (
+        resolve,
+        reject
+      ) => {
+        const transaction =
+          db.transaction(
+            PAYMENT_FOLDER_STORE,
+            'readonly'
+          )
+
+        const request =
+          transaction
+            .objectStore(
+              PAYMENT_FOLDER_STORE
+            )
+            .get(
+              PAYMENT_FOLDER_KEY
+            )
+
+        request.onsuccess =
+          () =>
+            resolve(
+              request.result ||
+                null
+            )
+
+        request.onerror =
+          () =>
+            reject(
+              request.error
+            )
+      }
+    )
+
+  db.close()
+
+  return result
+}
+
+function fileSignature(
+  file: File
+) {
+  return [
+    file.name,
+    file.size,
+    file.lastModified,
+  ].join('|')
+}
+
+function getProcessedFolderFiles() {
+  try {
+    const raw =
+      window.localStorage.getItem(
+        PROCESSED_FILES_KEY
+      )
+
+    const parsed =
+      raw
+        ? JSON.parse(raw)
+        : []
+
+    return new Set<string>(
+      Array.isArray(parsed)
+        ? parsed
+        : []
+    )
+  } catch {
+    return new Set<string>()
+  }
+}
+
+function markFolderFilesProcessed(
+  signatures: string[]
+) {
+  if (
+    signatures.length ===
+    0
+  ) {
+    return
+  }
+
+  const processed =
+    getProcessedFolderFiles()
+
+  signatures.forEach(
+    (signature) =>
+      processed.add(
+        signature
+      )
+  )
+
+  /*
+   * 避免 localStorage 無限增長。
+   * 保留最近 3000 個檔案識別碼已足夠現場長期使用。
+   */
+  const values =
+    Array.from(
+      processed
+    ).slice(-3000)
+
+  window.localStorage.setItem(
+    PROCESSED_FILES_KEY,
+    JSON.stringify(
+      values
+    )
+  )
+}
+
 export default function CsvImportButton({
   parkingLots,
 }: {
@@ -856,6 +1066,33 @@ export default function CsvImportButton({
     useRef<HTMLInputElement>(
       null
     )
+
+  const autoFolderCheckStarted =
+    useRef(false)
+
+  const [
+    folderName,
+    setFolderName,
+  ] =
+    useState('')
+
+  const [
+    folderChecking,
+    setFolderChecking,
+  ] =
+    useState(false)
+
+  const [
+    folderStatus,
+    setFolderStatus,
+  ] =
+    useState('')
+
+  const [
+    pendingFolderSignatures,
+    setPendingFolderSignatures,
+  ] =
+    useState<string[]>([])
 
   const [
     open,
@@ -896,6 +1133,333 @@ export default function CsvImportButton({
     setMessage,
   ] =
     useState('')
+
+  async function scanPaymentFolder(
+    handle: any,
+    allowPermissionPrompt:
+      boolean,
+    askBeforeAnalyze:
+      boolean
+  ) {
+    if (!handle) {
+      return
+    }
+
+    setFolderChecking(true)
+    setFolderStatus('')
+
+    try {
+      let permission =
+        'prompt'
+
+      if (
+        typeof handle
+          .queryPermission ===
+        'function'
+      ) {
+        permission =
+          await handle.queryPermission({
+            mode: 'read',
+          })
+      }
+
+      if (
+        permission !==
+          'granted' &&
+        allowPermissionPrompt &&
+        typeof handle
+          .requestPermission ===
+          'function'
+      ) {
+        permission =
+          await handle.requestPermission({
+            mode: 'read',
+          })
+      }
+
+      if (
+        permission !==
+        'granted'
+      ) {
+        setFolderStatus(
+          '已記住報表資料夾，但瀏覽器需要你按「檢查新報表」重新授權讀取。'
+        )
+
+        return
+      }
+
+      const processed =
+        getProcessedFolderFiles()
+
+      const newFiles:
+        File[] = []
+
+      const signatures:
+        string[] = []
+
+      for await (
+        const entry of
+        handle.values()
+      ) {
+        if (
+          entry?.kind !==
+          'file'
+        ) {
+          continue
+        }
+
+        if (
+          !/\.csv$/i.test(
+            String(
+              entry.name ||
+                ''
+            )
+          )
+        ) {
+          continue
+        }
+
+        const file =
+          await entry.getFile()
+
+        const signature =
+          fileSignature(
+            file
+          )
+
+        if (
+          processed.has(
+            signature
+          )
+        ) {
+          continue
+        }
+
+        newFiles.push(
+          file
+        )
+
+        signatures.push(
+          signature
+        )
+      }
+
+      newFiles.sort(
+        (
+          a,
+          b
+        ) =>
+          a.lastModified -
+          b.lastModified
+      )
+
+      if (
+        newFiles.length ===
+        0
+      ) {
+        setFolderStatus(
+          '目前沒有新的 CSV 繳費報表。'
+        )
+
+        return
+      }
+
+      setFolderStatus(
+        `發現 ${newFiles.length} 份尚未處理的 CSV。`
+      )
+
+      if (
+        askBeforeAnalyze
+      ) {
+        const confirmed =
+          window.confirm(
+            `發現 ${newFiles.length} 份新的繳費報表。\n\n是否現在分析並比對月租繳費？`
+          )
+
+        if (!confirmed) {
+          return
+        }
+      }
+
+      setOpen(true)
+
+      setFileNames(
+        newFiles.map(
+          (file) =>
+            file.name
+        )
+      )
+
+      setPendingFolderSignatures(
+        signatures
+      )
+
+      await readFiles(
+        newFiles
+      )
+    } catch (
+      error: any
+    ) {
+      console.error(
+        '報表資料夾讀取失敗',
+        error
+      )
+
+      setFolderStatus(
+        '報表資料夾讀取失敗：' +
+          (
+            error?.message ||
+            '未知錯誤'
+          )
+      )
+    } finally {
+      setFolderChecking(false)
+    }
+  }
+
+  async function choosePaymentFolder() {
+    if (
+      typeof window ===
+        'undefined' ||
+      !(
+        'showDirectoryPicker' in
+        window
+      )
+    ) {
+      alert(
+        '目前瀏覽器不支援指定資料夾功能。請使用最新版 Chrome 或 Edge；原本手動選擇 CSV 功能仍可使用。'
+      )
+
+      return
+    }
+
+    try {
+      const handle =
+        await (
+          window as any
+        ).showDirectoryPicker({
+          mode: 'read',
+        })
+
+      await saveFolderHandle(
+        handle
+      )
+
+      setFolderName(
+        handle.name ||
+          '已設定資料夾'
+      )
+
+      setFolderStatus(
+        '報表資料夾設定完成。'
+      )
+
+      await scanPaymentFolder(
+        handle,
+        true,
+        true
+      )
+    } catch (
+      error: any
+    ) {
+      if (
+        error?.name ===
+        'AbortError'
+      ) {
+        return
+      }
+
+      alert(
+        '設定報表資料夾失敗：' +
+          (
+            error?.message ||
+            '未知錯誤'
+          )
+      )
+    }
+  }
+
+  async function checkPaymentFolder() {
+    try {
+      const handle =
+        await loadFolderHandle()
+
+      if (!handle) {
+        await choosePaymentFolder()
+        return
+      }
+
+      setFolderName(
+        handle.name ||
+          '已設定資料夾'
+      )
+
+      await scanPaymentFolder(
+        handle,
+        true,
+        true
+      )
+    } catch (
+      error: any
+    ) {
+      alert(
+        '檢查報表資料夾失敗：' +
+          (
+            error?.message ||
+            '未知錯誤'
+          )
+      )
+    }
+  }
+
+  useEffect(() => {
+    if (
+      autoFolderCheckStarted
+        .current
+    ) {
+      return
+    }
+
+    autoFolderCheckStarted
+      .current = true
+
+    async function autoCheck() {
+      try {
+        const handle =
+          await loadFolderHandle()
+
+        if (!handle) {
+          return
+        }
+
+        setFolderName(
+          handle.name ||
+            '已設定資料夾'
+        )
+
+        /*
+         * 開啟月租系統時：
+         * 如果瀏覽器仍保有讀取權限，就自動掃描並詢問是否分析。
+         * 若權限需要重新確認，不會強制跳出瀏覽器權限視窗，
+         * 改由使用者按「檢查新報表」。
+         */
+        await scanPaymentFolder(
+          handle,
+          false,
+          true
+        )
+      } catch (
+        error
+      ) {
+        console.error(
+          '自動檢查繳費報表資料夾失敗',
+          error
+        )
+      }
+    }
+
+    autoCheck()
+  }, [])
 
   async function readFiles(
     files: File[]
@@ -1457,6 +2021,10 @@ export default function CsvImportButton({
       )
     )
 
+    setPendingFolderSignatures(
+      []
+    )
+
     await readFiles(
       files
     )
@@ -1770,6 +2338,25 @@ export default function CsvImportButton({
       }
 
       /*
+       * 若這批資料來自指定資料夾，而且至少成功同步 1 筆，
+       * 將檔案記錄成已處理。
+       * 下次開啟系統時就不會重複詢問同一份報表。
+       */
+      if (
+        success > 0 &&
+        pendingFolderSignatures.length >
+          0
+      ) {
+        markFolderFilesProcessed(
+          pendingFolderSignatures
+        )
+
+        setPendingFolderSignatures(
+          []
+        )
+      }
+
+      /*
        * ===============================================
        * 完成結果
        * ===============================================
@@ -1823,6 +2410,9 @@ export default function CsvImportButton({
     setRows([])
     setFileNames([])
     setMessage('')
+    setPendingFolderSignatures(
+      []
+    )
 
     if (
       inputRef.current
@@ -1902,6 +2492,77 @@ export default function CsvImportButton({
         匯入繳費報表
       </button>
 
+      <button
+        type="button"
+        onClick={
+          choosePaymentFolder
+        }
+        disabled={
+          folderChecking
+        }
+        style={{
+          marginLeft: 8,
+          padding:
+            '9px 14px',
+          borderRadius: 8,
+          border:
+            '1px solid #cbd5e1',
+          background:
+            '#fff',
+          cursor:
+            folderChecking
+              ? 'not-allowed'
+              : 'pointer',
+        }}
+      >
+        {folderName
+          ? `報表資料夾：${folderName}`
+          : '設定報表資料夾'}
+      </button>
+
+      {folderName && (
+        <button
+          type="button"
+          onClick={
+            checkPaymentFolder
+          }
+          disabled={
+            folderChecking
+          }
+          style={{
+            marginLeft: 8,
+            padding:
+              '9px 14px',
+            borderRadius: 8,
+            border:
+              '1px solid #cbd5e1',
+            background:
+              '#fff',
+            cursor:
+              folderChecking
+                ? 'not-allowed'
+                : 'pointer',
+          }}
+        >
+          {folderChecking
+            ? '檢查中…'
+            : '檢查新報表'}
+        </button>
+      )}
+
+      {folderStatus && (
+        <span
+          style={{
+            marginLeft: 10,
+            fontSize: 13,
+            color:
+              '#64748b',
+          }}
+        >
+          {folderStatus}
+        </span>
+      )}
+
       {open && (
         <div
           style={{
@@ -1953,6 +2614,17 @@ export default function CsvImportButton({
                   }}
                 >
                   可一次選擇多個交易明細 CSV，支援原本繳費機格式與一般「序號、票號、車號、實收金額」標準表頭格式。系統不限制交易名稱；有停車場名稱時使用「停車場＋車牌」比對，沒有停車場名稱時會用車牌自動尋找唯一所屬場站。只有成功匹配的月租車牌才可同步，並同時保存繳費歷史。
+                </p>
+
+                <p
+                  style={{
+                    color:
+                      '#64748b',
+                    fontSize: 13,
+                    marginTop: 6,
+                  }}
+                >
+                  也可設定固定的「繳費報表資料夾」。之後把 CSV 下載到該資料夾，開啟月租管理時系統會自動檢查新檔案並詢問是否分析；系統不會在未確認前直接修改月租資料。
                 </p>
               </div>
 
