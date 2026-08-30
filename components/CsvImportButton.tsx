@@ -1057,6 +1057,273 @@ function markFolderFilesProcessed(
   )
 }
 
+
+type FolderCsvKind =
+  | 'monthly_master'
+  | 'payment'
+  | 'unknown'
+
+function normalizeFileName(
+  value: string
+) {
+  return String(
+    value || ''
+  )
+    .toLowerCase()
+    .replace(/\s+/g, '')
+}
+
+function classifyCsvByFileName(
+  fileName: string
+): FolderCsvKind {
+  const name =
+    normalizeFileName(
+      fileName
+    )
+
+  /*
+   * 檔名第一層判斷：
+   * 繳費／交易類關鍵字優先，
+   * 避免「月租繳費」被誤認為月租總表。
+   */
+  const paymentKeywords = [
+    '繳費紀錄',
+    '繳費記錄',
+    '繳費明細',
+    '交易明細',
+    '自動繳費機',
+    '繳費機',
+    '付款紀錄',
+    '付款記錄',
+    'payment',
+    'transaction',
+  ]
+
+  if (
+    paymentKeywords.some(
+      (keyword) =>
+        name.includes(
+          keyword
+        )
+    )
+  ) {
+    return 'payment'
+  }
+
+  const masterKeywords = [
+    '月租總表',
+    '月票總表',
+    '月租名單',
+    '月票名單',
+    '月租資料',
+    '月票資料',
+    'monthlyrental',
+    'monthlypass',
+  ]
+
+  if (
+    masterKeywords.some(
+      (keyword) =>
+        name.includes(
+          keyword
+        )
+    )
+  ) {
+    return 'monthly_master'
+  }
+
+  /*
+   * 「月票_202608.csv」這類簡短檔名，
+   * 只有在沒有交易／繳費關鍵字時才視為總表。
+   */
+  if (
+    (
+      name.startsWith(
+        '月票_'
+      ) ||
+      name.startsWith(
+        '月租_'
+      ) ||
+      name ===
+        '月票.csv' ||
+      name ===
+        '月租.csv'
+    )
+  ) {
+    return 'monthly_master'
+  }
+
+  return 'unknown'
+}
+
+function classifyCsvByMatrix(
+  matrix: string[][]
+): FolderCsvKind {
+  const sample =
+    matrix
+      .slice(0, 25)
+      .flat()
+      .map(
+        (item) =>
+          text(item)
+            .replace(/\s+/g, '')
+      )
+      .filter(Boolean)
+
+  /*
+   * 第二層：內容判斷。
+   *
+   * 月租總表常見欄位：
+   * 姓名、電話、車號/車牌、開始日期、到期日、應收費用
+   */
+  const hasCustomer =
+    sample.some(
+      (item) =>
+        item === '姓名' ||
+        item.includes(
+          '客戶編號'
+        )
+    )
+
+  const hasRentalDates =
+    sample.some(
+      (item) =>
+        item.includes(
+          '開始日期'
+        ) ||
+        item.includes(
+          '起租日'
+        )
+    ) &&
+    sample.some(
+      (item) =>
+        item.includes(
+          '到期日'
+        ) ||
+        item.includes(
+          '結束日期'
+        )
+    )
+
+  const hasRentalFee =
+    sample.some(
+      (item) =>
+        item.includes(
+          '應收費用'
+        ) ||
+        item.includes(
+          '月租金額'
+        )
+    )
+
+  if (
+    hasCustomer &&
+    hasRentalDates &&
+    hasRentalFee
+  ) {
+    return 'monthly_master'
+  }
+
+  /*
+   * 繳費交易常見欄位：
+   * 票號、入場時間、出場時間、實收金額
+   */
+  const hasTicket =
+    sample.some(
+      (item) =>
+        item === '票號' ||
+        item.includes(
+          '票號'
+        )
+    )
+
+  const hasEntryExit =
+    sample.some(
+      (item) =>
+        item.includes(
+          '入場時間'
+        )
+    ) &&
+    sample.some(
+      (item) =>
+        item.includes(
+          '出場時間'
+        ) ||
+        item.includes(
+          '離場時間'
+        )
+    )
+
+  const hasPaidAmount =
+    sample.some(
+      (item) =>
+        item.includes(
+          '實收金額'
+        ) ||
+        item ===
+          '實收'
+    )
+
+  if (
+    hasTicket &&
+    hasEntryExit &&
+    hasPaidAmount
+  ) {
+    return 'payment'
+  }
+
+  /*
+   * 原本繳費機特殊格式有「當月交易明細」字樣，
+   * 即使表頭拆散也可辨識為繳費紀錄。
+   */
+  if (
+    sample.some(
+      (item) =>
+        item.includes(
+          '當月交易明細'
+        )
+    )
+  ) {
+    return 'payment'
+  }
+
+  return 'unknown'
+}
+
+async function classifyFolderCsv(
+  file: File
+) {
+  const byName =
+    classifyCsvByFileName(
+      file.name
+    )
+
+  if (
+    byName !==
+    'unknown'
+  ) {
+    return byName
+  }
+
+  try {
+    const csvText =
+      await readCsvFile(
+        file
+      )
+
+    const matrix =
+      parseCsv(
+        csvText
+      )
+
+    return classifyCsvByMatrix(
+      matrix
+    )
+  } catch {
+    return 'unknown'
+  }
+}
+
 export default function CsvImportButton({
   parkingLots,
 }: {
@@ -1091,6 +1358,18 @@ export default function CsvImportButton({
   const [
     pendingFolderSignatures,
     setPendingFolderSignatures,
+  ] =
+    useState<string[]>([])
+
+  const [
+    detectedMonthlyMasterFiles,
+    setDetectedMonthlyMasterFiles,
+  ] =
+    useState<string[]>([])
+
+  const [
+    detectedUnknownFiles,
+    setDetectedUnknownFiles,
   ] =
     useState<string[]>([])
 
@@ -1191,10 +1470,16 @@ export default function CsvImportButton({
       const processed =
         getProcessedFolderFiles()
 
-      const newFiles:
+      const paymentFiles:
         File[] = []
 
-      const signatures:
+      const paymentSignatures:
+        string[] = []
+
+      const monthlyMasterNames:
+        string[] = []
+
+      const unknownNames:
         string[] = []
 
       for await (
@@ -1235,16 +1520,37 @@ export default function CsvImportButton({
           continue
         }
 
-        newFiles.push(
-          file
-        )
+        const kind =
+          await classifyFolderCsv(
+            file
+          )
 
-        signatures.push(
-          signature
-        )
+        if (
+          kind ===
+          'payment'
+        ) {
+          paymentFiles.push(
+            file
+          )
+
+          paymentSignatures.push(
+            signature
+          )
+        } else if (
+          kind ===
+          'monthly_master'
+        ) {
+          monthlyMasterNames.push(
+            file.name
+          )
+        } else {
+          unknownNames.push(
+            file.name
+          )
+        }
       }
 
-      newFiles.sort(
+      paymentFiles.sort(
         (
           a,
           b
@@ -1253,27 +1559,61 @@ export default function CsvImportButton({
           b.lastModified
       )
 
+      setDetectedMonthlyMasterFiles(
+        monthlyMasterNames
+      )
+
+      setDetectedUnknownFiles(
+        unknownNames
+      )
+
+      const totalDetected =
+        paymentFiles.length +
+        monthlyMasterNames.length +
+        unknownNames.length
+
       if (
-        newFiles.length ===
+        totalDetected ===
         0
       ) {
         setFolderStatus(
-          '目前沒有新的 CSV 繳費報表。'
+          '目前沒有新的 CSV 報表。'
         )
 
         return
       }
 
       setFolderStatus(
-        `發現 ${newFiles.length} 份尚未處理的 CSV。`
+        `發現新 CSV ${totalDetected} 份：繳費紀錄 ${paymentFiles.length} 份、月租總表 ${monthlyMasterNames.length} 份、未分類 ${unknownNames.length} 份。`
       )
+
+      if (
+        paymentFiles.length ===
+        0
+      ) {
+        if (
+          monthlyMasterNames.length >
+          0
+        ) {
+          window.alert(
+            `發現 ${monthlyMasterNames.length} 份月租總表。\n\n這些檔案不會當成繳費紀錄匯入，避免誤更新付款狀態。\n請使用「匯入舊系統總表」功能處理。`
+          )
+        }
+
+        return
+      }
 
       if (
         askBeforeAnalyze
       ) {
         const confirmed =
           window.confirm(
-            `發現 ${newFiles.length} 份新的繳費報表。\n\n是否現在分析並比對月租繳費？`
+            `發現新 CSV ${totalDetected} 份：\n` +
+            `• 繳費紀錄 ${paymentFiles.length} 份\n` +
+            `• 月租總表 ${monthlyMasterNames.length} 份\n` +
+            `• 未分類 ${unknownNames.length} 份\n\n` +
+            `現在只分析「繳費紀錄」並比對月租繳費嗎？\n\n` +
+            `月租總表不會被當成繳費資料。`
           )
 
         if (!confirmed) {
@@ -1284,18 +1624,18 @@ export default function CsvImportButton({
       setOpen(true)
 
       setFileNames(
-        newFiles.map(
+        paymentFiles.map(
           (file) =>
             file.name
         )
       )
 
       setPendingFolderSignatures(
-        signatures
+        paymentSignatures
       )
 
       await readFiles(
-        newFiles
+        paymentFiles
       )
     } catch (
       error: any
@@ -2413,6 +2753,12 @@ export default function CsvImportButton({
     setPendingFolderSignatures(
       []
     )
+    setDetectedMonthlyMasterFiles(
+      []
+    )
+    setDetectedUnknownFiles(
+      []
+    )
 
     if (
       inputRef.current
@@ -2563,6 +2909,75 @@ export default function CsvImportButton({
         </span>
       )}
 
+      {detectedMonthlyMasterFiles.length >
+        0 && (
+        <button
+          type="button"
+          onClick={() => {
+            const names =
+              detectedMonthlyMasterFiles.join(
+                '\n'
+              )
+
+            const go =
+              window.confirm(
+                `已辨識為「月租總表」：\n\n${names}\n\n要前往「匯入舊系統總表」功能嗎？`
+              )
+
+            if (go) {
+              window.location.href =
+                '/dashboard/monthly-rentals/import-legacy'
+            }
+          }}
+          style={{
+            marginLeft: 8,
+            padding:
+              '9px 14px',
+            borderRadius: 8,
+            border:
+              '1px solid #cbd5e1',
+            background:
+              '#fff',
+            cursor:
+              'pointer',
+          }}
+        >
+          月租總表 {
+            detectedMonthlyMasterFiles.length
+          } 份
+        </button>
+      )}
+
+      {detectedUnknownFiles.length >
+        0 && (
+        <button
+          type="button"
+          onClick={() =>
+            window.alert(
+              `以下 CSV 無法自動分類：\n\n${detectedUnknownFiles.join(
+                '\n'
+              )}\n\n請確認檔名或內容格式。`
+            )
+          }
+          style={{
+            marginLeft: 8,
+            padding:
+              '9px 14px',
+            borderRadius: 8,
+            border:
+              '1px solid #cbd5e1',
+            background:
+              '#fff',
+            cursor:
+              'pointer',
+          }}
+        >
+          未分類 {
+            detectedUnknownFiles.length
+          } 份
+        </button>
+      )}
+
       {open && (
         <div
           style={{
@@ -2624,7 +3039,7 @@ export default function CsvImportButton({
                     marginTop: 6,
                   }}
                 >
-                  也可設定固定的「繳費報表資料夾」。之後把 CSV 下載到該資料夾，開啟月租管理時系統會自動檢查新檔案並詢問是否分析；系統不會在未確認前直接修改月租資料。
+                  也可設定固定的報表資料夾。月租總表與繳費紀錄可以放在同一個資料夾；系統會先看檔名，再用 CSV 欄位內容做第二層判斷，自動分類為「月租總表／繳費紀錄／未分類」。只有繳費紀錄會進入付款比對，月租總表不會被誤當成繳費資料。
                 </p>
               </div>
 
