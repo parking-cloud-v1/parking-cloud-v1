@@ -134,6 +134,9 @@ export default async function DashboardShell({
             防災檢查
           </Link>
 
+          <Link href="/dashboard/shift-closing">
+            當日結班報表
+          </Link>
         </aside>
 
         <main className="main">
