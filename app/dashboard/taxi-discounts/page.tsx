@@ -6,7 +6,9 @@ import {
   useMemo,
   useState,
 } from 'react'
+
 import { createClient } from '@/lib/supabase/client'
+import { getSavedWorkParkingLotId } from '@/components/useWorkParkingLot'
 
 type ParkingLot = {
   id: string
@@ -38,71 +40,48 @@ type TaxiRecord = {
   created_at: string
 }
 
-type CalculationResult = {
+type Result = {
   originalAmount: number
   discountAmount: number
   finalAmount: number
   usedFreeDiscount: boolean
   discountDate: string | null
-  discountReason: string
+  reason: string
 }
 
-function toLocalInputValue(
-  date: Date
+function pad(
+  value: number
 ) {
-  const pad = (
-    value: number
-  ) =>
-    String(value).padStart(
-      2,
-      '0'
-    )
-
-  return (
-    `${date.getFullYear()}-` +
-    `${pad(date.getMonth() + 1)}-` +
-    `${pad(date.getDate())}T` +
-    `${pad(date.getHours())}:` +
-    `${pad(date.getMinutes())}`
+  return String(
+    value
+  ).padStart(
+    2,
+    '0'
   )
 }
 
-function formatDateTime(
-  value: string
+function localInput(
+  date: Date
 ) {
-  const date =
-    new Date(value)
-
-  if (
-    Number.isNaN(
-      date.getTime()
-    )
-  ) {
-    return value
-  }
-
-  return new Intl.DateTimeFormat(
-    'zh-TW',
-    {
-      timeZone:
-        'Asia/Taipei',
-      year:
-        'numeric',
-      month:
-        '2-digit',
-      day:
-        '2-digit',
-      hour:
-        '2-digit',
-      minute:
-        '2-digit',
-      hour12:
-        false,
-    }
-  ).format(date)
+  return (
+    `${date.getFullYear()}-` +
+    `${pad(
+      date.getMonth() +
+        1
+    )}-` +
+    `${pad(
+      date.getDate()
+    )}T` +
+    `${pad(
+      date.getHours()
+    )}:` +
+    `${pad(
+      date.getMinutes()
+    )}`
+  )
 }
 
-function localDateKey(
+function dateKey(
   date: Date
 ) {
   const parts =
@@ -125,9 +104,11 @@ function localDateKey(
   const map =
     Object.fromEntries(
       parts.map(
-        (part) => [
-          part.type,
-          part.value,
+        (
+          item
+        ) => [
+          item.type,
+          item.value,
         ]
       )
     )
@@ -135,41 +116,18 @@ function localDateKey(
   return `${map.year}-${map.month}-${map.day}`
 }
 
-function taipeiDateAt(
-  dateKey: string,
-  hour: number,
-  minute = 0
+function taipeiAt(
+  key: string,
+  hour: number
 ) {
   return new Date(
-    `${dateKey}T${String(
+    `${key}T${pad(
       hour
-    ).padStart(
-      2,
-      '0'
-    )}:${String(
-      minute
-    ).padStart(
-      2,
-      '0'
-    )}:00+08:00`
+    )}:00:00+08:00`
   )
 }
 
-function money(
-  value: number
-) {
-  return Number(
-    value || 0
-  ).toLocaleString(
-    'zh-TW',
-    {
-      maximumFractionDigits:
-        0,
-    }
-  )
-}
-
-function plateNormalize(
+function normalizePlate(
   value: string
 ) {
   return value
@@ -181,11 +139,25 @@ function plateNormalize(
     .toUpperCase()
 }
 
-function chargeForMinutes(
+function money(
+  value: number
+) {
+  return Number(
+    value ||
+      0
+  ).toLocaleString(
+    'zh-TW',
+    {
+      maximumFractionDigits:
+        0,
+    }
+  )
+}
+
+function chargeMinutes(
   minutes: number,
   hourlyRate: number,
-  billingMode:
-    BillingMode
+  billingMode: BillingMode
 ) {
   if (
     minutes <=
@@ -200,7 +172,8 @@ function chargeForMinutes(
   ) {
     return (
       hourlyRate *
-      (minutes / 60)
+      minutes /
+      60
     )
   }
 
@@ -210,7 +183,8 @@ function chargeForMinutes(
   ) {
     return (
       Math.ceil(
-        minutes / 60
+        minutes /
+          60
       ) *
       hourlyRate
     )
@@ -218,18 +192,19 @@ function chargeForMinutes(
 
   return (
     Math.ceil(
-      minutes / 30
+      minutes /
+        30
     ) *
-    (hourlyRate / 2)
+    hourlyRate /
+    2
   )
 }
 
 function calculateWithCap(
   entry: Date,
   exit: Date,
-  hourlyRate: number,
-  billingMode:
-    BillingMode,
+  rate: number,
+  mode: BillingMode,
   capHours: number,
   capAmount: number
 ) {
@@ -262,7 +237,8 @@ function calculateWithCap(
   let remaining =
     totalMinutes
 
-  let total = 0
+  let total =
+    0
 
   while (
     remaining >
@@ -275,10 +251,10 @@ function calculateWithCap(
       )
 
     const raw =
-      chargeForMinutes(
+      chargeMinutes(
         minutes,
-        hourlyRate,
-        billingMode
+        rate,
+        mode
       )
 
     total +=
@@ -294,60 +270,9 @@ function calculateWithCap(
       minutes
   }
 
-  return total
-}
-
-function getSessionDateKeys(
-  entry: Date,
-  exit: Date
-) {
-  const keys:
-    string[] =
-    []
-
-  const startKey =
-    localDateKey(
-      entry
-    )
-
-  const endKey =
-    localDateKey(
-      exit
-    )
-
-  let cursor =
-    taipeiDateAt(
-      startKey,
-      0
-    )
-
-  const endCursor =
-    taipeiDateAt(
-      endKey,
-      0
-    )
-
-  while (
-    cursor.getTime() <=
-    endCursor.getTime()
-  ) {
-    keys.push(
-      localDateKey(
-        cursor
-      )
-    )
-
-    cursor =
-      new Date(
-        cursor.getTime() +
-          24 *
-            60 *
-            60 *
-            1000
-      )
-  }
-
-  return keys
+  return Math.round(
+    total
+  )
 }
 
 function overlapMinutes(
@@ -376,200 +301,102 @@ function overlapMinutes(
   }
 
   return Math.ceil(
-    (end - start) /
+    (
+      end -
+      start
+    ) /
       60000
   )
 }
 
-
-type OfficialReportRow = {
-  dailyIndex: number
-  date: string
-  plate: string
-  entry: string
-  exit: string
-  discount: number
-  holiday: string
-  recordId: string
-}
-
-function officialDateText(
-  value: string
+function sessionDates(
+  entry: Date,
+  exit: Date
 ) {
-  const date =
-    new Date(value)
-
-  const parts =
-    new Intl.DateTimeFormat(
-      'en-CA',
-      {
-        timeZone:
-          'Asia/Taipei',
-        year:
-          'numeric',
-        month:
-          '2-digit',
-        day:
-          '2-digit',
-      }
-    ).formatToParts(
-      date
+  const start =
+    taipeiAt(
+      dateKey(
+        entry
+      ),
+      0
     )
 
-  const map =
-    Object.fromEntries(
-      parts.map(
-        (
-          part
-        ) => [
-          part.type,
-          part.value,
-        ]
+  const end =
+    taipeiAt(
+      dateKey(
+        exit
+      ),
+      0
+    )
+
+  const result:
+    string[] =
+    []
+
+  let current =
+    start
+
+  while (
+    current.getTime() <=
+    end.getTime()
+  ) {
+    result.push(
+      dateKey(
+        current
       )
     )
 
-  return `${map.year}/${map.month}/${map.day}`
-}
-
-function officialTimeText(
-  value: string
-) {
-  const parts =
-    new Intl.DateTimeFormat(
-      'zh-TW',
-      {
-        timeZone:
-          'Asia/Taipei',
-        hour:
-          '2-digit',
-        minute:
-          '2-digit',
-        hour12:
-          false,
-      }
-    ).formatToParts(
+    current =
       new Date(
-        value
+        current.getTime() +
+          86400000
       )
-    )
+  }
 
-  const map =
-    Object.fromEntries(
-      parts.map(
-        (
-          part
-        ) => [
-          part.type,
-          part.value,
-        ]
-      )
-    )
-
-  return `${map.hour}:${map.minute}`
+  return result
 }
 
-function buildOfficialRows(
-  records:
-    TaxiRecord[]
-): OfficialReportRow[] {
-  const sorted =
-    [...records].sort(
-      (
-        a,
-        b
-      ) =>
-        new Date(
-          a.entry_time
-        ).getTime() -
-        new Date(
-          b.entry_time
-        ).getTime()
-    )
-
-  const dailyCounter:
-    Record<string, number> =
-    {}
-
-  return sorted.map(
-    (
-      row
-    ) => {
-      const date =
-        officialDateText(
-          row.entry_time
-        )
-
-      dailyCounter[
-        date
-      ] =
-        (
-          dailyCounter[
-            date
-          ] ||
-          0
-        ) +
-        1
-
-      return {
-        dailyIndex:
-          dailyCounter[
-            date
-          ],
-        date,
-        plate:
-          row.vehicle_plate,
-        entry:
-          officialTimeText(
-            row.entry_time
-          ),
-        exit:
-          officialTimeText(
-            row.exit_time
-          ),
-        discount:
-          Number(
-            row.discount_amount ||
-              0
-          ),
-        holiday:
-          row.is_holiday
-            ? '是'
-            : '否',
-        recordId:
-          row.id,
-      }
+function displayDate(
+  value: string
+) {
+  return new Intl.DateTimeFormat(
+    'zh-TW',
+    {
+      timeZone:
+        'Asia/Taipei',
+      year:
+        'numeric',
+      month:
+        '2-digit',
+      day:
+        '2-digit',
     }
+  ).format(
+    new Date(
+      value
+    )
   )
 }
 
-function escapeHtml(
-  value: unknown
+function displayTime(
+  value: string
 ) {
-  return String(
-    value ??
-      ''
-  ).replace(
-    /[&<>"']/g,
-    (
-      char
-    ) =>
-      ({
-        '&':
-          '&amp;',
-        '<':
-          '&lt;',
-        '>':
-          '&gt;',
-        '"':
-          '&quot;',
-        "'":
-          '&#039;',
-      } as Record<
-        string,
-        string
-      >)[
-        char
-      ]
+  return new Intl.DateTimeFormat(
+    'zh-TW',
+    {
+      timeZone:
+        'Asia/Taipei',
+      hour:
+        '2-digit',
+      minute:
+        '2-digit',
+      hour12:
+        false,
+    }
+  ).format(
+    new Date(
+      value
+    )
   )
 }
 
@@ -602,7 +429,7 @@ export default function TaxiDiscountPage() {
     setEntryTime,
   ] =
     useState(
-      toLocalInputValue(
+      localInput(
         new Date()
       )
     )
@@ -612,12 +439,10 @@ export default function TaxiDiscountPage() {
     setExitTime,
   ] =
     useState(
-      toLocalInputValue(
+      localInput(
         new Date(
           Date.now() +
-            60 *
-              60 *
-              1000
+            3600000
         )
       )
     )
@@ -626,7 +451,9 @@ export default function TaxiDiscountPage() {
     hourlyRate,
     setHourlyRate,
   ] =
-    useState('30')
+    useState(
+      '30'
+    )
 
   const [
     billingMode,
@@ -640,19 +467,25 @@ export default function TaxiDiscountPage() {
     capHours,
     setCapHours,
   ] =
-    useState('4')
+    useState(
+      '4'
+    )
 
   const [
     capAmount,
     setCapAmount,
   ] =
-    useState('100')
+    useState(
+      '100'
+    )
 
   const [
     isHoliday,
     setIsHoliday,
   ] =
-    useState(false)
+    useState(
+      false
+    )
 
   const [
     notes,
@@ -665,7 +498,7 @@ export default function TaxiDiscountPage() {
     setResult,
   ] =
     useState<
-      CalculationResult | null
+      Result | null
     >(null)
 
   const [
@@ -677,28 +510,16 @@ export default function TaxiDiscountPage() {
     >([])
 
   const [
-    loading,
-    setLoading,
+    message,
+    setMessage,
   ] =
-    useState(true)
+    useState('')
 
   const [
     saving,
     setSaving,
   ] =
     useState(false)
-
-  const [
-    exportingPdf,
-    setExportingPdf,
-  ] =
-    useState(false)
-
-  const [
-    message,
-    setMessage,
-  ] =
-    useState('')
 
   const [
     filterMonth,
@@ -714,7 +535,7 @@ export default function TaxiDiscountPage() {
     )
 
   useEffect(() => {
-    loadInitial()
+    loadParkingLots()
   }, [])
 
   useEffect(() => {
@@ -722,16 +543,16 @@ export default function TaxiDiscountPage() {
       selectedLotId
     ) {
       loadRecords()
+    } else {
+      setRecords([])
     }
   }, [
     selectedLotId,
     filterMonth,
   ])
 
-  async function loadInitial() {
-    setLoading(
-      true
-    )
+  async function loadParkingLots() {
+    setMessage('')
 
     const {
       data,
@@ -760,57 +581,55 @@ export default function TaxiDiscountPage() {
           error.message
       )
 
-      setLoading(
-        false
-      )
-
       return
     }
 
     const lots =
-      data || []
+      (
+        data ||
+        []
+      ) as ParkingLot[]
 
     setParkingLots(
       lots
     )
 
+    const workLotId =
+      getSavedWorkParkingLotId()
+
     if (
-      lots.length >
-      0
+      workLotId &&
+      lots.some(
+        (
+          lot
+        ) =>
+          lot.id ===
+          workLotId
+      )
     ) {
       setSelectedLotId(
-        lots[0].id
+        workLotId
+      )
+    } else {
+      setMessage(
+        '請先在左側「目前工作停車場」選擇停車場。'
       )
     }
-
-    setLoading(
-      false
-    )
   }
 
   async function loadRecords() {
-    if (
-      !selectedLotId
-    ) {
-      return
-    }
-
     const start =
       `${filterMonth}-01T00:00:00+08:00`
 
-    const nextMonthDate =
+    const next =
       new Date(
         `${filterMonth}-01T00:00:00+08:00`
       )
 
-    nextMonthDate.setMonth(
-      nextMonthDate.getMonth() +
+    next.setMonth(
+      next.getMonth() +
         1
     )
-
-    const nextMonth =
-      nextMonthDate
-        .toISOString()
 
     const {
       data,
@@ -820,7 +639,9 @@ export default function TaxiDiscountPage() {
         .from(
           'taxi_discount_records'
         )
-        .select('*')
+        .select(
+          '*'
+        )
         .eq(
           'parking_lot_id',
           selectedLotId
@@ -831,7 +652,7 @@ export default function TaxiDiscountPage() {
         )
         .lt(
           'entry_time',
-          nextMonth
+          next.toISOString()
         )
         .order(
           'entry_time',
@@ -868,13 +689,13 @@ export default function TaxiDiscountPage() {
       !selectedLotId
     ) {
       setMessage(
-        '請選擇停車場'
+        '請先選擇目前工作停車場'
       )
       return
     }
 
     const plate =
-      plateNormalize(
+      normalizePlate(
         vehiclePlate
       )
 
@@ -927,18 +748,6 @@ export default function TaxiDiscountPage() {
         capAmount
       )
 
-    if (
-      rate <
-        0 ||
-      cap <
-        0
-    ) {
-      setMessage(
-        '費率或上限金額不正確'
-      )
-      return
-    }
-
     const original =
       calculateWithCap(
         entry,
@@ -949,32 +758,29 @@ export default function TaxiDiscountPage() {
         cap
       )
 
-    const dateKeys =
-      getSessionDateKeys(
-        entry,
-        exit
-      )
-
     let eligibleDate:
       string | null =
       null
 
-    let eligibleMinutes =
+    let freeMinutes =
       0
 
     for (
-      const dateKey of
-      dateKeys
+      const key of
+      sessionDates(
+        entry,
+        exit
+      )
     ) {
-      const windowStart =
-        taipeiDateAt(
-          dateKey,
+      const freeStart =
+        taipeiAt(
+          key,
           11
         )
 
-      const windowEnd =
-        taipeiDateAt(
-          dateKey,
+      const freeEnd =
+        taipeiAt(
+          key,
           13
         )
 
@@ -982,8 +788,8 @@ export default function TaxiDiscountPage() {
         overlapMinutes(
           entry,
           exit,
-          windowStart,
-          windowEnd
+          freeStart,
+          freeEnd
         )
 
       if (
@@ -995,9 +801,8 @@ export default function TaxiDiscountPage() {
 
       const {
         data:
-          existing,
-        error:
-          existingError,
+          usedRecords,
+        error,
       } =
         await supabase
           .from(
@@ -1011,40 +816,39 @@ export default function TaxiDiscountPage() {
             selectedLotId
           )
           .eq(
+            'vehicle_plate',
+            plate
+          )
+          .eq(
             'discount_date',
-            dateKey
+            key
           )
           .eq(
             'used_free_discount',
             true
-          )
-          .ilike(
-            'vehicle_plate',
-            plate
           )
           .limit(
             1
           )
 
       if (
-        existingError
+        error
       ) {
         setMessage(
-          '優惠紀錄檢查失敗：' +
-            existingError.message
+          error.message
         )
         return
       }
 
       if (
-        !existing ||
-        existing.length ===
+        !usedRecords ||
+        usedRecords.length ===
           0
       ) {
         eligibleDate =
-          dateKey
+          key
 
-        eligibleMinutes =
+        freeMinutes =
           minutes
 
         break
@@ -1063,30 +867,33 @@ export default function TaxiDiscountPage() {
       discount =
         Math.min(
           original,
-          chargeForMinutes(
-            eligibleMinutes,
+          chargeMinutes(
+            freeMinutes,
             rate,
             billingMode
           )
         )
 
       reason =
-        `${eligibleDate} 可使用一次 11:00–13:00 免費優惠`
+        `${eligibleDate} 可享 11:00–13:00 一次免費優惠`
     } else {
-      const overlapsWindow =
-        dateKeys.some(
+      const hasWindow =
+        sessionDates(
+          entry,
+          exit
+        ).some(
           (
-            dateKey
+            key
           ) =>
             overlapMinutes(
               entry,
               exit,
-              taipeiDateAt(
-                dateKey,
+              taipeiAt(
+                key,
                 11
               ),
-              taipeiDateAt(
-                dateKey,
+              taipeiAt(
+                key,
                 13
               )
             ) >
@@ -1094,18 +901,20 @@ export default function TaxiDiscountPage() {
         )
 
       if (
-        overlapsWindow
+        hasWindow
       ) {
         reason =
-          '該車牌於可優惠日期已使用過一次免費優惠，本次僅套用最高上限'
+          '該車牌當日優惠已使用，本次依正常費率及最高上限計算'
       }
     }
 
-    const finalAmount =
+    const final =
       Math.max(
         0,
-        original -
-          discount
+        Math.round(
+          original -
+            discount
+        )
       )
 
     setResult({
@@ -1118,39 +927,39 @@ export default function TaxiDiscountPage() {
           discount
         ),
       finalAmount:
-        Math.round(
-          finalAmount
-        ),
+        final,
       usedFreeDiscount:
         Boolean(
           eligibleDate
         ),
       discountDate:
         eligibleDate,
-      discountReason:
-        reason,
+      reason,
     })
   }
 
   async function saveRecord(
-    e:
+    event:
       FormEvent
   ) {
-    e.preventDefault()
+    event.preventDefault()
 
     if (
       !result ||
-      saving
+      !selectedLotId
     ) {
       return
     }
 
-    setSaving(
-      true
-    )
+    setSaving(true)
     setMessage('')
 
     try {
+      const plate =
+        normalizePlate(
+          vehiclePlate
+        )
+
       const {
         data: {
           user,
@@ -1159,15 +968,6 @@ export default function TaxiDiscountPage() {
         await supabase
           .auth
           .getUser()
-
-      if (
-        !user
-      ) {
-        setMessage(
-          '登入狀態失效'
-        )
-        return
-      }
 
       const {
         error,
@@ -1181,9 +981,7 @@ export default function TaxiDiscountPage() {
               selectedLotId,
 
             vehicle_plate:
-              plateNormalize(
-                vehiclePlate
-              ),
+              plate,
 
             entry_time:
               new Date(
@@ -1236,7 +1034,8 @@ export default function TaxiDiscountPage() {
               null,
 
             created_by:
-              user.id,
+              user?.id ||
+              null,
           })
 
       if (
@@ -1250,28 +1049,29 @@ export default function TaxiDiscountPage() {
       }
 
       setMessage(
-        '計程車優惠紀錄已儲存'
+        '已加入計程車優惠報表'
       )
 
       setResult(
         null
       )
 
+      setVehiclePlate(
+        ''
+      )
+
       await loadRecords()
     } finally {
-      setSaving(
-        false
-      )
+      setSaving(false)
     }
   }
 
   async function deleteRecord(
-    record:
-      TaxiRecord
+    item: TaxiRecord
   ) {
     if (
       !window.confirm(
-        `確定刪除 ${record.vehicle_plate} 這筆紀錄？`
+        `確定刪除 ${item.vehicle_plate} 這筆紀錄？`
       )
     ) {
       return
@@ -1287,13 +1087,17 @@ export default function TaxiDiscountPage() {
         .delete()
         .eq(
           'id',
-          record.id
+          item.id
+        )
+        .eq(
+          'parking_lot_id',
+          selectedLotId
         )
 
     if (
       error
     ) {
-      alert(
+      setMessage(
         '刪除失敗：' +
           error.message
       )
@@ -1319,144 +1123,132 @@ export default function TaxiDiscountPage() {
       ]
     )
 
-  const totals =
-    useMemo(
-      () =>
-        records.reduce(
-          (
-            acc,
-            row
-          ) => {
-            acc.original +=
-              Number(
-                row.original_amount ||
-                  0
-              )
-
-            acc.discount +=
-              Number(
-                row.discount_amount ||
-                  0
-              )
-
-            acc.final +=
-              Number(
-                row.final_amount ||
-                  0
-              )
-
-            return acc
-          },
-          {
-            original: 0,
-            discount: 0,
-            final: 0,
-          }
-        ),
-      [
-        records,
-      ]
-    )
-
   const officialRows =
     useMemo(
-      () =>
-        buildOfficialRows(
-          records
-        ),
+      () => {
+        const sorted =
+          [
+            ...records,
+          ].sort(
+            (
+              a,
+              b
+            ) =>
+              new Date(
+                a.entry_time
+              ).getTime() -
+              new Date(
+                b.entry_time
+              ).getTime()
+          )
+
+        const counter:
+          Record<
+            string,
+            number
+          > =
+          {}
+
+        return sorted.map(
+          (
+            row
+          ) => {
+            const date =
+              displayDate(
+                row.entry_time
+              )
+
+            counter[
+              date
+            ] =
+              (
+                counter[
+                  date
+                ] ||
+                0
+              ) +
+              1
+
+            return {
+              id:
+                row.id,
+              dailyIndex:
+                counter[
+                  date
+                ],
+              date,
+              plate:
+                row.vehicle_plate,
+              entry:
+                displayTime(
+                  row.entry_time
+                ),
+              exit:
+                displayTime(
+                  row.exit_time
+                ),
+              discount:
+                Number(
+                  row.discount_amount ||
+                    0
+                ),
+              holiday:
+                row.is_holiday
+                  ? '是'
+                  : '否',
+            }
+          }
+        )
+      },
       [
         records,
       ]
     )
 
-  async function exportExcel() {
-    if (
-      !officialRows.length
-    ) {
-      alert(
-        '目前沒有可匯出的資料'
-      )
-      return
-    }
+  function exportCsv() {
+    const lines =
+      [
+        [
+          '每日項次',
+          '日期',
+          '車牌',
+          '進場時間',
+          '離場時間',
+          '銷單金額',
+          '是否假日',
+        ].join(
+          ','
+        ),
 
-    const rows =
-      officialRows
-        .map(
+        ...officialRows.map(
           (
             row
           ) =>
-            `<tr>` +
-            `<td>${row.dailyIndex}</td>` +
-            `<td>${escapeHtml(row.date)}</td>` +
-            `<td>${escapeHtml(row.plate)}</td>` +
-            `<td>${escapeHtml(row.entry)}</td>` +
-            `<td>${escapeHtml(row.exit)}</td>` +
-            `<td>${row.discount}</td>` +
-            `<td>${escapeHtml(row.holiday)}</td>` +
-            `</tr>`
-        )
-        .join('')
-
-    let blankRows =
-      ''
-
-    for (
-      let index =
-        officialRows.length;
-      index <
-        32;
-      index++
-    ) {
-      blankRows +=
-        '<tr>' +
-        '<td>&nbsp;</td>' +
-        '<td></td>' +
-        '<td></td>' +
-        '<td></td>' +
-        '<td></td>' +
-        '<td></td>' +
-        '<td></td>' +
-        '</tr>'
-    }
-
-    const lotName =
-      selectedLot?.name ||
-      '停車場'
-
-    const html =
-      `<html>` +
-      `<meta charset="UTF-8">` +
-      `<style>` +
-      `table{border-collapse:collapse;width:100%;}` +
-      `th,td{border:2px solid #000;text-align:center;height:34px;}` +
-      `.title{font-size:25px;height:58px;}` +
-      `</style>` +
-      `<table>` +
-      `<tr><th class="title" colspan="7">` +
-      `新北市政府交通局計程車免費停車統計表（${escapeHtml(lotName)}）` +
-      `</th></tr>` +
-      `<tr>` +
-      `<th>每日項次</th>` +
-      `<th>日期</th>` +
-      `<th>車牌</th>` +
-      `<th>進場時間</th>` +
-      `<th>離場時間</th>` +
-      `<th>銷單金額</th>` +
-      `<th>是否假日</th>` +
-      `</tr>` +
-      rows +
-      blankRows +
-      `</table>` +
-      `</html>`
+            [
+              row.dailyIndex,
+              row.date,
+              row.plate,
+              row.entry,
+              row.exit,
+              row.discount,
+              row.holiday,
+            ].join(
+              ','
+            )
+        ),
+      ]
 
     const blob =
       new Blob(
         [
-          html,
+          '\uFEFF' +
+            lines.join(
+              '\r\n'
+            ),
         ],
         {
           type:
-            'application/vnd.ms-excel;charset=utf-8',
+            'text/csv;charset=utf-8;',
         }
       )
 
@@ -1470,150 +1262,17 @@ export default function TaxiDiscountPage() {
         'a'
       )
 
-    a.href = url
-    a.download =
-      `${lotName}_計程車免費停車統計表.xls`
+    a.href =
+      url
 
-    document.body
-      .appendChild(
-        a
-      )
+    a.download =
+      `${selectedLot?.name || '停車場'}_計程車優惠_${filterMonth}.csv`
 
     a.click()
-
-    document.body
-      .removeChild(
-        a
-      )
 
     URL.revokeObjectURL(
       url
     )
-  }
-
-  async function exportPdf() {
-    if (
-      exportingPdf
-    ) {
-      return
-    }
-
-    const element =
-      document.getElementById(
-        'taxi-report-pdf'
-      )
-
-    if (
-      !element
-    ) {
-      return
-    }
-
-    setExportingPdf(
-      true
-    )
-
-    try {
-      const [
-        html2canvasModule,
-        jspdfModule,
-      ] =
-        await Promise.all([
-          import(
-            'html2canvas'
-          ),
-          import(
-            'jspdf'
-          ),
-        ])
-
-      const html2canvas =
-        html2canvasModule.default
-
-      const {
-        jsPDF,
-      } =
-        jspdfModule
-
-      const canvas =
-        await html2canvas(
-          element,
-          {
-            scale: 2,
-            useCORS:
-              true,
-            backgroundColor:
-              '#ffffff',
-          }
-        )
-
-      const pdf =
-        new jsPDF({
-          orientation:
-            'landscape',
-          unit: 'mm',
-          format: 'a4',
-        })
-
-      const img =
-        canvas.toDataURL(
-          'image/jpeg',
-          0.95
-        )
-
-      const pageWidth =
-        297
-
-      const pageHeight =
-        210
-
-      const ratio =
-        Math.min(
-          pageWidth /
-            canvas.width,
-          pageHeight /
-            canvas.height
-        )
-
-      const width =
-        canvas.width *
-        ratio
-
-      const height =
-        canvas.height *
-        ratio
-
-      pdf.addImage(
-        img,
-        'JPEG',
-        (
-          pageWidth -
-          width
-        ) /
-          2,
-        8,
-        width,
-        height
-      )
-
-      pdf.save(
-        `${selectedLot?.name || '停車場'}_${filterMonth}_計程車優惠報表.pdf`
-      )
-    } catch (
-      error: any
-    ) {
-      alert(
-        'PDF 匯出失敗：' +
-          (
-            error?.message ||
-            '未知錯誤'
-          )
-      )
-    } finally {
-      setExportingPdf(
-        false
-      )
-    }
   }
 
   return (
@@ -1623,38 +1282,35 @@ export default function TaxiDiscountPage() {
           40,
       }}
     >
-      <div
-        style={{
-          display:
-            'flex',
-          justifyContent:
-            'space-between',
-          gap: 12,
-          alignItems:
-            'flex-start',
-          flexWrap:
-            'wrap',
-        }}
-      >
-        <div>
-          <h1
-            style={{
-              marginTop:
-                0,
-              marginBottom:
-                6,
-            }}
-          >
-            計程車折扣系統
-          </h1>
+      <div>
+        <h1>
+          計程車折扣
+        </h1>
 
-          <div
-            className="muted"
-          >
-            11:00–13:00 每車牌每日免費一次；同日再次進場不可重複使用，但最高上限仍有效。
-          </div>
+        <div
+          className="muted"
+        >
+          目前工作停車場：
+          {selectedLot?.name ||
+            '尚未選擇'}
         </div>
       </div>
+
+      {!selectedLotId && (
+        <div
+          className="card"
+          style={{
+            marginTop:
+              20,
+            color:
+              '#b45309',
+            fontWeight:
+              700,
+          }}
+        >
+          請先在左側選擇目前工作停車場。
+        </div>
+      )}
 
       <form
         onSubmit={
@@ -1668,12 +1324,7 @@ export default function TaxiDiscountPage() {
               20,
           }}
         >
-          <h2
-            style={{
-              marginTop:
-                0,
-            }}
-          >
+          <h2>
             優惠計算
           </h2>
 
@@ -1682,13 +1333,12 @@ export default function TaxiDiscountPage() {
               display:
                 'grid',
               gridTemplateColumns:
-                'repeat(auto-fit, minmax(230px,1fr))',
-              gap: 14,
+                'repeat(auto-fit,minmax(220px,1fr))',
+              gap:
+                14,
             }}
           >
-            <div
-              className="field"
-            >
+            <div className="field">
               <label>
                 停車場
               </label>
@@ -1697,15 +1347,14 @@ export default function TaxiDiscountPage() {
                 value={
                   selectedLotId
                 }
-                onChange={(
-                  e
-                ) =>
-                  setSelectedLotId(
-                    e.target
-                      .value
-                  )
-                }
+                disabled
               >
+                {!selectedLotId && (
+                  <option value="">
+                    尚未選擇
+                  </option>
+                )}
+
                 {parkingLots.map(
                   (
                     lot
@@ -1727,9 +1376,7 @@ export default function TaxiDiscountPage() {
               </select>
             </div>
 
-            <div
-              className="field"
-            >
+            <div className="field">
               <label>
                 車牌
               </label>
@@ -1739,20 +1386,18 @@ export default function TaxiDiscountPage() {
                   vehiclePlate
                 }
                 onChange={(
-                  e
+                  event
                 ) =>
                   setVehiclePlate(
-                    e.target
+                    event
+                      .target
                       .value
                   )
                 }
-                placeholder="例如 ABC-1234"
               />
             </div>
 
-            <div
-              className="field"
-            >
+            <div className="field">
               <label>
                 進場時間
               </label>
@@ -1763,19 +1408,18 @@ export default function TaxiDiscountPage() {
                   entryTime
                 }
                 onChange={(
-                  e
+                  event
                 ) =>
                   setEntryTime(
-                    e.target
+                    event
+                      .target
                       .value
                   )
                 }
               />
             </div>
 
-            <div
-              className="field"
-            >
+            <div className="field">
               <label>
                 出場時間
               </label>
@@ -1786,19 +1430,18 @@ export default function TaxiDiscountPage() {
                   exitTime
                 }
                 onChange={(
-                  e
+                  event
                 ) =>
                   setExitTime(
-                    e.target
+                    event
+                      .target
                       .value
                   )
                 }
               />
             </div>
 
-            <div
-              className="field"
-            >
+            <div className="field">
               <label>
                 每小時費率
               </label>
@@ -1810,21 +1453,20 @@ export default function TaxiDiscountPage() {
                   hourlyRate
                 }
                 onChange={(
-                  e
+                  event
                 ) =>
                   setHourlyRate(
-                    e.target
+                    event
+                      .target
                       .value
                   )
                 }
               />
             </div>
 
-            <div
-              className="field"
-            >
+            <div className="field">
               <label>
-                計費進位
+                計費方式
               </label>
 
               <select
@@ -1832,10 +1474,11 @@ export default function TaxiDiscountPage() {
                   billingMode
                 }
                 onChange={(
-                  e
+                  event
                 ) =>
                   setBillingMode(
-                    e.target
+                    event
+                      .target
                       .value as BillingMode
                   )
                 }
@@ -1849,16 +1492,14 @@ export default function TaxiDiscountPage() {
                 </option>
 
                 <option value="actual">
-                  依實際分鐘
+                  實際分鐘
                 </option>
               </select>
             </div>
 
-            <div
-              className="field"
-            >
+            <div className="field">
               <label>
-                每幾小時最高上限
+                最高上限區間
               </label>
 
               <select
@@ -1866,10 +1507,11 @@ export default function TaxiDiscountPage() {
                   capHours
                 }
                 onChange={(
-                  e
+                  event
                 ) =>
                   setCapHours(
-                    e.target
+                    event
+                      .target
                       .value
                   )
                 }
@@ -1888,11 +1530,9 @@ export default function TaxiDiscountPage() {
               </select>
             </div>
 
-            <div
-              className="field"
-            >
+            <div className="field">
               <label>
-                每區間最高金額
+                最高金額
               </label>
 
               <input
@@ -1902,19 +1542,18 @@ export default function TaxiDiscountPage() {
                   capAmount
                 }
                 onChange={(
-                  e
+                  event
                 ) =>
                   setCapAmount(
-                    e.target
+                    event
+                      .target
                       .value
                   )
                 }
               />
             </div>
 
-            <div
-              className="field"
-            >
+            <div className="field">
               <label>
                 是否假日
               </label>
@@ -1926,10 +1565,11 @@ export default function TaxiDiscountPage() {
                     : 'no'
                 }
                 onChange={(
-                  e
+                  event
                 ) =>
                   setIsHoliday(
-                    e.target
+                    event
+                      .target
                       .value ===
                       'yes'
                   )
@@ -1962,92 +1602,72 @@ export default function TaxiDiscountPage() {
                 notes
               }
               onChange={(
-                e
+                event
               ) =>
                 setNotes(
-                  e.target
+                  event
+                    .target
                     .value
                 )
               }
             />
           </div>
 
-          <div
-            style={{
-              marginTop:
-                16,
-            }}
+          <button
+            type="button"
+            className="btn"
+            disabled={
+              !selectedLotId
+            }
+            onClick={
+              calculate
+            }
           >
-            <button
-              type="button"
-              className="btn"
-              onClick={
-                calculate
-              }
-            >
-              計算優惠
-            </button>
-          </div>
+            計算優惠
+          </button>
 
           {result && (
             <div
               style={{
                 marginTop:
-                  18,
+                  16,
                 padding:
                   16,
-                border:
-                  '1px solid #cbd5e1',
-                borderRadius:
-                  10,
                 background:
                   '#f8fafc',
+                borderRadius:
+                  10,
               }}
             >
               <div>
-                原始停車費：
-                <strong>
-                  NT$ {money(
-                    result.originalAmount
-                  )}
-                </strong>
+                原始金額：
+                NT${' '}
+                {money(
+                  result.originalAmount
+                )}
               </div>
 
               <div>
-                11–13 點優惠：
-                <strong>
-                  - NT$ {money(
-                    result.discountAmount
-                  )}
-                </strong>
+                優惠：
+                NT${' '}
+                {money(
+                  result.discountAmount
+                )}
               </div>
 
-              <div
-                style={{
-                  marginTop:
-                    8,
-                  fontSize:
-                    20,
-                }}
-              >
+              <h3>
                 銷單後金額：
-                <strong>
-                  NT$ {money(
-                    result.finalAmount
-                  )}
-                </strong>
-              </div>
+                NT${' '}
+                {money(
+                  result.finalAmount
+                )}
+              </h3>
 
               <div
-                style={{
-                  marginTop:
-                    8,
-                  color:
-                    '#475569',
-                }}
+                className="muted"
               >
                 {
-                  result.discountReason
+                  result.reason
                 }
               </div>
 
@@ -2059,7 +1679,7 @@ export default function TaxiDiscountPage() {
                 }
                 style={{
                   marginTop:
-                    14,
+                    12,
                 }}
               >
                 {saving
@@ -2074,15 +1694,9 @@ export default function TaxiDiscountPage() {
               style={{
                 marginTop:
                   14,
-                padding:
-                  10,
-                background:
-                  '#f8fafc',
               }}
             >
-              {
-                message
-              }
+              {message}
             </div>
           )}
         </div>
@@ -2096,27 +1710,10 @@ export default function TaxiDiscountPage() {
         }}
       >
         <div
-          style={{
-            display:
-              'flex',
-            justifyContent:
-              'space-between',
-            alignItems:
-              'center',
-            gap: 12,
-            flexWrap:
-              'wrap',
-          }}
+          className="row"
         >
           <div>
-            <h2
-              style={{
-                marginTop:
-                  0,
-                marginBottom:
-                  6,
-              }}
-            >
+            <h2>
               計程車優惠報表
             </h2>
 
@@ -2124,126 +1721,86 @@ export default function TaxiDiscountPage() {
               className="muted"
             >
               {
-                selectedLot?.name ||
-                ''
+                selectedLot?.name
               }
             </div>
           </div>
 
-          <div
-            style={{
-              display:
-                'flex',
-              gap: 8,
-              flexWrap:
-                'wrap',
-            }}
+          <input
+            type="month"
+            value={
+              filterMonth
+            }
+            onChange={(
+              event
+            ) =>
+              setFilterMonth(
+                event
+                  .target
+                  .value
+              )
+            }
+          />
+
+          <button
+            type="button"
+            onClick={
+              exportCsv
+            }
           >
-            <input
-              type="month"
-              value={
-                filterMonth
-              }
-              onChange={(
-                e
-              ) =>
-                setFilterMonth(
-                  e.target
-                    .value
-                )
-              }
-            />
-
-            <button
-              type="button"
-              onClick={
-                exportExcel
-              }
-            >
-              匯出 Excel
-            </button>
-
-            <button
-              type="button"
-              className="btn"
-              onClick={
-                exportPdf
-              }
-              disabled={
-                exportingPdf
-              }
-            >
-              {exportingPdf
-                ? 'PDF 產生中…'
-                : '匯出 PDF'}
-            </button>
-          </div>
+            匯出 CSV
+          </button>
         </div>
 
         <div
-          id="taxi-report-pdf"
           style={{
-            marginTop: 16,
-            background: '#fff',
-            padding: 12,
+            overflowX:
+              'auto',
+            marginTop:
+              14,
           }}
         >
           <table
+            className="table"
             style={{
-              width: '100%',
-              borderCollapse: 'collapse',
-              tableLayout: 'fixed',
-              color: '#000',
-              background: '#fff',
+              minWidth:
+                850,
             }}
           >
             <thead>
               <tr>
-                <th
-                  colSpan={7}
-                  style={{
-                    border: '2px solid #000',
-                    textAlign: 'center',
-                    height: 58,
-                    fontSize: 25,
-                    fontWeight: 700,
-                  }}
-                >
-                  新北市政府交通局計程車免費停車統計表（
-                  {selectedLot?.name || ''}
-                  ）
+                <th>
+                  每日項次
+                </th>
+
+                <th>
+                  日期
+                </th>
+
+                <th>
+                  車牌
+                </th>
+
+                <th>
+                  進場
+                </th>
+
+                <th>
+                  離場
+                </th>
+
+                <th>
+                  銷單金額
+                </th>
+
+                <th>
+                  是否假日
+                </th>
+
+                <th>
+                  操作
                 </th>
               </tr>
-
-              <tr>
-                {[
-                  '每日項次',
-                  '日期',
-                  '車牌',
-                  '進場時間',
-                  '離場時間',
-                  '銷單金額',
-                  '是否假日',
-                ].map(
-                  (
-                    label
-                  ) => (
-                    <th
-                      key={label}
-                      style={{
-                        border: '2px solid #000',
-                        textAlign: 'center',
-                        height: 34,
-                        fontSize: 14,
-                        fontWeight: 700,
-                        padding: 4,
-                      }}
-                    >
-                      {label}
-                    </th>
-                  )
-                )}
-              </tr>
             </thead>
 
             <tbody>
@@ -2252,228 +1809,70 @@ export default function TaxiDiscountPage() {
                   row
                 ) => (
                   <tr
-                    key={row.recordId}
+                    key={
+                      row.id
+                    }
                   >
-                    <td
-                      style={{
-                        border: '2px solid #000',
-                        textAlign: 'center',
-                        height: 34,
-                      }}
-                    >
-                      {row.dailyIndex}
+                    <td>
+                      {
+                        row.dailyIndex
+                      }
                     </td>
 
-                    <td
-                      style={{
-                        border: '2px solid #000',
-                        textAlign: 'center',
-                        height: 34,
-                      }}
-                    >
-                      {row.date}
+                    <td>
+                      {
+                        row.date
+                      }
                     </td>
 
-                    <td
-                      style={{
-                        border: '2px solid #000',
-                        textAlign: 'center',
-                        height: 34,
-                      }}
-                    >
-                      {row.plate}
+                    <td>
+                      {
+                        row.plate
+                      }
                     </td>
 
-                    <td
-                      style={{
-                        border: '2px solid #000',
-                        textAlign: 'center',
-                        height: 34,
-                      }}
-                    >
-                      {row.entry}
+                    <td>
+                      {
+                        row.entry
+                      }
                     </td>
 
-                    <td
-                      style={{
-                        border: '2px solid #000',
-                        textAlign: 'center',
-                        height: 34,
-                      }}
-                    >
-                      {row.exit}
+                    <td>
+                      {
+                        row.exit
+                      }
                     </td>
 
-                    <td
-                      style={{
-                        border: '2px solid #000',
-                        textAlign: 'center',
-                        height: 34,
-                      }}
-                    >
-                      {row.discount}
+                    <td>
+                      {
+                        row.discount
+                      }
                     </td>
 
-                    <td
-                      style={{
-                        border: '2px solid #000',
-                        textAlign: 'center',
-                        height: 34,
-                      }}
-                    >
-                      {row.holiday}
-                    </td>
-                  </tr>
-                )
-              )}
-
-              {Array.from({
-                length:
-                  Math.max(
-                    0,
-                    32 -
-                      officialRows.length
-                  ),
-              }).map(
-                (
-                  _,
-                  index
-                ) => (
-                  <tr
-                    key={`blank-${index}`}
-                  >
-                    {Array.from({
-                      length: 7,
-                    }).map(
-                      (
-                        __,
-                        cellIndex
-                      ) => (
-                        <td
-                          key={
-                            cellIndex
-                          }
-                          style={{
-                            border:
-                              '2px solid #000',
-                            textAlign:
-                              'center',
-                            height:
-                              34,
-                          }}
-                        >
-                          {cellIndex ===
-                          0
-                            ? '\u00a0'
-                            : ''}
-                        </td>
-                      )
-                    )}
-                  </tr>
-                )
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div
-          style={{
-            marginTop: 14,
-            overflowX: 'auto',
-          }}
-        >
-          <table
-            style={{
-              width: '100%',
-              borderCollapse: 'collapse',
-              minWidth: 760,
-            }}
-          >
-            <thead>
-              <tr>
-                <th>日期</th>
-                <th>車牌</th>
-                <th>進場</th>
-                <th>離場</th>
-                <th>銷單金額</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {officialRows.map(
-                (
-                  row
-                ) => (
-                  <tr
-                    key={`manage-${row.recordId}`}
-                    style={{
-                      borderTop:
-                        '1px solid #e5e7eb',
-                    }}
-                  >
-                    <td
-                      style={{
-                        padding: 8,
-                      }}
-                    >
-                      {row.date}
+                    <td>
+                      {
+                        row.holiday
+                      }
                     </td>
 
-                    <td
-                      style={{
-                        padding: 8,
-                      }}
-                    >
-                      {row.plate}
-                    </td>
-
-                    <td
-                      style={{
-                        padding: 8,
-                      }}
-                    >
-                      {row.entry}
-                    </td>
-
-                    <td
-                      style={{
-                        padding: 8,
-                      }}
-                    >
-                      {row.exit}
-                    </td>
-
-                    <td
-                      style={{
-                        padding: 8,
-                      }}
-                    >
-                      {row.discount}
-                    </td>
-
-                    <td
-                      style={{
-                        padding: 8,
-                      }}
-                    >
+                    <td>
                       <button
                         type="button"
                         onClick={() => {
-                          const found =
+                          const item =
                             records.find(
                               (
                                 record
                               ) =>
                                 record.id ===
-                                row.recordId
+                                row.id
                             )
 
                           if (
-                            found
+                            item
                           ) {
                             deleteRecord(
-                              found
+                              item
                             )
                           }
                         }}
@@ -2485,14 +1884,16 @@ export default function TaxiDiscountPage() {
                 )
               )}
 
-              {!officialRows.length && (
+              {officialRows.length ===
+                0 && (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={
+                      8
+                    }
                     style={{
-                      padding: 18,
-                      textAlign: 'center',
-                      color: '#64748b',
+                      textAlign:
+                        'center',
                     }}
                   >
                     目前沒有資料
@@ -2503,18 +1904,6 @@ export default function TaxiDiscountPage() {
           </table>
         </div>
       </div>
-
-      {loading && (
-        <div
-          className="muted"
-          style={{
-            marginTop:
-              12,
-          }}
-        >
-          讀取中…
-        </div>
-      )}
     </div>
   )
 }

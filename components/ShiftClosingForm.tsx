@@ -966,18 +966,19 @@ export default function ShiftClosingForm({
             </label>
 
             <select
-              value={
-                parkingLotId
-              }
-              onChange={(
-                event
-              ) =>
-                setParkingLotId(
-                  event.target
-                    .value
-                )
-              }
-            >
+  value={
+    parkingLotId
+  }
+  disabled
+  onChange={(
+    event
+  ) =>
+    setParkingLotId(
+      event.target
+        .value
+    )
+  }
+>
               <option value="">
                 請選擇停車場
               </option>

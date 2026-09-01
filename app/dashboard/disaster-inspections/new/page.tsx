@@ -167,6 +167,29 @@ function localDateText() {
   return `${year}-${month}-${day}`
 }
 
+function rocDateText(
+  value: string
+) {
+  if (!value) {
+    return ''
+  }
+
+  const [year, month, day] =
+    value
+      .split('-')
+      .map(Number)
+
+  if (
+    !year ||
+    !month ||
+    !day
+  ) {
+    return value
+  }
+
+  return `${year - 1911}年${String(month).padStart(2, '0')}月${String(day).padStart(2, '0')}日`
+}
+
 export default function NewDisasterInspectionPage() {
   const supabase =
     createClient()
@@ -291,6 +314,19 @@ export default function NewDisasterInspectionPage() {
   ] =
     useState(false)
 
+
+  const [
+    exportingPdf,
+    setExportingPdf,
+  ] =
+    useState(false)
+
+  const [
+    selectedPhotos,
+    setSelectedPhotos,
+  ] =
+    useState<File[]>([])
+
   useEffect(() => {
     loadParkingLots()
   }, [])
@@ -401,6 +437,47 @@ export default function NewDisasterInspectionPage() {
                     note,
                 }
               : item
+        )
+    )
+  }
+
+  function selectPhotos(
+    event: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const incoming =
+      Array.from(
+        event.target.files || []
+      )
+
+    event.target.value = ''
+
+    if (!incoming.length) return
+
+    const merged =
+      [
+        ...selectedPhotos,
+        ...incoming,
+      ].slice(0, 6)
+
+    if (
+      selectedPhotos.length +
+        incoming.length >
+      6
+    ) {
+      alert('佐證照片最多 6 張')
+    }
+
+    setSelectedPhotos(merged)
+  }
+
+  function removeSelectedPhoto(
+    index: number
+  ) {
+    setSelectedPhotos(
+      current =>
+        current.filter(
+          (_, photoIndex) =>
+            photoIndex !== index
         )
     )
   }
@@ -527,6 +604,10 @@ export default function NewDisasterInspectionPage() {
               emergencyPhone2.trim() ||
               null,
 
+            reviewer:
+              reviewer.trim() ||
+              null,
+
             status:
               'draft',
 
@@ -600,18 +681,78 @@ export default function NewDisasterInspectionPage() {
         }
       }
 
-      /*
-       * reviewer 目前先保留在備註欄位需求階段，
-       * 下一步建立正式 PDF 輸出前，
-       * 再依原表欄位補進資料庫。
-       */
       if (
-        reviewer.trim()
+        selectedPhotos.length >
+        0
       ) {
-        console.log(
-          '交通局承辦人員覆核：',
-          reviewer.trim()
-        )
+        for (
+          let index = 0;
+          index <
+          selectedPhotos.length;
+          index++
+        ) {
+          const file =
+            selectedPhotos[index]
+
+          const ext =
+            file.name
+              .split('.')
+              .pop() ||
+            'jpg'
+
+          const storagePath =
+            `${inspection.id}/${Date.now()}_${index}.${ext}`
+
+          const {
+            error: uploadError,
+          } =
+            await supabase
+              .storage
+              .from(
+                'disaster-inspections'
+              )
+              .upload(
+                storagePath,
+                file,
+                {
+                  upsert: false,
+                }
+              )
+
+          if (uploadError) {
+            setMessage(
+              `檢查表已建立，但第 ${index + 1} 張照片上傳失敗：${uploadError.message}`
+            )
+            return
+          }
+
+          const {
+            error: photoRowError,
+          } =
+            await supabase
+              .from(
+                'disaster_inspection_photos'
+              )
+              .insert({
+                inspection_id:
+                  inspection.id,
+                storage_path:
+                  storagePath,
+                file_name:
+                  file.name,
+                sort_order:
+                  index + 1,
+                uploaded_by:
+                  user.id,
+              })
+
+          if (photoRowError) {
+            setMessage(
+              `檢查表已建立，但第 ${index + 1} 張照片紀錄失敗：${photoRowError.message}`
+            )
+            return
+          }
+        }
       }
 
       window.location.href =
@@ -631,13 +772,161 @@ export default function NewDisasterInspectionPage() {
     }
   }
 
+  async function exportPdf() {
+    if (exportingPdf) {
+      return
+    }
+
+    const pages =
+      Array.from(
+        document.querySelectorAll<HTMLElement>(
+          '.disaster-preview-page'
+        )
+      )
+
+    if (
+      pages.length ===
+      0
+    ) {
+      alert(
+        '請先開啟表單預覽'
+      )
+      return
+    }
+
+    setExportingPdf(
+      true
+    )
+
+    try {
+      const [
+        html2canvasModule,
+        jspdfModule,
+      ] =
+        await Promise.all([
+          import(
+            'html2canvas'
+          ),
+          import(
+            'jspdf'
+          ),
+        ])
+
+      const html2canvas =
+        html2canvasModule.default
+
+      const {
+        jsPDF,
+      } =
+        jspdfModule
+
+      const pdf =
+        new jsPDF({
+          orientation:
+            'portrait',
+          unit: 'mm',
+          format: 'a4',
+          compress:
+            true,
+        })
+
+      for (
+        let index = 0;
+        index <
+        pages.length;
+        index++
+      ) {
+        const page =
+          pages[index]
+
+        const canvas =
+          await html2canvas(
+            page,
+            {
+              scale: 2,
+              useCORS:
+                true,
+              backgroundColor:
+                '#ffffff',
+              logging:
+                false,
+            }
+          )
+
+        const imgData =
+          canvas.toDataURL(
+            'image/jpeg',
+            0.95
+          )
+
+        if (
+          index >
+          0
+        ) {
+          pdf.addPage(
+            'a4',
+            'portrait'
+          )
+        }
+
+        pdf.addImage(
+          imgData,
+          'JPEG',
+          0,
+          0,
+          210,
+          297,
+          undefined,
+          'FAST'
+        )
+      }
+
+      const lotName =
+        (
+          selectedParkingLot?.name ||
+          '防災自主檢查表'
+        )
+          .replace(
+            /[\\/:*?"<>|]/g,
+            '_'
+          )
+
+      const dateText =
+        inspectionDate ||
+        '未填日期'
+
+      pdf.save(
+        `${lotName}_${dateText}_防災自主檢查表.pdf`
+      )
+    } catch (
+      error: any
+    ) {
+      console.error(
+        error
+      )
+
+      alert(
+        'PDF 匯出失敗：' +
+          (
+            error?.message ||
+            '未知錯誤'
+          )
+      )
+    } finally {
+      setExportingPdf(
+        false
+      )
+    }
+  }
+
   return (
-    <div
-      style={{
-        paddingBottom:
-          40,
-      }}
-    >
+    <>
+      <div
+        style={{
+          paddingBottom:
+            40,
+        }}
+      >
       <div>
         <h1
           style={{
@@ -1241,83 +1530,761 @@ export default function NewDisasterInspectionPage() {
           className="card"
           style={{ marginTop: 20 }}
         >
-          <h2 style={{ marginTop: 0 }}>佐證照片</h2>
-          <div className="muted">
-            下一步會接照片上傳，並依交通局原表排成第 1 頁 2 張、第 2 頁 4 張。
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 12,
+              flexWrap: 'wrap',
+            }}
+          >
+            <div>
+              <h2 style={{ marginTop: 0, marginBottom: 6 }}>
+                佐證照片
+              </h2>
+              <div className="muted">
+                最多 6 張；輸出固定第 1 頁 2 張、第 2 頁 4 張。
+              </div>
+            </div>
+
+            <label
+              className="btn"
+              style={{ cursor: 'pointer' }}
+            >
+              ＋ 選擇照片
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={selectPhotos}
+                disabled={selectedPhotos.length >= 6}
+                style={{ display: 'none' }}
+              />
+            </label>
           </div>
+
+          {selectedPhotos.length === 0 ? (
+            <div
+              style={{
+                marginTop: 16,
+                padding: 24,
+                border: '1px dashed #cbd5e1',
+                borderRadius: 8,
+                textAlign: 'center',
+                color: '#64748b',
+              }}
+            >
+              尚未選擇佐證照片
+            </div>
+          ) : (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns:
+                  'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: 12,
+                marginTop: 16,
+              }}
+            >
+              {selectedPhotos.map((file, index) => (
+                <div
+                  key={`${file.name}-${file.lastModified}-${index}`}
+                  style={{
+                    border: '1px solid #cbd5e1',
+                    borderRadius: 8,
+                    padding: 8,
+                  }}
+                >
+                  <img
+                    src={URL.createObjectURL(file)}
+                    alt={`佐證照片 ${index + 1}`}
+                    style={{
+                      width: '100%',
+                      height: 180,
+                      objectFit: 'cover',
+                    }}
+                  />
+                  <div
+                    style={{
+                      marginTop: 6,
+                      fontSize: 13,
+                    }}
+                  >
+                    照片 {index + 1}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      removeSelectedPhoto(index)
+                    }
+                    style={{ marginTop: 6 }}
+                  >
+                    移除
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="card" style={{ marginTop: 20 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 12,
+              flexWrap: 'wrap',
+            }}
+          >
             <div>
-              <h2 style={{ marginTop: 0, marginBottom: 6 }}>表單預覽</h2>
-              <div className="muted">預覽版型依交通局原始自主檢查表排列。</div>
+              <h2
+                style={{
+                  marginTop: 0,
+                  marginBottom: 6,
+                }}
+              >
+                表單預覽
+              </h2>
+
+              <div className="muted">
+                預覽版型依交通局原始自主檢查表排列，照片會同步顯示。
+              </div>
             </div>
-            <button type="button" className="btn" onClick={() => setShowPreview(!showPreview)}>
-              {showPreview ? '關閉預覽' : '預覽交通局表單'}
-            </button>
+
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                flexWrap: 'wrap',
+              }}
+            >
+              <button
+                type="button"
+                className="btn"
+                onClick={() =>
+                  setShowPreview(
+                    !showPreview
+                  )
+                }
+              >
+                {showPreview
+                  ? '關閉預覽'
+                  : '預覽交通局表單'}
+              </button>
+
+              {showPreview && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={
+                    exportPdf
+                  }
+                  disabled={
+                    exportingPdf
+                  }
+                >
+                  {exportingPdf
+                    ? 'PDF 產生中…'
+                    : '匯出 PDF'}
+                </button>
+              )}
+            </div>
           </div>
 
           {showPreview && (
-            <div style={{ marginTop: 18, background: '#e5e7eb', padding: 18, overflowX: 'auto' }}>
-              <div style={{ width: 760, margin: '0 auto', background: '#fff', color: '#000', padding: 24, boxSizing: 'border-box', fontFamily: '"Microsoft JhengHei", sans-serif' }}>
-                <div style={{ textAlign: 'center', fontSize: 24, fontWeight: 700, marginBottom: 18 }}>
+            <div
+              id="disaster-new-preview"
+              style={{
+                marginTop: 18,
+                background: '#e5e7eb',
+                padding: 18,
+                overflowX: 'auto',
+              }}
+            >
+              {/* 第 1 頁 */}
+              <div
+                className="disaster-preview-page"
+                style={{
+                  width: '210mm',
+                  minHeight: '297mm',
+                  margin: '0 auto 24px',
+                  background: '#fff',
+                  color: '#000',
+                  padding: 18,
+                  boxSizing: 'border-box',
+                  fontFamily:
+                    '"DFKai-SB", "BiauKai", "Microsoft JhengHei", sans-serif',
+                }}
+              >
+                <div
+                  style={{
+                    textAlign: 'center',
+                    fontSize: 23,
+                    fontWeight: 700,
+                    marginBottom: 16,
+                  }}
+                >
                   新北市政府交通局颱風前（或豪、大雨）整備工作自主檢查表
                 </div>
-                <div style={{ fontSize: 20, marginBottom: 12 }}>
-                  停車場名稱：{selectedParkingLot?.name || '________________'}
+
+                <div
+                  style={{
+                    fontSize: 19,
+                    marginBottom: 10,
+                  }}
+                >
+                  停車場名稱：
+                  {selectedParkingLot?.name ||
+                    '________________'}
                 </div>
-                <div style={{ fontSize: 20, marginBottom: 16 }}>
-                  停車場型式：{lotType === '立體' ? '☑' : '□'}立體　{lotType === '機械' ? '☑' : '□'}機械　{lotType === '平面' ? '☑' : '□'}平面
+
+                <div
+                  style={{
+                    fontSize: 19,
+                    marginBottom: 14,
+                  }}
+                >
+                  停車場型式：
+                  {lotType === '立體'
+                    ? '☑'
+                    : '□'}立體　　
+                  {lotType === '機械'
+                    ? '☑'
+                    : '□'}機械　　
+                  {lotType === '平面'
+                    ? '☑'
+                    : '□'}平面
                 </div>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 16 }}>
+
+                <table
+                  style={{
+                    width: '100%',
+                    borderCollapse: 'collapse',
+                    fontSize: 15,
+                  }}
+                >
                   <thead>
                     <tr>
-                      <th rowSpan={2} style={{ border: '1px solid #000', padding: 8, width: 90 }}>工作事項</th>
-                      <th rowSpan={2} style={{ border: '1px solid #000', padding: 8 }}>檢查項目</th>
-                      <th colSpan={2} style={{ border: '1px solid #000', padding: 8, width: 130 }}>檢查結果</th>
-                      <th rowSpan={2} style={{ border: '1px solid #000', padding: 8, width: 120 }}>備註</th>
+                      <th
+                        rowSpan={2}
+                        style={{
+                          border: '1px solid #000',
+                          padding: 7,
+                          width: 86,
+                        }}
+                      >
+                        工作事項
+                      </th>
+
+                      <th
+                        rowSpan={2}
+                        style={{
+                          border: '1px solid #000',
+                          padding: 7,
+                        }}
+                      >
+                        檢查項目
+                      </th>
+
+                      <th
+                        colSpan={2}
+                        style={{
+                          border: '1px solid #000',
+                          padding: 7,
+                          width: 125,
+                        }}
+                      >
+                        檢查結果
+                      </th>
+
+                      <th
+                        rowSpan={2}
+                        style={{
+                          border: '1px solid #000',
+                          padding: 7,
+                          width: 115,
+                        }}
+                      >
+                        備註
+                      </th>
                     </tr>
+
                     <tr>
-                      <th style={{ border: '1px solid #000', padding: 8 }}>是</th>
-                      <th style={{ border: '1px solid #000', padding: 8 }}>否</th>
+                      <th
+                        style={{
+                          border: '1px solid #000',
+                          padding: 7,
+                        }}
+                      >
+                        是
+                      </th>
+
+                      <th
+                        style={{
+                          border: '1px solid #000',
+                          padding: 7,
+                        }}
+                      >
+                        否
+                      </th>
                     </tr>
                   </thead>
+
                   <tbody>
-                    {items.map((item, index) => {
-                      const previousCategory = index > 0 ? items[index - 1].category : null
-                      const isCategoryStart = previousCategory !== item.category
-                      const rowSpan = items.filter((x) => x.category === item.category).length
-                      return (
-                        <tr key={item.item_code}>
-                          {isCategoryStart && (
-                            <td rowSpan={rowSpan} style={{ border: '1px solid #000', padding: 8, textAlign: 'center', verticalAlign: 'middle' }}>{item.category}</td>
+                    {items.map(
+                      (
+                        item,
+                        index
+                      ) => {
+                        const previousCategory =
+                          index > 0
+                            ? items[index - 1].category
+                            : null
+
+                        const isCategoryStart =
+                          previousCategory !==
+                          item.category
+
+                        const rowSpan =
+                          items.filter(
+                            (x) =>
+                              x.category ===
+                              item.category
+                          ).length
+
+                        return (
+                          <tr
+                            key={
+                              item.item_code
+                            }
+                          >
+                            {isCategoryStart && (
+                              <td
+                                rowSpan={rowSpan}
+                                style={{
+                                  border: '1px solid #000',
+                                  padding: 7,
+                                  textAlign: 'center',
+                                  verticalAlign: 'middle',
+                                }}
+                              >
+                                {item.category}
+                              </td>
+                            )}
+
+                            <td
+                              style={{
+                                border: '1px solid #000',
+                                padding: 7,
+                              }}
+                            >
+                              {item.item_name}
+                            </td>
+
+                            <td
+                              style={{
+                                border: '1px solid #000',
+                                padding: 7,
+                                textAlign: 'center',
+                                fontSize: 18,
+                              }}
+                            >
+                              {item.result === 'yes'
+                                ? 'V'
+                                : ''}
+                            </td>
+
+                            <td
+                              style={{
+                                border: '1px solid #000',
+                                padding: 7,
+                                textAlign: 'center',
+                                fontSize: 18,
+                              }}
+                            >
+                              {item.result === 'no'
+                                ? 'V'
+                                : ''}
+                            </td>
+
+                            <td
+                              style={{
+                                border: '1px solid #000',
+                                padding: 7,
+                                textAlign: 'center',
+                              }}
+                            >
+                              {item.item_note}
+                            </td>
+                          </tr>
+                        )
+                      }
+                    )}
+
+                    <tr>
+                      <td
+                        colSpan={5}
+                        style={{
+                          border: '1px solid #000',
+                          padding: 16,
+                          textAlign: 'center',
+                          fontSize: 19,
+                        }}
+                      >
+                        佐證照片
+                      </td>
+                    </tr>
+
+                    <tr>
+                      <td
+                        colSpan={5}
+                        style={{
+                          border: '1px solid #000',
+                          padding: 0,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: '1fr 1fr',
+                            height: 285,
+                          }}
+                        >
+                          {[0, 1].map(
+                            (
+                              photoIndex
+                            ) => (
+                              <div
+                                key={photoIndex}
+                                style={{
+                                  borderRight:
+                                    photoIndex === 0
+                                      ? '1px solid #000'
+                                      : undefined,
+                                  padding: 8,
+                                  boxSizing: 'border-box',
+                                  overflow: 'hidden',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  background: '#fff',
+                                }}
+                              >
+                                {selectedPhotos[
+                                  photoIndex
+                                ] ? (
+                                  <img
+                                    src={URL.createObjectURL(
+                                      selectedPhotos[
+                                        photoIndex
+                                      ]
+                                    )}
+                                    alt={`佐證照片 ${photoIndex + 1}`}
+                                    style={{
+                                      width: '100%',
+                                      height: '100%',
+                                      objectFit: 'cover',
+                                      display: 'block',
+                                    }}
+                                  />
+                                ) : null}
+                              </div>
+                            )
                           )}
-                          <td style={{ border: '1px solid #000', padding: 8 }}>{item.item_name}</td>
-                          <td style={{ border: '1px solid #000', padding: 8, textAlign: 'center', fontSize: 18 }}>{item.result === 'yes' ? 'V' : ''}</td>
-                          <td style={{ border: '1px solid #000', padding: 8, textAlign: 'center', fontSize: 18 }}>{item.result === 'no' ? 'V' : ''}</td>
-                          <td style={{ border: '1px solid #000', padding: 8, textAlign: 'center' }}>{item.item_note}</td>
-                        </tr>
-                      )
-                    })}
-                    <tr><td colSpan={5} style={{ border: '1px solid #000', padding: 18, textAlign: 'center', fontSize: 20 }}>佐證照片</td></tr>
-                    <tr><td colSpan={5} style={{ border: '1px solid #000', height: 250, textAlign: 'center', color: '#64748b' }}>第 1 頁佐證照片預覽區</td></tr>
+                        </div>
+                      </td>
+                    </tr>
                   </tbody>
                 </table>
-                <div style={{ marginTop: 24, border: '1px solid #000', padding: 12, fontSize: 16, lineHeight: 1.9 }}>
-                  <div>經營廠商：{operatorName || '________________'}</div>
-                  <div>檢查人員：{inspectorName || '________________'}</div>
-                  <div>檢查日期：{inspectionDate || '________________'}</div>
-                  <div>停車場電話：{parkingLotPhone || '________________'}</div>
-                  <div>緊急連絡人1：{emergencyContact1 || '________________'}{emergencyPhone1 ? `　電話：${emergencyPhone1}` : ''}</div>
-                  <div>緊急連絡人2：{emergencyContact2 || '________________'}{emergencyPhone2 ? `　電話：${emergencyPhone2}` : ''}</div>
-                  <div>交通局承辦人員覆核：{reviewer || ''}</div>
+              </div>
+
+              {/* 第 2 頁 */}
+              <div
+                className="disaster-preview-page"
+                style={{
+                  width: '210mm',
+                  minHeight: '297mm',
+                  margin: '0 auto',
+                  background: '#fff',
+                  color: '#000',
+                  padding: 18,
+                  boxSizing: 'border-box',
+                  fontFamily:
+                    '"DFKai-SB", "BiauKai", "Microsoft JhengHei", sans-serif',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gridTemplateRows: '1fr 1fr',
+                    height: 610,
+                    border: '1px solid #000',
+                  }}
+                >
+                  {[2, 3, 4, 5].map(
+                    (
+                      photoIndex
+                    ) => (
+                      <div
+                        key={photoIndex}
+                        style={{
+                          borderRight:
+                            photoIndex % 2 === 0
+                              ? '1px solid #000'
+                              : undefined,
+                          borderBottom:
+                            photoIndex < 4
+                              ? '1px solid #000'
+                              : undefined,
+                          padding: 8,
+                          boxSizing: 'border-box',
+                          overflow: 'hidden',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          background: '#fff',
+                        }}
+                      >
+                        {selectedPhotos[
+                          photoIndex
+                        ] ? (
+                          <img
+                            src={URL.createObjectURL(
+                              selectedPhotos[
+                                photoIndex
+                              ]
+                            )}
+                            alt={`佐證照片 ${photoIndex + 1}`}
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              objectFit: 'cover',
+                              display: 'block',
+                            }}
+                          />
+                        ) : null}
+                      </div>
+                    )
+                  )}
                 </div>
-                <div style={{ marginTop: 14, fontSize: 14, lineHeight: 1.8 }}>
-                  <div>備註：</div>
-                  <div>一、經營業者應確實檢查及測試場內各項設施設備，並填寫公司名稱與檢查人員，該表視為公文書，偽造者自負責任。</div>
-                  <div>二、請經營廠商將本表傳回本局各停車場承辦人員，或傳真至2970-1120（並註明承辦人員）。</div>
-                  <div>三、一座停車場填報一張自主檢查表，請勿多場合併填寫。</div>
+
+                <table
+                  style={{
+                    width: '100%',
+                    borderCollapse: 'collapse',
+                    fontSize: 15,
+                  }}
+                >
+                  <tbody>
+                    <tr>
+                      <td
+                        style={{
+                          border: '1px solid #000',
+                          padding: '6px 10px',
+                          width: '56%',
+                          verticalAlign: 'top',
+                          lineHeight: 1.9,
+                        }}
+                      >
+                        <div>
+                          經營廠商：
+                          {operatorName || ''}
+                        </div>
+
+                        <div>
+                          檢查人員：
+                          {inspectorName || ''}
+                        </div>
+                      </td>
+
+                      <td
+                        style={{
+                          border: '1px solid #000',
+                          padding: '6px 10px',
+                          width: '44%',
+                          verticalAlign: 'middle',
+                          lineHeight: 1.9,
+                        }}
+                      >
+                        檢查日期：
+                        {rocDateText(inspectionDate)}
+                      </td>
+                    </tr>
+
+                    <tr>
+                      <td
+                        colSpan={2}
+                        style={{
+                          border: '1px solid #000',
+                          padding: 0,
+                        }}
+                      >
+                        <table
+                          style={{
+                            width: '100%',
+                            borderCollapse: 'collapse',
+                            tableLayout: 'fixed',
+                            fontSize: 15,
+                          }}
+                        >
+                          <colgroup>
+                            <col
+                              style={{
+                                width: 145,
+                              }}
+                            />
+                            <col />
+                          </colgroup>
+
+                          <tbody>
+                            <tr>
+                              <td
+                                style={{
+                                  border: 0,
+                                  padding: 0,
+                                  verticalAlign: 'top',
+                                  background: '#fff59d',
+                                  color: '#ef4444',
+                                  fontWeight: 700,
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    height: 31,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    padding: '0 8px',
+                                    boxSizing: 'border-box',
+                                  }}
+                                >
+                                  停車場電話：
+                                </div>
+
+                                <div
+                                  style={{
+                                    height: 31,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    padding: '0 8px',
+                                    boxSizing: 'border-box',
+                                  }}
+                                >
+                                  緊急連絡人1：
+                                </div>
+
+                                <div
+                                  style={{
+                                    height: 31,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    padding: '0 8px',
+                                    boxSizing: 'border-box',
+                                  }}
+                                >
+                                  緊急連絡人2：
+                                </div>
+                              </td>
+
+                              <td
+                                style={{
+                                  border: 0,
+                                  borderLeft: '1px solid #000',
+                                  padding: 0,
+                                  verticalAlign: 'top',
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    height: 31,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    padding: '0 10px',
+                                    boxSizing: 'border-box',
+                                  }}
+                                >
+                                  {parkingLotPhone || ''}
+                                </div>
+
+                                <div
+                                  style={{
+                                    height: 31,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    padding: '0 10px',
+                                    boxSizing: 'border-box',
+                                  }}
+                                >
+                                  {emergencyContact1 || ''}
+                                  {emergencyPhone1
+                                    ? `　電話：${emergencyPhone1}`
+                                    : ''}
+                                </div>
+
+                                <div
+                                  style={{
+                                    height: 31,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    padding: '0 10px',
+                                    boxSizing: 'border-box',
+                                  }}
+                                >
+                                  {emergencyContact2 || ''}
+                                  {emergencyPhone2
+                                    ? `　電話：${emergencyPhone2}`
+                                    : ''}
+                                </div>
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+
+                    <tr>
+                      <td
+                        colSpan={2}
+                        style={{
+                          border: '1px solid #000',
+                          padding: '6px 10px',
+                          height: 42,
+                          verticalAlign: 'middle',
+                          lineHeight: 1.7,
+                        }}
+                      >
+                        交通局承辦人員覆核：
+                        {reviewer || ''}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                <div
+                  style={{
+                    fontSize: 13,
+                    lineHeight: 1.8,
+                    marginTop: 8,
+                  }}
+                >
+                  <div>
+                    備註：
+                  </div>
+
+                  <div>
+                    一、經營業者應確實檢查及測試場內各項設施設備，並填寫公司名稱與檢查人員，該表視為公文書，偽造者自負責任。
+                  </div>
+
+                  <div>
+                    二、請經營廠商將本表傳回本局各停車場承辦人員，或傳真至2970-1120（並註明承辦人員）。
+                  </div>
+
+                  <div>
+                    三、一座停車場填報一張自主檢查表，請勿多場合併填寫。
+                  </div>
                 </div>
               </div>
             </div>
@@ -1382,5 +2349,6 @@ export default function NewDisasterInspectionPage() {
         </div>
       </form>
     </div>
+    </>
   )
 }

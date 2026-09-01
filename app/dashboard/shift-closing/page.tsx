@@ -1,12 +1,13 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
+
 import { createClient } from '@/lib/supabase/server'
+import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
 
 export default async function ShiftClosingPage({
   searchParams,
 }: {
   searchParams?: Promise<{
-    lot?: string
     date?: string
     remittance?: string
   }>
@@ -15,30 +16,20 @@ export default async function ShiftClosingPage({
     await createClient()
 
   const {
-    data: { user },
-  } =
-    await supabase.auth.getUser()
-
-  if (!user) {
-    redirect('/login')
-  }
-
-  const {
-    data: profile,
+    data: {
+      user,
+    },
   } =
     await supabase
-      .from('profiles')
-      .select(
-        'id, role, is_active'
-      )
-      .eq('id', user.id)
-      .maybeSingle()
+      .auth
+      .getUser()
 
   if (
-    !profile ||
-    !profile.is_active
+    !user
   ) {
-    redirect('/login')
+    redirect(
+      '/login'
+    )
   }
 
   const params =
@@ -46,30 +37,38 @@ export default async function ShiftClosingPage({
       ? await searchParams
       : {}
 
-  const lot =
-    params.lot || ''
+  const workLotId =
+    await getCurrentWorkParkingLotId()
 
   const date =
-    params.date || ''
+    params.date ||
+    ''
 
   const remittance =
-    params.remittance || ''
+    params.remittance ||
+    ''
 
   const {
-    data: parkingLots,
+    data:
+      currentLot,
   } =
-    await supabase
-      .from(
-        'parking_lots'
-      )
-      .select(
-        'id, name'
-      )
-      .eq(
-        'status',
-        'active'
-      )
-      .order('name')
+    workLotId
+      ? await supabase
+          .from(
+            'parking_lots'
+          )
+          .select(
+            'id, name'
+          )
+          .eq(
+            'id',
+            workLotId
+          )
+          .maybeSingle()
+      : {
+          data:
+            null,
+        }
 
   let query =
     supabase
@@ -80,13 +79,8 @@ export default async function ShiftClosingPage({
         id,
         parking_lot_id,
         closing_date,
-        shift_start_at,
-        shift_end_at,
         closing_status,
-        amount_due,
         amount_paid,
-        cash_actual,
-        daily_cash_total,
         remittance_total,
         remittance_status,
         remitted_at,
@@ -99,25 +93,30 @@ export default async function ShiftClosingPage({
       .order(
         'closing_date',
         {
-          ascending: false,
-        }
-      )
-      .order(
-        'shift_end_at',
-        {
-          ascending: false,
+          ascending:
+            false,
         }
       )
 
-  if (lot) {
+  if (
+    workLotId
+  ) {
     query =
       query.eq(
         'parking_lot_id',
-        lot
+        workLotId
+      )
+  } else {
+    query =
+      query.eq(
+        'parking_lot_id',
+        '__no_work_lot_selected__'
       )
   }
 
-  if (date) {
+  if (
+    date
+  ) {
     query =
       query.eq(
         'closing_date',
@@ -125,7 +124,9 @@ export default async function ShiftClosingPage({
       )
   }
 
-  if (remittance) {
+  if (
+    remittance
+  ) {
     query =
       query.eq(
         'remittance_status',
@@ -134,7 +135,8 @@ export default async function ShiftClosingPage({
   }
 
   const {
-    data: reports,
+    data:
+      reports,
     error,
   } =
     await query
@@ -143,96 +145,88 @@ export default async function ShiftClosingPage({
     <div>
       <div
         style={{
-          display: 'flex',
+          display:
+            'flex',
           justifyContent:
             'space-between',
-          gap: 16,
-          flexWrap: 'wrap',
+          gap:
+            12,
+          flexWrap:
+            'wrap',
         }}
       >
         <div>
-          <h1
-            style={{
-              marginBottom: 6,
-            }}
-          >
+          <h1>
             當日結班報表
           </h1>
 
-          <p
+          <div
             className="muted"
-            style={{
-              marginTop: 0,
-            }}
           >
-            結班資料會保留歷史；完成匯款後可開始新的匯款週期。
-          </p>
+            目前工作停車場：
+            {currentLot?.name ||
+              '尚未選擇'}
+          </div>
         </div>
 
         <Link
-          href="/dashboard/shift-closing/new"
+          href={
+            workLotId
+              ? '/dashboard/shift-closing/new'
+              : '/dashboard/shift-closing'
+          }
           className="btn"
           style={{
             textDecoration:
               'none',
+            pointerEvents:
+              workLotId
+                ? 'auto'
+                : 'none',
+            opacity:
+              workLotId
+                ? 1
+                : 0.5,
           }}
         >
           ＋新增當日結班
         </Link>
       </div>
 
+      {!workLotId && (
+        <div
+          className="card"
+          style={{
+            marginTop:
+              20,
+            color:
+              '#b45309',
+            fontWeight:
+              700,
+          }}
+        >
+          請先在左側選擇目前工作停車場。
+        </div>
+      )}
+
       <div
         className="card"
         style={{
-          marginTop: 20,
+          marginTop:
+            20,
         }}
       >
         <form
           method="GET"
           style={{
-            display: 'grid',
+            display:
+              'grid',
             gridTemplateColumns:
-              'minmax(200px,1fr) minmax(150px,.7fr) minmax(140px,.7fr) auto',
-            gap: 12,
-            alignItems:
-              'end',
+              'repeat(auto-fit,minmax(180px,1fr))',
+            gap:
+              12,
           }}
         >
-          <div className="field">
-            <label>
-              停車場
-            </label>
-
-            <select
-              name="lot"
-              defaultValue={
-                lot
-              }
-            >
-              <option value="">
-                全部停車場
-              </option>
-
-              {(parkingLots ||
-                []).map(
-                (
-                  item: any
-                ) => (
-                  <option
-                    key={
-                      item.id
-                    }
-                    value={
-                      item.id
-                    }
-                  >
-                    {item.name}
-                  </option>
-                )
-              )}
-            </select>
-          </div>
-
           <div className="field">
             <label>
               結班日期
@@ -274,30 +268,23 @@ export default async function ShiftClosingPage({
 
           <div
             style={{
-              display: 'flex',
-              gap: 8,
+              display:
+                'flex',
+              gap:
+                8,
+              alignItems:
+                'end',
             }}
           >
             <button
-              className="btn"
               type="submit"
+              className="btn"
             >
               查詢
             </button>
 
             <Link
               href="/dashboard/shift-closing"
-              style={{
-                padding:
-                  '9px 14px',
-                border:
-                  '1px solid #cbd5e1',
-                borderRadius: 8,
-                textDecoration:
-                  'none',
-                color:
-                  '#475569',
-              }}
             >
               清除
             </Link>
@@ -309,12 +296,13 @@ export default async function ShiftClosingPage({
         <div
           className="card"
           style={{
-            marginTop: 20,
+            marginTop:
+              20,
             color:
               '#dc2626',
           }}
         >
-          結班報表讀取失敗：
+          結班資料讀取失敗：
           {error.message}
         </div>
       )}
@@ -322,260 +310,163 @@ export default async function ShiftClosingPage({
       <div
         className="card"
         style={{
-          marginTop: 20,
+          marginTop:
+            20,
+          overflowX:
+            'auto',
         }}
       >
-        <div
+        <h2>
+          結班紀錄
+        </h2>
+
+        <table
+          className="table"
           style={{
-            display: 'flex',
-            justifyContent:
-              'space-between',
-            alignItems:
-              'center',
+            minWidth:
+              900,
           }}
         >
-          <h2
-            style={{
-              margin: 0,
-            }}
-          >
-            結班紀錄
-          </h2>
+          <thead>
+            <tr>
+              <th>
+                停車場
+              </th>
 
-          <span className="muted">
-            共{' '}
+              <th>
+                結班日期
+              </th>
+
+              <th>
+                結班狀態
+              </th>
+
+              <th>
+                匯款狀態
+              </th>
+
+              <th>
+                實收
+              </th>
+
+              <th>
+                匯款總金額
+              </th>
+
+              <th>
+                值班人員
+              </th>
+
+              <th>
+                操作
+              </th>
+            </tr>
+          </thead>
+
+          <tbody>
             {(reports ||
-              []).length}{' '}
-            筆
-          </span>
-        </div>
+              []).map(
+              (
+                item: any
+              ) => {
+                const lot =
+                  Array.isArray(
+                    item.parking_lots
+                  )
+                    ? item
+                        .parking_lots[0] ||
+                      null
+                    : item.parking_lots ||
+                      null
 
-        {!error &&
-          (!reports ||
-            reports.length ===
-              0) && (
-            <div
-              style={{
-                padding: 30,
-                textAlign:
-                  'center',
-                color:
-                  '#64748b',
-              }}
-            >
-              目前沒有符合條件的結班紀錄。
-            </div>
-          )}
-
-        {!error &&
-          reports &&
-          reports.length >
-            0 && (
-            <div
-              style={{
-                overflowX:
-                  'auto',
-                marginTop: 16,
-              }}
-            >
-              <table
-                style={{
-                  width: '100%',
-                  minWidth: 1120,
-                  borderCollapse:
-                    'collapse',
-                }}
-              >
-                <thead>
-                  <tr>
-                    <th>
-                      停車場
-                    </th>
-                    <th>
-                      結班日期
-                    </th>
-                    <th>
-                      狀態
-                    </th>
-                    <th>
-                      匯款狀態
-                    </th>
-                    <th>
-                      實收
-                    </th>
-                    <th>
-                      匯款總金額
-                    </th>
-                    <th>
-                      匯款完成時間
-                    </th>
-                    <th>
-                      值班人員
-                    </th>
-                    <th>
-                      操作
-                    </th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {reports.map(
-                    (
-                      item: any
-                    ) => {
-                      const lotInfo =
-                        Array.isArray(
-                          item.parking_lots
-                        )
-                          ? item
-                              .parking_lots[0] ||
-                            null
-                          : item.parking_lots ||
-                            null
-
-                      return (
-                        <tr
-                          key={
-                            item.id
-                          }
-                          style={{
-                            borderTop:
-                              '1px solid #e5e7eb',
-                          }}
-                        >
-                          <td
-                            style={{
-                              padding: 8,
-                            }}
-                          >
-                            {lotInfo?.name ||
-                              '-'}
-                          </td>
-
-                          <td
-                            style={{
-                              padding: 8,
-                            }}
-                          >
-                            {item.closing_date ||
-                              '-'}
-                          </td>
-
-                          <td
-                            style={{
-                              padding: 8,
-                              fontWeight:
-                                700,
-                              color:
-                                item.closing_status ===
-                                'abnormal'
-                                  ? '#dc2626'
-                                  : '#15803d',
-                            }}
-                          >
-                            {item.closing_status ===
-                            'abnormal'
-                              ? '異常'
-                              : '正常'}
-                          </td>
-
-                          <td
-                            style={{
-                              padding: 8,
-                              fontWeight:
-                                700,
-                              color:
-                                item.remittance_status ===
-                                'remitted'
-                                  ? '#15803d'
-                                  : '#b45309',
-                            }}
-                          >
-                            {item.remittance_status ===
-                            'remitted'
-                              ? '已匯款'
-                              : '累積中'}
-                          </td>
-
-                          <td
-                            style={{
-                              padding: 8,
-                            }}
-                          >
-                            $
-                            {Number(
-                              item.amount_paid ||
-                                0
-                            ).toLocaleString()}
-                          </td>
-
-                          <td
-                            style={{
-                              padding: 8,
-                              fontWeight:
-                                700,
-                            }}
-                          >
-                            $
-                            {Number(
-                              item.remittance_total ||
-                                0
-                            ).toLocaleString()}
-                          </td>
-
-                          <td
-                            style={{
-                              padding: 8,
-                              whiteSpace:
-                                'nowrap',
-                            }}
-                          >
-                            {item.remitted_at
-                              ? new Date(
-                                  item.remitted_at
-                                ).toLocaleString(
-                                  'zh-TW'
-                                )
-                              : '-'}
-                          </td>
-
-                          <td
-                            style={{
-                              padding: 8,
-                            }}
-                          >
-                            {item.operator_name ||
-                              '-'}
-                          </td>
-
-                          <td
-                            style={{
-                              padding: 8,
-                            }}
-                          >
-                            <Link
-                              href={`/dashboard/shift-closing/${item.id}/edit`}
-                              style={{
-                                textDecoration:
-                                  'none',
-                                fontWeight:
-                                  700,
-                              }}
-                            >
-                              {item.remittance_status ===
-                              'remitted'
-                                ? '查看'
-                                : '編輯'}
-                            </Link>
-                          </td>
-                        </tr>
-                      )
+                return (
+                  <tr
+                    key={
+                      item.id
                     }
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  >
+                    <td>
+                      {lot?.name ||
+                        '-'}
+                    </td>
+
+                    <td>
+                      {
+                        item.closing_date
+                      }
+                    </td>
+
+                    <td>
+                      {item.closing_status ===
+                      'abnormal'
+                        ? '異常'
+                        : '正常'}
+                    </td>
+
+                    <td>
+                      {item.remittance_status ===
+                      'remitted'
+                        ? '已匯款'
+                        : '累積中'}
+                    </td>
+
+                    <td>
+                      NT${' '}
+                      {Number(
+                        item.amount_paid ||
+                          0
+                      ).toLocaleString()}
+                    </td>
+
+                    <td>
+                      NT${' '}
+                      {Number(
+                        item.remittance_total ||
+                          0
+                      ).toLocaleString()}
+                    </td>
+
+                    <td>
+                      {item.operator_name ||
+                        '-'}
+                    </td>
+
+                    <td>
+                      <Link
+                        href={`/dashboard/shift-closing/${item.id}/edit`}
+                      >
+                        {item.remittance_status ===
+                        'remitted'
+                          ? '查看'
+                          : '編輯'}
+                      </Link>
+                    </td>
+                  </tr>
+                )
+              }
+            )}
+
+            {(!reports ||
+              reports.length ===
+                0) && (
+              <tr>
+                <td
+                  colSpan={
+                    8
+                  }
+                  style={{
+                    textAlign:
+                      'center',
+                    padding:
+                      25,
+                  }}
+                >
+                  目前沒有結班紀錄
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   )

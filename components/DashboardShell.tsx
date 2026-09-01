@@ -1,36 +1,177 @@
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import LogoutButton from '@/components/LogoutButton'
+import WorkParkingLotSelector from '@/components/WorkParkingLotSelector'
 
 export default async function DashboardShell({
   children,
 }: {
   children: React.ReactNode
 }) {
-  const supabase = await createClient()
+  const supabase =
+    await createClient()
 
   const {
     data: { user },
     error: userError,
-  } = await supabase.auth.getUser()
+  } =
+    await supabase.auth.getUser()
 
   const {
     data: profile,
     error: profileError,
-  } = user
-    ? await supabase
-        .from('profiles')
-        .select('id, display_name, role, is_active')
-        .eq('id', user.id)
-        .maybeSingle()
-    : { data: null, error: null }
+  } =
+    user
+      ? await supabase
+          .from(
+            'profiles'
+          )
+          .select(
+            'id, display_name, role, is_active'
+          )
+          .eq(
+            'id',
+            user.id
+          )
+          .maybeSingle()
+      : {
+          data: null,
+          error: null,
+        }
 
   const roleText =
-    profile?.role === 'supervisor'
+    profile?.role ===
+    'supervisor'
       ? '主管'
-      : profile?.role === 'manager'
+      : profile?.role ===
+          'manager'
         ? '場站管理員'
         : '角色讀取失敗'
+
+  let workParkingLots: {
+    id: string
+    name: string
+  }[] = []
+
+  if (
+    user &&
+    profile?.is_active
+  ) {
+    if (
+      profile.role ===
+      'supervisor'
+    ) {
+      const {
+        data:
+          lotData,
+      } =
+        await supabase
+          .from(
+            'parking_lots'
+          )
+          .select(
+            'id, name'
+          )
+          .eq(
+            'status',
+            'active'
+          )
+          .order(
+            'name'
+          )
+
+      workParkingLots =
+        (
+          lotData ||
+          []
+        ).map(
+          (
+            item: any
+          ) => ({
+            id:
+              item.id,
+            name:
+              item.name,
+          })
+        )
+    } else if (
+      profile.role ===
+      'manager'
+    ) {
+      const {
+        data:
+          assignmentData,
+      } =
+        await supabase
+          .from(
+            'user_parking_lots'
+          )
+          .select(`
+            parking_lots (
+              id,
+              name,
+              status
+            )
+          `)
+          .eq(
+            'user_id',
+            user.id
+          )
+
+      workParkingLots =
+        (
+          assignmentData ||
+          []
+        )
+          .map(
+            (
+              item: any
+            ) => {
+              const lot =
+                Array.isArray(
+                  item.parking_lots
+                )
+                  ? item
+                      .parking_lots[0] ||
+                    null
+                  : item.parking_lots ||
+                    null
+
+              if (
+                !lot ||
+                lot.status !==
+                  'active'
+              ) {
+                return null
+              }
+
+              return {
+                id:
+                  lot.id,
+                name:
+                  lot.name,
+              }
+            }
+          )
+          .filter(
+            Boolean
+          ) as {
+          id: string
+          name: string
+        }[]
+
+      workParkingLots.sort(
+        (
+          a,
+          b
+        ) =>
+          a.name.localeCompare(
+            b.name,
+            'zh-TW'
+          )
+      )
+    }
+  }
 
   return (
     <div className="shell">
@@ -41,8 +182,10 @@ export default async function DashboardShell({
 
         <div
           style={{
-            display: 'flex',
-            alignItems: 'center',
+            display:
+              'flex',
+            alignItems:
+              'center',
           }}
         >
           <span>
@@ -61,30 +204,47 @@ export default async function DashboardShell({
         !profile) && (
         <div
           style={{
-            background: '#fff3cd',
-            padding: '12px 20px',
-            color: '#664d03',
+            background:
+              '#fff3cd',
+            padding:
+              '12px 20px',
+            color:
+              '#664d03',
           }}
         >
-          <strong>系統檢查：</strong>
+          <strong>
+            系統檢查：
+          </strong>
           <br />
+
           使用者：
-          {user ? '已登入' : '讀取失敗'}
+          {user
+            ? '已登入'
+            : '讀取失敗'}
           <br />
+
           Profile：
-          {profile ? '讀取成功' : '讀取失敗'}
+          {profile
+            ? '讀取成功'
+            : '讀取失敗'}
           <br />
 
           {userError && (
             <>
-              登入錯誤：{userError.message}
+              登入錯誤：
+              {
+                userError.message
+              }
               <br />
             </>
           )}
 
           {profileError && (
             <>
-              Profile 錯誤：{profileError.message}
+              Profile 錯誤：
+              {
+                profileError.message
+              }
               <br />
             </>
           )}
@@ -93,6 +253,12 @@ export default async function DashboardShell({
 
       <div className="layout">
         <aside className="sidebar">
+          <WorkParkingLotSelector
+            parkingLots={
+              workParkingLots
+            }
+          />
+
           <Link href="/dashboard">
             首頁
           </Link>
@@ -101,14 +267,18 @@ export default async function DashboardShell({
             停車場管理
           </Link>
 
-          {profile?.role === 'supervisor' && (
+          {profile?.role ===
+            'supervisor' && (
             <Link href="/dashboard/settings">
               系統設定
             </Link>
           )}
 
           <div
-            style={{ marginTop: 20 }}
+            style={{
+              marginTop:
+                20,
+            }}
             className="muted"
           >
             現場作業

@@ -326,18 +326,19 @@ export default function DisasterInspectionEditor({
       }
 
       const normalizedInspection: Inspection = {
-        ...(inspectionData as any),
-        parking_lots:
-          Array.isArray(
-            (inspectionData as any).parking_lots
-          )
-            ? (inspectionData as any).parking_lots[0] || null
-            : (inspectionData as any).parking_lots || null,
-      }
+  ...inspectionData,
 
-      setInspection(
-        normalizedInspection
-      )
+  parking_lots:
+    Array.isArray(
+      inspectionData.parking_lots
+    )
+      ? inspectionData.parking_lots[0] ?? null
+      : inspectionData.parking_lots ?? null,
+}
+
+setInspection(
+  normalizedInspection
+)
 
       setItems(
         (

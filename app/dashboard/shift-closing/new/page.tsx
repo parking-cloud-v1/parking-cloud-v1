@@ -1,12 +1,14 @@
 import { redirect } from 'next/navigation'
+
 import { createClient } from '@/lib/supabase/server'
+import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
+
 import ShiftClosingForm from '@/components/ShiftClosingForm'
 
 export default async function NewShiftClosingPage({
   searchParams,
 }: {
   searchParams?: Promise<{
-    lot?: string
     reset?: string
   }>
 }) {
@@ -14,30 +16,20 @@ export default async function NewShiftClosingPage({
     await createClient()
 
   const {
-    data: { user },
-  } =
-    await supabase.auth.getUser()
-
-  if (!user) {
-    redirect('/login')
-  }
-
-  const {
-    data: profile,
+    data: {
+      user,
+    },
   } =
     await supabase
-      .from('profiles')
-      .select(
-        'id, is_active'
-      )
-      .eq('id', user.id)
-      .maybeSingle()
+      .auth
+      .getUser()
 
   if (
-    !profile ||
-    !profile.is_active
+    !user
   ) {
-    redirect('/login')
+    redirect(
+      '/login'
+    )
   }
 
   const params =
@@ -45,11 +37,20 @@ export default async function NewShiftClosingPage({
       ? await searchParams
       : {}
 
-  const defaultLotId =
-    params.lot || ''
+  const workLotId =
+    await getCurrentWorkParkingLotId()
+
+  if (
+    !workLotId
+  ) {
+    redirect(
+      '/dashboard/shift-closing'
+    )
+  }
 
   const {
-    data: parkingLots,
+    data:
+      parkingLots,
   } =
     await supabase
       .from(
@@ -59,57 +60,52 @@ export default async function NewShiftClosingPage({
         'id, name'
       )
       .eq(
+        'id',
+        workLotId
+      )
+      .eq(
         'status',
         'active'
       )
-      .order('name')
 
   const options =
     (
       parkingLots ||
       []
     ).map(
-      (item: any) => ({
-        id: item.id,
-        name: item.name,
+      (
+        item: any
+      ) => ({
+        id:
+          item.id,
+        name:
+          item.name,
       })
     )
 
   return (
     <div>
-      <h1
-        style={{
-          marginBottom: 6,
-        }}
-      >
+      <h1>
         新增當日結班
       </h1>
 
       <p
         className="muted"
-        style={{
-          marginTop: 0,
-        }}
       >
-        {params.reset === '1'
+        {params.reset ===
+        '1'
           ? '上一輪匯款已完成，現在開始新的結班／匯款週期。'
-          : '填寫本班結班資料與當日結班明細。'}
+          : '填寫目前工作停車場的結班資料。'}
       </p>
 
-      <div
-        style={{
-          marginTop: 20,
-        }}
-      >
-        <ShiftClosingForm
-          parkingLots={
-            options
-          }
-          defaultParkingLotId={
-            defaultLotId
-          }
-        />
-      </div>
+      <ShiftClosingForm
+        parkingLots={
+          options
+        }
+        defaultParkingLotId={
+          workLotId
+        }
+      />
     </div>
   )
 }
