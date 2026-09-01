@@ -6,24 +6,14 @@ import {
   useState,
 } from 'react'
 
+import {
+  getSavedWorkParkingLotId,
+  saveWorkParkingLotId,
+} from '@/components/useWorkParkingLot'
+
 type ParkingLotOption = {
   id: string
   name: string
-}
-
-const STORAGE_KEY =
-  'current-work-parking-lot-id'
-
-const COOKIE_KEY =
-  'current_work_parking_lot_id'
-
-function setWorkLotCookie(
-  parkingLotId: string
-) {
-  document.cookie =
-    `${COOKIE_KEY}=${encodeURIComponent(
-      parkingLotId
-    )}; path=/; max-age=31536000; samesite=lax`
 }
 
 export default function WorkParkingLotSelector({
@@ -34,13 +24,16 @@ export default function WorkParkingLotSelector({
   const [
     selectedId,
     setSelectedId,
-  ] = useState('')
+  ] =
+    useState('')
 
   const selectedLot =
     useMemo(
       () =>
         parkingLots.find(
-          (lot) =>
+          (
+            lot
+          ) =>
             lot.id ===
             selectedId
         ),
@@ -55,9 +48,21 @@ export default function WorkParkingLotSelector({
       parkingLots.length ===
       0
     ) {
+      setSelectedId(
+        ''
+      )
+
+      saveWorkParkingLotId(
+        ''
+      )
+
       return
     }
 
+    /*
+     * 只有一個場站：
+     * 自動固定。
+     */
     if (
       parkingLots.length ===
       1
@@ -65,60 +70,62 @@ export default function WorkParkingLotSelector({
       const onlyId =
         parkingLots[0].id
 
-      window.localStorage.setItem(
-        STORAGE_KEY,
-        onlyId
-      )
-
-      window.localStorage.setItem(
-        'monthly-rentals-current-lot',
-        onlyId
-      )
-
-      setWorkLotCookie(
-        onlyId
-      )
-
       setSelectedId(
+        onlyId
+      )
+
+      saveWorkParkingLotId(
         onlyId
       )
 
       return
     }
 
+    /*
+     * 讀取之前已經選過的工作停車場。
+     */
     const savedId =
-      window.localStorage.getItem(
-        STORAGE_KEY
-      ) ||
-      window.localStorage.getItem(
-        'monthly-rentals-current-lot'
-      )
+      getSavedWorkParkingLotId()
 
-    const validSaved =
+    const valid =
       savedId &&
       parkingLots.some(
-        (lot) =>
+        (
+          lot
+        ) =>
           lot.id ===
           savedId
       )
 
     if (
-      validSaved &&
+      valid &&
       savedId
     ) {
       setSelectedId(
         savedId
       )
 
-      setWorkLotCookie(
+      /*
+       * 重新同步一次
+       * localStorage + cookie。
+       */
+      saveWorkParkingLotId(
         savedId
       )
 
       return
     }
 
-    setSelectedId('')
-  }, [parkingLots])
+    /*
+     * 多場管理第一次登入時，
+     * 不自動亂選。
+     */
+    setSelectedId(
+      ''
+    )
+  }, [
+    parkingLots,
+  ])
 
   function changeLot(
     parkingLotId: string
@@ -127,35 +134,15 @@ export default function WorkParkingLotSelector({
       parkingLotId
     )
 
-    if (!parkingLotId) {
-      window.localStorage.removeItem(
-        STORAGE_KEY
-      )
-
-      window.localStorage.removeItem(
-        'monthly-rentals-current-lot'
-      )
-
-      document.cookie =
-        `${COOKIE_KEY}=; path=/; max-age=0; samesite=lax`
-
-      return
-    }
-
-    window.localStorage.setItem(
-      STORAGE_KEY,
+    saveWorkParkingLotId(
       parkingLotId
     )
 
-    window.localStorage.setItem(
-      'monthly-rentals-current-lot',
-      parkingLotId
-    )
-
-    setWorkLotCookie(
-      parkingLotId
-    )
-
+    /*
+     * 很重要：
+     * reload 後 Server Component
+     * 才會立即讀到最新 cookie。
+     */
     window.location.reload()
   }
 
@@ -226,7 +213,8 @@ export default function WorkParkingLotSelector({
               event
             ) =>
               changeLot(
-                event.target
+                event
+                  .target
                   .value
               )
             }
@@ -250,7 +238,9 @@ export default function WorkParkingLotSelector({
             </option>
 
             {parkingLots.map(
-              (lot) => (
+              (
+                lot
+              ) => (
                 <option
                   key={
                     lot.id
@@ -278,7 +268,7 @@ export default function WorkParkingLotSelector({
                   12,
               }}
             >
-              現場作業將以此場站為準
+              現場作業將固定使用此停車場
             </div>
           )}
         </>
