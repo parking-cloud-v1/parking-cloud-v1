@@ -1,24 +1,68 @@
 'use client'
 
 import {
-  FormEvent,
   useEffect,
   useMemo,
   useState,
 } from 'react'
 
 import { createClient } from '@/lib/supabase/client'
-import { getSavedWorkParkingLotId } from '@/components/useWorkParkingLot'
+
+type UserRole =
+  | 'supervisor'
+  | 'accountant'
 
 type ParkingLot = {
   id: string
   name: string
 }
 
-type BillingMode =
-  | 'hour'
-  | 'half_hour'
-  | 'actual'
+type AttendanceRow = {
+  id: string
+  parking_lot_id: string
+  attendance_month: string
+  storage_path: string
+  file_name: string
+  uploaded_at: string
+}
+
+type RentalRow = {
+  id: string
+  parking_lot_id: string
+  customer_code: string | null
+  customer_name: string | null
+  phone: string | null
+  vehicle_plate: string | null
+  vehicle_type: string | null
+  rental_type: string | null
+  start_date: string | null
+  end_date: string | null
+  monthly_fee: number | null
+  payment_status: string | null
+  payment_date: string | null
+  invoice_number: string | null
+  rental_status: string | null
+  notes: string | null
+  updated_at: string | null
+}
+
+type ChangeRow = {
+  id: string
+  parking_lot_id: string
+  monthly_rental_id: string | null
+  customer_code: string | null
+  customer_name: string | null
+  phone: string | null
+  vehicle_plate: string | null
+  vehicle_type: string | null
+  rental_type: string | null
+  change_type: string
+  effective_date: string | null
+  reason: string | null
+  change_detail: string | null
+  source: string | null
+  created_at: string
+}
 
 type TaxiRecord = {
   id: string
@@ -26,64 +70,259 @@ type TaxiRecord = {
   vehicle_plate: string
   entry_time: string
   exit_time: string
-  hourly_rate: number
-  billing_mode: BillingMode
-  cap_hours: number
-  cap_amount: number
-  original_amount: number
   discount_amount: number
-  final_amount: number
   used_free_discount: boolean
   discount_date: string | null
   is_holiday: boolean
-  notes: string | null
-  created_at: string
 }
 
-type Result = {
-  originalAmount: number
-  discountAmount: number
-  finalAmount: number
-  usedFreeDiscount: boolean
-  discountDate: string | null
-  reason: string
+type TaxiOfficialRow = {
+  dailyIndex: number
+  date: string
+  plate: string
+  entry: string
+  exit: string
+  discount: number
+  holiday: string
 }
 
-function pad(
-  value: number
-) {
-  return String(
-    value
+const TAXI_SELECTED_STORAGE =
+  'accounting-taxi-report-selected-lots'
+
+function currentMonthText() {
+  const now =
+    new Date()
+
+  return `${now.getFullYear()}-${String(
+    now.getMonth() + 1
   ).padStart(
     2,
     '0'
-  )
+  )}`
 }
 
-function localInput(
-  date: Date
+function previousMonthText() {
+  const now =
+    new Date()
+
+  const date =
+    new Date(
+      now.getFullYear(),
+      now.getMonth() - 1,
+      1
+    )
+
+  return `${date.getFullYear()}-${String(
+    date.getMonth() + 1
+  ).padStart(
+    2,
+    '0'
+  )}`
+}
+
+function monthStart(
+  month: string
+) {
+  return `${month}-01`
+}
+
+function nextMonthStart(
+  month: string
+) {
+  const [
+    year,
+    monthValue,
+  ] =
+    month
+      .split('-')
+      .map(Number)
+
+  const date =
+    new Date(
+      year,
+      monthValue,
+      1
+    )
+
+  return `${date.getFullYear()}-${String(
+    date.getMonth() + 1
+  ).padStart(
+    2,
+    '0'
+  )}-01`
+}
+
+function safeFileName(
+  value: string
+) {
+  return String(
+    value || ''
+  )
+    .replace(
+      /[\\/:*?"<>|]/g,
+      '_'
+    )
+    .replace(
+      /\s+/g,
+      '_'
+    )
+    .trim()
+}
+
+function safeSheetName(
+  value: string,
+  fallback: string
 ) {
   return (
-    `${date.getFullYear()}-` +
-    `${pad(
-      date.getMonth() +
-        1
-    )}-` +
-    `${pad(
-      date.getDate()
-    )}T` +
-    `${pad(
-      date.getHours()
-    )}:` +
-    `${pad(
-      date.getMinutes()
-    )}`
+    String(
+      value ||
+        fallback
+    )
+      .replace(
+        /[\\/*?:[\]]/g,
+        '_'
+      )
+      .slice(
+        0,
+        31
+      ) ||
+    fallback
   )
 }
 
-function dateKey(
-  date: Date
+function vehicleTypeText(
+  value?: string | null
 ) {
+  if (
+    value === 'car' ||
+    value === '汽車'
+  ) {
+    return '汽車'
+  }
+
+  if (
+    value === 'motorcycle' ||
+    value === '機車'
+  ) {
+    return '機車'
+  }
+
+  if (
+    value === 'heavy_motorcycle' ||
+    value === '重機'
+  ) {
+    return '重機'
+  }
+
+  return value || ''
+}
+
+function paymentStatusText(
+  value?: string | null
+) {
+  if (
+    value === 'paid'
+  ) {
+    return '已繳'
+  }
+
+  if (
+    value === 'unpaid'
+  ) {
+    return '未繳'
+  }
+
+  return value || ''
+}
+
+function rentalStatusText(
+  value?: string | null
+) {
+  if (
+    value === 'active'
+  ) {
+    return '有效'
+  }
+
+  if (
+    value === 'cancelled'
+  ) {
+    return '已退租'
+  }
+
+  if (
+    value === 'inactive'
+  ) {
+    return '停用'
+  }
+
+  return value || ''
+}
+
+function changeTypeText(
+  value: string
+) {
+  if (
+    value === 'joined'
+  ) {
+    return '新增'
+  }
+
+  if (
+    value === 'cancelled'
+  ) {
+    return '退租'
+  }
+
+  return value
+}
+
+function saveBlob(
+  blob: Blob,
+  fileName: string
+) {
+  const url =
+    URL.createObjectURL(
+      blob
+    )
+
+  const link =
+    document.createElement(
+      'a'
+    )
+
+  link.href =
+    url
+
+  link.download =
+    fileName
+
+  document.body.appendChild(
+    link
+  )
+
+  link.click()
+
+  document.body.removeChild(
+    link
+  )
+
+  setTimeout(
+    () => {
+      URL.revokeObjectURL(
+        url
+      )
+    },
+    1500
+  )
+}
+
+function taipeiParts(
+  value: string
+) {
+  const date =
+    new Date(value)
+
   const parts =
     new Intl.DateTimeFormat(
       'en-CA',
@@ -96,6 +335,12 @@ function dateKey(
           '2-digit',
         day:
           '2-digit',
+        hour:
+          '2-digit',
+        minute:
+          '2-digit',
+        hour12:
+          false,
       }
     ).formatToParts(
       date
@@ -113,296 +358,494 @@ function dateKey(
       )
     )
 
-  return `${map.year}-${map.month}-${map.day}`
+  return {
+    date:
+      `${map.year}/${map.month}/${map.day}`,
+
+    dateKey:
+      `${map.year}-${map.month}-${map.day}`,
+
+    time:
+      `${map.hour}:${map.minute}`,
+  }
 }
 
-function taipeiAt(
-  key: string,
-  hour: number
+function buildTaxiOfficialRows(
+  rows: TaxiRecord[]
 ) {
-  return new Date(
-    `${key}T${pad(
-      hour
-    )}:00:00+08:00`
-  )
-}
-
-function normalizePlate(
-  value: string
-) {
-  return value
-    .trim()
-    .replace(
-      /\s/g,
-      ''
-    )
-    .toUpperCase()
-}
-
-function money(
-  value: number
-) {
-  return Number(
-    value ||
-      0
-  ).toLocaleString(
-    'zh-TW',
-    {
-      maximumFractionDigits:
-        0,
-    }
-  )
-}
-
-function chargeMinutes(
-  minutes: number,
-  hourlyRate: number,
-  billingMode: BillingMode
-) {
-  if (
-    minutes <=
-    0
-  ) {
-    return 0
-  }
-
-  if (
-    billingMode ===
-    'actual'
-  ) {
-    return (
-      hourlyRate *
-      minutes /
-      60
-    )
-  }
-
-  if (
-    billingMode ===
-    'hour'
-  ) {
-    return (
-      Math.ceil(
-        minutes /
-          60
-      ) *
-      hourlyRate
-    )
-  }
-
-  return (
-    Math.ceil(
-      minutes /
-        30
-    ) *
-    hourlyRate /
-    2
-  )
-}
-
-function calculateWithCap(
-  entry: Date,
-  exit: Date,
-  rate: number,
-  mode: BillingMode,
-  capHours: number,
-  capAmount: number
-) {
-  const totalMinutes =
-    Math.max(
-      0,
-      Math.ceil(
-        (
-          exit.getTime() -
-          entry.getTime()
-        ) /
-          60000
-      )
+  const sorted =
+    [...rows].sort(
+      (
+        a,
+        b
+      ) =>
+        new Date(
+          a.entry_time
+        ).getTime() -
+        new Date(
+          b.entry_time
+        ).getTime()
     )
 
-  if (
-    totalMinutes ===
-    0
-  ) {
-    return 0
-  }
+  const dailyCounters =
+    new Map<
+      string,
+      number
+    >()
 
-  const blockMinutes =
-    Math.max(
-      1,
-      capHours *
-        60
-    )
-
-  let remaining =
-    totalMinutes
-
-  let total =
-    0
-
-  while (
-    remaining >
-    0
-  ) {
-    const minutes =
-      Math.min(
-        remaining,
-        blockMinutes
-      )
-
-    const raw =
-      chargeMinutes(
-        minutes,
-        rate,
-        mode
-      )
-
-    total +=
-      capAmount >
-      0
-        ? Math.min(
-            raw,
-            capAmount
-          )
-        : raw
-
-    remaining -=
-      minutes
-  }
-
-  return Math.round(
-    total
-  )
-}
-
-function overlapMinutes(
-  startA: Date,
-  endA: Date,
-  startB: Date,
-  endB: Date
-) {
-  const start =
-    Math.max(
-      startA.getTime(),
-      startB.getTime()
-    )
-
-  const end =
-    Math.min(
-      endA.getTime(),
-      endB.getTime()
-    )
-
-  if (
-    end <=
-    start
-  ) {
-    return 0
-  }
-
-  return Math.ceil(
+  return sorted.map(
     (
-      end -
-      start
-    ) /
-      60000
+      row
+    ): TaxiOfficialRow => {
+      const entry =
+        taipeiParts(
+          row.entry_time
+        )
+
+      const exit =
+        taipeiParts(
+          row.exit_time
+        )
+
+      const nextIndex =
+        (
+          dailyCounters.get(
+            entry.dateKey
+          ) ||
+          0
+        ) + 1
+
+      dailyCounters.set(
+        entry.dateKey,
+        nextIndex
+      )
+
+      return {
+        dailyIndex:
+          nextIndex,
+
+        date:
+          entry.date,
+
+        plate:
+          row.vehicle_plate ||
+          '',
+
+        entry:
+          entry.time,
+
+        exit:
+          exit.time,
+
+        discount:
+          Number(
+            row.discount_amount ||
+            0
+          ),
+
+        holiday:
+          row.is_holiday
+            ? '是'
+            : '否',
+      }
+    }
   )
 }
 
-function sessionDates(
-  entry: Date,
-  exit: Date
+function createTaxiReportElement(
+  lotName: string,
+  month: string,
+  rows: TaxiOfficialRow[]
 ) {
-  const start =
-    taipeiAt(
-      dateKey(
-        entry
-      ),
-      0
+  const wrapper =
+    document.createElement(
+      'div'
     )
 
-  const end =
-    taipeiAt(
-      dateKey(
-        exit
-      ),
-      0
+  wrapper.style.position =
+    'fixed'
+
+  wrapper.style.left =
+    '-99999px'
+
+  wrapper.style.top =
+    '0'
+
+  wrapper.style.width =
+    '1120px'
+
+  wrapper.style.padding =
+    '20px'
+
+  wrapper.style.background =
+    '#ffffff'
+
+  wrapper.style.color =
+    '#000000'
+
+  wrapper.style.fontFamily =
+    '"Microsoft JhengHei", Arial, sans-serif'
+
+  const table =
+    document.createElement(
+      'table'
     )
 
-  const result:
-    string[] =
-    []
+  table.style.width =
+    '100%'
 
-  let current =
-    start
+  table.style.borderCollapse =
+    'collapse'
 
-  while (
-    current.getTime() <=
-    end.getTime()
-  ) {
-    result.push(
-      dateKey(
-        current
+  table.style.tableLayout =
+    'fixed'
+
+  const makeCell = (
+    text: string,
+    tag:
+      | 'th'
+      | 'td' =
+      'td'
+  ) => {
+    const cell =
+      document.createElement(
+        tag
       )
-    )
 
-    current =
-      new Date(
-        current.getTime() +
-          86400000
-      )
+    cell.textContent =
+      text
+
+    cell.style.border =
+      '2px solid #000'
+
+    cell.style.padding =
+      '6px'
+
+    cell.style.height =
+      '32px'
+
+    cell.style.textAlign =
+      'center'
+
+    cell.style.fontSize =
+      '14px'
+
+    return cell
   }
 
-  return result
-}
-
-function displayDate(
-  value: string
-) {
-  return new Intl.DateTimeFormat(
-    'zh-TW',
-    {
-      timeZone:
-        'Asia/Taipei',
-      year:
-        'numeric',
-      month:
-        '2-digit',
-      day:
-        '2-digit',
-    }
-  ).format(
-    new Date(
-      value
+  const titleRow =
+    document.createElement(
+      'tr'
     )
-  )
-}
 
-function displayTime(
-  value: string
-) {
-  return new Intl.DateTimeFormat(
-    'zh-TW',
-    {
-      timeZone:
-        'Asia/Taipei',
-      hour:
-        '2-digit',
-      minute:
-        '2-digit',
-      hour12:
-        false,
-    }
-  ).format(
-    new Date(
-      value
+  const titleCell =
+    makeCell(
+      `新北市政府交通局計程車免費停車統計表（${lotName}）`,
+      'th'
     )
+
+  titleCell.colSpan =
+    7
+
+  titleCell.style.height =
+    '58px'
+
+  titleCell.style.fontSize =
+    '24px'
+
+  titleCell.style.fontWeight =
+    '700'
+
+  titleRow.appendChild(
+    titleCell
   )
+
+  table.appendChild(
+    titleRow
+  )
+
+  const monthRow =
+    document.createElement(
+      'tr'
+    )
+
+  const monthCell =
+    makeCell(
+      `統計月份：${month}`,
+      'th'
+    )
+
+  monthCell.colSpan =
+    7
+
+  monthCell.style.textAlign =
+    'left'
+
+  monthCell.style.paddingLeft =
+    '12px'
+
+  monthRow.appendChild(
+    monthCell
+  )
+
+  table.appendChild(
+    monthRow
+  )
+
+  const header =
+    document.createElement(
+      'tr'
+    )
+
+  ;[
+    '每日項次',
+    '日期',
+    '車牌',
+    '進場時間',
+    '離場時間',
+    '銷單金額',
+    '是否假日',
+  ].forEach(
+    (
+      label
+    ) => {
+      const cell =
+        makeCell(
+          label,
+          'th'
+        )
+
+      cell.style.fontWeight =
+        '700'
+
+      header.appendChild(
+        cell
+      )
+    }
+  )
+
+  table.appendChild(
+    header
+  )
+
+  rows.forEach(
+    (
+      row
+    ) => {
+      const tr =
+        document.createElement(
+          'tr'
+        )
+
+      ;[
+        String(
+          row.dailyIndex
+        ),
+        row.date,
+        row.plate,
+        row.entry,
+        row.exit,
+        String(
+          row.discount
+        ),
+        row.holiday,
+      ].forEach(
+        (
+          value
+        ) => {
+          tr.appendChild(
+            makeCell(
+              value
+            )
+          )
+        }
+      )
+
+      table.appendChild(
+        tr
+      )
+    }
+  )
+
+  /*
+   * 正式表預留空白列。
+   */
+  const minimumRows =
+    32
+
+  for (
+    let i =
+      rows.length;
+    i <
+    minimumRows;
+    i++
+  ) {
+    const tr =
+      document.createElement(
+        'tr'
+      )
+
+    for (
+      let c = 0;
+      c < 7;
+      c++
+    ) {
+      tr.appendChild(
+        makeCell(
+          c === 0
+            ? '\u00a0'
+            : ''
+        )
+      )
+    }
+
+    table.appendChild(
+      tr
+    )
+  }
+
+  wrapper.appendChild(
+    table
+  )
+
+  document.body.appendChild(
+    wrapper
+  )
+
+  return wrapper
 }
 
-export default function TaxiDiscountPage() {
+async function generateTaxiPdfBlob(
+  lotName: string,
+  month: string,
+  rows: TaxiOfficialRow[]
+) {
+  const html2canvas =
+    (
+      await import(
+        'html2canvas'
+      )
+    ).default
+
+  const {
+    jsPDF,
+  } =
+    await import(
+      'jspdf'
+    )
+
+  const element =
+    createTaxiReportElement(
+      lotName,
+      month,
+      rows
+    )
+
+  try {
+    const canvas =
+      await html2canvas(
+        element,
+        {
+          scale:
+            2,
+          backgroundColor:
+            '#ffffff',
+          useCORS:
+            true,
+        }
+      )
+
+    const pdf =
+      new jsPDF({
+        orientation:
+          'landscape',
+        unit:
+          'mm',
+        format:
+          'a4',
+      })
+
+    const image =
+      canvas.toDataURL(
+        'image/jpeg',
+        0.95
+      )
+
+    const pageWidth =
+      297
+
+    const pageHeight =
+      210
+
+    const ratio =
+      Math.min(
+        281 /
+          canvas.width,
+        194 /
+          canvas.height
+      )
+
+    const width =
+      canvas.width *
+      ratio
+
+    const height =
+      canvas.height *
+      ratio
+
+    pdf.addImage(
+      image,
+      'JPEG',
+      (
+        pageWidth -
+        width
+      ) /
+        2,
+      8,
+      width,
+      height
+    )
+
+    return pdf.output(
+      'blob'
+    )
+  } finally {
+    document.body.removeChild(
+      element
+    )
+  }
+}
+
+export default function AccountingReportCenterPage() {
   const supabase =
     createClient()
+
+  const db =
+    supabase as any
+
+  const [
+    role,
+    setRole,
+  ] =
+    useState<
+      UserRole | null
+    >(null)
+
+  const [
+    month,
+    setMonth,
+  ] =
+    useState(
+      currentMonthText()
+    )
+
+  const [
+    taxiMonth,
+    setTaxiMonth,
+  ] =
+    useState(
+      previousMonthText()
+    )
 
   const [
     parkingLots,
@@ -413,101 +856,84 @@ export default function TaxiDiscountPage() {
     >([])
 
   const [
-    selectedLotId,
-    setSelectedLotId,
+    attendanceRows,
+    setAttendanceRows,
   ] =
-    useState('')
+    useState<
+      AttendanceRow[]
+    >([])
 
   const [
-    vehiclePlate,
-    setVehiclePlate,
+    changes,
+    setChanges,
   ] =
-    useState('')
+    useState<
+      ChangeRow[]
+    >([])
 
   const [
-    entryTime,
-    setEntryTime,
+    taxiSelectedLots,
+    setTaxiSelectedLots,
   ] =
-    useState(
-      localInput(
-        new Date()
-      )
-    )
+    useState<
+      string[]
+    >([])
 
   const [
-    exitTime,
-    setExitTime,
-  ] =
-    useState(
-      localInput(
-        new Date(
-          Date.now() +
-            3600000
-        )
-      )
-    )
-
-  const [
-    hourlyRate,
-    setHourlyRate,
+    loading,
+    setLoading,
   ] =
     useState(
-      '30'
+      true
     )
 
   const [
-    billingMode,
-    setBillingMode,
-  ] =
-    useState<BillingMode>(
-      'half_hour'
-    )
-
-  const [
-    capHours,
-    setCapHours,
-  ] =
-    useState(
-      '4'
-    )
-
-  const [
-    capAmount,
-    setCapAmount,
-  ] =
-    useState(
-      '100'
-    )
-
-  const [
-    isHoliday,
-    setIsHoliday,
+    accessDenied,
+    setAccessDenied,
   ] =
     useState(
       false
     )
 
   const [
-    notes,
-    setNotes,
+    attendanceDownloading,
+    setAttendanceDownloading,
   ] =
-    useState('')
+    useState(
+      false
+    )
 
   const [
-    result,
-    setResult,
+    rentalDownloading,
+    setRentalDownloading,
   ] =
-    useState<
-      Result | null
-    >(null)
+    useState(
+      false
+    )
 
   const [
-    records,
-    setRecords,
+    changeDownloading,
+    setChangeDownloading,
   ] =
-    useState<
-      TaxiRecord[]
-    >([])
+    useState(
+      false
+    )
+
+  const [
+    taxiDownloading,
+    setTaxiDownloading,
+  ] =
+    useState(
+      false
+    )
+
+  const [
+    taxiSharing,
+    setTaxiSharing,
+  ] =
+    useState(
+      false
+    )
 
   const [
     message,
@@ -515,451 +941,95 @@ export default function TaxiDiscountPage() {
   ] =
     useState('')
 
-  const [
-    saving,
-    setSaving,
-  ] =
-    useState(false)
+  useEffect(
+    () => {
+      loadInitial()
+    },
+    []
+  )
 
-  const [
-    filterMonth,
-    setFilterMonth,
-  ] =
-    useState(
-      new Date()
-        .toISOString()
-        .slice(
-          0,
-          7
-        )
-    )
-
-  useEffect(() => {
-    loadParkingLots()
-  }, [])
-
-  useEffect(() => {
-    if (
-      selectedLotId
-    ) {
-      loadRecords()
-    } else {
-      setRecords([])
-    }
-  }, [
-    selectedLotId,
-    filterMonth,
-  ])
-
-  async function loadParkingLots() {
-    setMessage('')
-
-    const {
-      data,
-      error,
-    } =
-      await supabase
-        .from(
-          'parking_lots'
-        )
-        .select(
-          'id, name'
-        )
-        .eq(
-          'status',
-          'active'
-        )
-        .order(
-          'name'
-        )
-
-    if (
-      error
-    ) {
-      setMessage(
-        '停車場讀取失敗：' +
-          error.message
-      )
-
-      return
-    }
-
-    const lots =
-      (
-        data ||
-        []
-      ) as ParkingLot[]
-
-    setParkingLots(
-      lots
-    )
-
-    const workLotId =
-      getSavedWorkParkingLotId()
-
-    if (
-      workLotId &&
-      lots.some(
-        (
-          lot
-        ) =>
-          lot.id ===
-          workLotId
-      )
-    ) {
-      setSelectedLotId(
-        workLotId
-      )
-    } else {
-      setMessage(
-        '請先在左側「目前工作停車場」選擇停車場。'
-      )
-    }
-  }
-
-  async function loadRecords() {
-    const start =
-      `${filterMonth}-01T00:00:00+08:00`
-
-    const next =
-      new Date(
-        `${filterMonth}-01T00:00:00+08:00`
-      )
-
-    next.setMonth(
-      next.getMonth() +
-        1
-    )
-
-    const {
-      data,
-      error,
-    } =
-      await supabase
-        .from(
-          'taxi_discount_records'
-        )
-        .select(
-          '*'
-        )
-        .eq(
-          'parking_lot_id',
-          selectedLotId
-        )
-        .gte(
-          'entry_time',
-          start
-        )
-        .lt(
-          'entry_time',
-          next.toISOString()
-        )
-        .order(
-          'entry_time',
-          {
-            ascending:
-              false,
-          }
-        )
-
-    if (
-      error
-    ) {
-      setMessage(
-        '報表讀取失敗：' +
-          error.message
-      )
-
-      return
-    }
-
-    setRecords(
-      (
-        data ||
-        []
-      ) as TaxiRecord[]
-    )
-  }
-
-  async function calculate() {
-    setMessage('')
-    setResult(null)
-
-    if (
-      !selectedLotId
-    ) {
-      setMessage(
-        '請先選擇目前工作停車場'
-      )
-      return
-    }
-
-    const plate =
-      normalizePlate(
-        vehiclePlate
-      )
-
-    if (
-      !plate
-    ) {
-      setMessage(
-        '請輸入車牌'
-      )
-      return
-    }
-
-    const entry =
-      new Date(
-        entryTime
-      )
-
-    const exit =
-      new Date(
-        exitTime
-      )
-
-    if (
-      Number.isNaN(
-        entry.getTime()
-      ) ||
-      Number.isNaN(
-        exit.getTime()
-      ) ||
-      exit <= entry
-    ) {
-      setMessage(
-        '進出場時間不正確'
-      )
-      return
-    }
-
-    const rate =
-      Number(
-        hourlyRate
-      )
-
-    const capH =
-      Number(
-        capHours
-      )
-
-    const cap =
-      Number(
-        capAmount
-      )
-
-    const original =
-      calculateWithCap(
-        entry,
-        exit,
-        rate,
-        billingMode,
-        capH,
-        cap
-      )
-
-    let eligibleDate:
-      string | null =
-      null
-
-    let freeMinutes =
-      0
-
-    for (
-      const key of
-      sessionDates(
-        entry,
-        exit
-      )
-    ) {
-      const freeStart =
-        taipeiAt(
-          key,
-          11
-        )
-
-      const freeEnd =
-        taipeiAt(
-          key,
-          13
-        )
-
-      const minutes =
-        overlapMinutes(
-          entry,
-          exit,
-          freeStart,
-          freeEnd
-        )
-
+  useEffect(
+    () => {
       if (
-        minutes <=
-        0
+        !loading &&
+        !accessDenied
       ) {
-        continue
+        loadMonthData()
       }
+    },
+    [
+      month,
+    ]
+  )
 
-      const {
-        data:
-          usedRecords,
-        error,
-      } =
-        await supabase
-          .from(
-            'taxi_discount_records'
-          )
-          .select(
-            'id'
-          )
-          .eq(
-            'parking_lot_id',
-            selectedLotId
-          )
-          .eq(
-            'vehicle_plate',
-            plate
-          )
-          .eq(
-            'discount_date',
-            key
-          )
-          .eq(
-            'used_free_discount',
-            true
-          )
-          .limit(
-            1
-          )
-
+  useEffect(
+    () => {
       if (
-        error
+        typeof window ===
+        'undefined'
       ) {
-        setMessage(
-          error.message
-        )
         return
       }
 
+      const saved =
+        window.localStorage.getItem(
+          TAXI_SELECTED_STORAGE
+        )
+
       if (
-        !usedRecords ||
-        usedRecords.length ===
-          0
+        !saved
       ) {
-        eligibleDate =
-          key
-
-        freeMinutes =
-          minutes
-
-        break
+        return
       }
-    }
 
-    let discount =
-      0
+      try {
+        const parsed =
+          JSON.parse(
+            saved
+          )
 
-    let reason =
-      '本次無 11:00–13:00 免費優惠'
+        if (
+          Array.isArray(
+            parsed
+          )
+        ) {
+          setTaxiSelectedLots(
+            parsed
+          )
+        }
+      } catch {
+        //
+      }
+    },
+    []
+  )
+
+  function saveTaxiSelection(
+    ids: string[]
+  ) {
+    setTaxiSelectedLots(
+      ids
+    )
 
     if (
-      eligibleDate
+      typeof window !==
+      'undefined'
     ) {
-      discount =
-        Math.min(
-          original,
-          chargeMinutes(
-            freeMinutes,
-            rate,
-            billingMode
-          )
-        )
-
-      reason =
-        `${eligibleDate} 可享 11:00–13:00 一次免費優惠`
-    } else {
-      const hasWindow =
-        sessionDates(
-          entry,
-          exit
-        ).some(
-          (
-            key
-          ) =>
-            overlapMinutes(
-              entry,
-              exit,
-              taipeiAt(
-                key,
-                11
-              ),
-              taipeiAt(
-                key,
-                13
-              )
-            ) >
-            0
-        )
-
-      if (
-        hasWindow
-      ) {
-        reason =
-          '該車牌當日優惠已使用，本次依正常費率及最高上限計算'
-      }
-    }
-
-    const final =
-      Math.max(
-        0,
-        Math.round(
-          original -
-            discount
+      window.localStorage.setItem(
+        TAXI_SELECTED_STORAGE,
+        JSON.stringify(
+          ids
         )
       )
-
-    setResult({
-      originalAmount:
-        Math.round(
-          original
-        ),
-      discountAmount:
-        Math.round(
-          discount
-        ),
-      finalAmount:
-        final,
-      usedFreeDiscount:
-        Boolean(
-          eligibleDate
-        ),
-      discountDate:
-        eligibleDate,
-      reason,
-    })
+    }
   }
 
-  async function saveRecord(
-    event:
-      FormEvent
-  ) {
-    event.preventDefault()
-
-    if (
-      !result ||
-      !selectedLotId
-    ) {
-      return
-    }
-
-    setSaving(true)
-    setMessage('')
+  async function loadInitial() {
+    setLoading(
+      true
+    )
 
     try {
-      const plate =
-        normalizePlate(
-          vehiclePlate
-        )
-
       const {
         data: {
           user,
@@ -969,309 +1039,1238 @@ export default function TaxiDiscountPage() {
           .auth
           .getUser()
 
-      const {
-        error,
-      } =
-        await supabase
-          .from(
-            'taxi_discount_records'
-          )
-          .insert({
-            parking_lot_id:
-              selectedLotId,
-
-            vehicle_plate:
-              plate,
-
-            entry_time:
-              new Date(
-                entryTime
-              ).toISOString(),
-
-            exit_time:
-              new Date(
-                exitTime
-              ).toISOString(),
-
-            hourly_rate:
-              Number(
-                hourlyRate
-              ),
-
-            billing_mode:
-              billingMode,
-
-            cap_hours:
-              Number(
-                capHours
-              ),
-
-            cap_amount:
-              Number(
-                capAmount
-              ),
-
-            original_amount:
-              result.originalAmount,
-
-            discount_amount:
-              result.discountAmount,
-
-            final_amount:
-              result.finalAmount,
-
-            used_free_discount:
-              result.usedFreeDiscount,
-
-            discount_date:
-              result.discountDate,
-
-            is_holiday:
-              isHoliday,
-
-            notes:
-              notes.trim() ||
-              null,
-
-            created_by:
-              user?.id ||
-              null,
-          })
-
       if (
-        error
+        !user
       ) {
-        setMessage(
-          '儲存失敗：' +
-            error.message
+        setAccessDenied(
+          true
         )
+
+        setMessage(
+          '登入狀態失效，請重新登入。'
+        )
+
         return
       }
 
+      const {
+        data:
+          profile,
+        error:
+          profileError,
+      } =
+        await db
+          .from(
+            'profiles'
+          )
+          .select(
+            'role, is_active'
+          )
+          .eq(
+            'id',
+            user.id
+          )
+          .maybeSingle()
+
+      if (
+        profileError
+      ) {
+        setAccessDenied(
+          true
+        )
+
+        setMessage(
+          `權限讀取失敗：${profileError.message}`
+        )
+
+        return
+      }
+
+      if (
+        !profile ||
+        !profile.is_active ||
+        (
+          profile.role !==
+            'supervisor' &&
+          profile.role !==
+            'accountant'
+        )
+      ) {
+        setAccessDenied(
+          true
+        )
+
+        setMessage(
+          '此帳號沒有報表中心權限。'
+        )
+
+        return
+      }
+
+      setRole(
+        profile.role
+      )
+
+      const {
+        data:
+          lots,
+        error:
+          lotsError,
+      } =
+        await db
+          .from(
+            'parking_lots'
+          )
+          .select(
+            'id, name'
+          )
+          .eq(
+            'status',
+            'active'
+          )
+          .order(
+            'name'
+          )
+
+      if (
+        lotsError
+      ) {
+        setMessage(
+          `停車場讀取失敗：${lotsError.message}`
+        )
+
+        return
+      }
+
+      setParkingLots(
+        (
+          lots ||
+          []
+        ) as ParkingLot[]
+      )
+
+      await loadMonthData()
+    } catch (
+      error: any
+    ) {
       setMessage(
-        '已加入計程車優惠報表'
+        error?.message ||
+          '報表中心載入失敗'
       )
-
-      setResult(
-        null
-      )
-
-      setVehiclePlate(
-        ''
-      )
-
-      await loadRecords()
     } finally {
-      setSaving(false)
+      setLoading(
+        false
+      )
     }
   }
 
-  async function deleteRecord(
-    item: TaxiRecord
-  ) {
-    if (
-      !window.confirm(
-        `確定刪除 ${item.vehicle_plate} 這筆紀錄？`
+  async function loadMonthData() {
+    const start =
+      monthStart(
+        month
       )
+
+    const next =
+      nextMonthStart(
+        month
+      )
+
+    const {
+      data:
+        attendanceData,
+      error:
+        attendanceError,
+    } =
+      await db
+        .from(
+          'monthly_attendance_sheets'
+        )
+        .select(`
+          id,
+          parking_lot_id,
+          attendance_month,
+          storage_path,
+          file_name,
+          uploaded_at
+        `)
+        .eq(
+          'attendance_month',
+          start
+        )
+        .order(
+          'uploaded_at',
+          {
+            ascending:
+              false,
+          }
+        )
+
+    if (
+      attendanceError
+    ) {
+      setMessage(
+        `簽到表讀取失敗：${attendanceError.message}`
+      )
+
+      return
+    }
+
+    setAttendanceRows(
+      attendanceData ||
+        []
+    )
+
+    const {
+      data:
+        changeData,
+      error:
+        changeError,
+    } =
+      await db
+        .from(
+          'monthly_rental_changes'
+        )
+        .select(`
+          id,
+          parking_lot_id,
+          monthly_rental_id,
+          customer_code,
+          customer_name,
+          phone,
+          vehicle_plate,
+          vehicle_type,
+          rental_type,
+          change_type,
+          effective_date,
+          reason,
+          change_detail,
+          source,
+          created_at
+        `)
+        .in(
+          'change_type',
+          [
+            'joined',
+            'cancelled',
+          ]
+        )
+        .gte(
+          'effective_date',
+          start
+        )
+        .lt(
+          'effective_date',
+          next
+        )
+
+    if (
+      changeError
+    ) {
+      setMessage(
+        `異動資料讀取失敗：${changeError.message}`
+      )
+
+      return
+    }
+
+    setChanges(
+      changeData ||
+        []
+    )
+  }
+
+  const lotNameMap =
+    useMemo(
+      () =>
+        new Map(
+          parkingLots.map(
+            (
+              lot
+            ) => [
+              lot.id,
+              lot.name,
+            ]
+          )
+        ),
+      [
+        parkingLots,
+      ]
+    )
+
+  const attendanceLotCount =
+    new Set(
+      attendanceRows.map(
+        (
+          row
+        ) =>
+          row.parking_lot_id
+      )
+    ).size
+
+  const joinedCount =
+    changes.filter(
+      (
+        row
+      ) =>
+        row.change_type ===
+        'joined'
+    ).length
+
+  const cancelledCount =
+    changes.filter(
+      (
+        row
+      ) =>
+        row.change_type ===
+        'cancelled'
+    ).length
+
+  async function downloadAttendanceZip() {
+    if (
+      !attendanceRows.length ||
+      attendanceDownloading
     ) {
       return
     }
 
+    setAttendanceDownloading(
+      true
+    )
+
+    setMessage(
+      '正在建立簽到表 ZIP…'
+    )
+
+    try {
+      const JSZip =
+        (
+          await import(
+            'jszip'
+          )
+        ).default
+
+      const zip =
+        new JSZip()
+
+      for (
+        const row of
+        attendanceRows
+      ) {
+        const {
+          data:
+            blob,
+          error,
+        } =
+          await supabase
+            .storage
+            .from(
+              'monthly-attendance'
+            )
+            .download(
+              row.storage_path
+            )
+
+        if (
+          error ||
+          !blob
+        ) {
+          throw new Error(
+            `${row.file_name} 下載失敗`
+          )
+        }
+
+        const lotName =
+          safeFileName(
+            lotNameMap.get(
+              row.parking_lot_id
+            ) ||
+              '未知停車場'
+          )
+
+        zip.file(
+          `${lotName}/${safeFileName(
+            row.file_name
+          )}`,
+          blob
+        )
+      }
+
+      const blob =
+        await zip.generateAsync({
+          type:
+            'blob',
+          compression:
+            'DEFLATE',
+          compressionOptions: {
+            level:
+              6,
+          },
+        })
+
+      saveBlob(
+        blob,
+        `${month}_所有停車場_簽到表.zip`
+      )
+
+      setMessage(
+        '簽到表 ZIP 已完成。'
+      )
+    } catch (
+      error: any
+    ) {
+      setMessage(
+        error?.message ||
+          '簽到表下載失敗'
+      )
+    } finally {
+      setAttendanceDownloading(
+        false
+      )
+    }
+  }
+
+  async function downloadLatestMonthlyRentals() {
+    if (
+      rentalDownloading
+    ) {
+      return
+    }
+
+    setRentalDownloading(
+      true
+    )
+
+    try {
+      const {
+        data,
+        error,
+      } =
+        await db
+          .from(
+            'monthly_rentals'
+          )
+          .select(`
+            id,
+            parking_lot_id,
+            customer_code,
+            customer_name,
+            phone,
+            vehicle_plate,
+            vehicle_type,
+            rental_type,
+            start_date,
+            end_date,
+            monthly_fee,
+            payment_status,
+            payment_date,
+            invoice_number,
+            rental_status,
+            notes,
+            updated_at
+          `)
+
+      if (
+        error
+      ) {
+        throw error
+      }
+
+      const rows =
+        (
+          data ||
+          []
+        ).filter(
+          (
+            row: RentalRow
+          ) =>
+            row.rental_status !==
+            'cancelled'
+        )
+
+      const XLSX =
+        await import(
+          'xlsx'
+        )
+
+      const wb =
+        XLSX.utils.book_new()
+
+      const mapRow = (
+        row: RentalRow
+      ) => ({
+        停車場:
+          lotNameMap.get(
+            row.parking_lot_id
+          ) ||
+          '',
+
+        客戶編號:
+          row.customer_code ||
+          '',
+
+        姓名:
+          row.customer_name ||
+          '',
+
+        電話:
+          row.phone ||
+          '',
+
+        車牌:
+          row.vehicle_plate ||
+          '',
+
+        車種:
+          vehicleTypeText(
+            row.vehicle_type
+          ),
+
+        月租類型:
+          row.rental_type ||
+          '',
+
+        起租日:
+          row.start_date ||
+          '',
+
+        到期日:
+          row.end_date ||
+          '',
+
+        月租金額:
+          Number(
+            row.monthly_fee ||
+            0
+          ),
+
+        付款狀態:
+          paymentStatusText(
+            row.payment_status
+          ),
+
+        付款日期:
+          row.payment_date ||
+          '',
+
+        發票號碼:
+          row.invoice_number ||
+          '',
+
+        租用狀態:
+          rentalStatusText(
+            row.rental_status
+          ),
+
+        備註:
+          row.notes ||
+          '',
+      })
+
+      XLSX.utils.book_append_sheet(
+        wb,
+        XLSX.utils.json_to_sheet(
+          rows.map(
+            mapRow
+          )
+        ),
+        '全部月租'
+      )
+
+      const used =
+        new Set<string>([
+          '全部月租',
+        ])
+
+      for (
+        const lot of
+        parkingLots
+      ) {
+        const lotRows =
+          rows
+            .filter(
+              (
+                row: RentalRow
+              ) =>
+                row.parking_lot_id ===
+                lot.id
+            )
+            .map(
+              mapRow
+            )
+
+        if (
+          !lotRows.length
+        ) {
+          continue
+        }
+
+        let name =
+          safeSheetName(
+            lot.name,
+            '停車場'
+          )
+
+        let n =
+          2
+
+        while (
+          used.has(
+            name
+          )
+        ) {
+          name =
+            `${safeSheetName(
+              lot.name,
+              '停車場'
+            ).slice(
+              0,
+              28
+            )}_${n}`
+
+          n++
+        }
+
+        used.add(
+          name
+        )
+
+        XLSX.utils.book_append_sheet(
+          wb,
+          XLSX.utils.json_to_sheet(
+            lotRows
+          ),
+          name
+        )
+      }
+
+      const today =
+        new Date()
+          .toISOString()
+          .slice(
+            0,
+            10
+          )
+
+      XLSX.writeFile(
+        wb,
+        `${today}_所有停車場_最新月租名單.xlsx`
+      )
+
+      setMessage(
+        `最新月租名單已完成，共 ${rows.length} 筆。`
+      )
+    } catch (
+      error: any
+    ) {
+      setMessage(
+        `月租名單下載失敗：${error?.message || '未知錯誤'}`
+      )
+    } finally {
+      setRentalDownloading(
+        false
+      )
+    }
+  }
+
+  async function downloadContractChanges() {
+    if (
+      !changes.length ||
+      changeDownloading
+    ) {
+      return
+    }
+
+    setChangeDownloading(
+      true
+    )
+
+    try {
+      const XLSX =
+        await import(
+          'xlsx'
+        )
+
+      const wb =
+        XLSX.utils.book_new()
+
+      const mapRow = (
+        row: ChangeRow
+      ) => ({
+        異動類型:
+          changeTypeText(
+            row.change_type
+          ),
+
+        異動日期:
+          row.effective_date ||
+          row.created_at.slice(
+            0,
+            10
+          ),
+
+        停車場:
+          lotNameMap.get(
+            row.parking_lot_id
+          ) ||
+          '',
+
+        客戶編號:
+          row.customer_code ||
+          '',
+
+        姓名:
+          row.customer_name ||
+          '',
+
+        電話:
+          row.phone ||
+          '',
+
+        車牌:
+          row.vehicle_plate ||
+          '',
+
+        車種:
+          vehicleTypeText(
+            row.vehicle_type
+          ),
+
+        月租類型:
+          row.rental_type ||
+          '',
+
+        說明:
+          row.change_detail ||
+          '',
+      })
+
+      XLSX.utils.book_append_sheet(
+        wb,
+        XLSX.utils.json_to_sheet(
+          changes.map(
+            mapRow
+          )
+        ),
+        '全部異動'
+      )
+
+      XLSX.utils.book_append_sheet(
+        wb,
+        XLSX.utils.json_to_sheet(
+          changes
+            .filter(
+              (
+                row
+              ) =>
+                row.change_type ===
+                'joined'
+            )
+            .map(
+              mapRow
+            )
+        ),
+        '新增'
+      )
+
+      XLSX.utils.book_append_sheet(
+        wb,
+        XLSX.utils.json_to_sheet(
+          changes
+            .filter(
+              (
+                row
+              ) =>
+                row.change_type ===
+                'cancelled'
+            )
+            .map(
+              mapRow
+            )
+        ),
+        '退租'
+      )
+
+      XLSX.writeFile(
+        wb,
+        `${month}_所有停車場_簽約異動.xlsx`
+      )
+
+      setMessage(
+        '簽約異動 Excel 已完成。'
+      )
+    } catch (
+      error: any
+    ) {
+      setMessage(
+        `異動報表失敗：${error?.message || '未知錯誤'}`
+      )
+    } finally {
+      setChangeDownloading(
+        false
+      )
+    }
+  }
+
+  function toggleTaxiLot(
+    lotId: string
+  ) {
+    if (
+      taxiSelectedLots.includes(
+        lotId
+      )
+    ) {
+      saveTaxiSelection(
+        taxiSelectedLots.filter(
+          (
+            id
+          ) =>
+            id !==
+            lotId
+        )
+      )
+    } else {
+      saveTaxiSelection([
+        ...taxiSelectedLots,
+        lotId,
+      ])
+    }
+  }
+
+  async function loadTaxiRecords(
+    lotId: string
+  ) {
+    const start =
+      `${taxiMonth}-01T00:00:00+08:00`
+
+    const [
+      year,
+      monthNumber,
+    ] =
+      taxiMonth
+        .split('-')
+        .map(Number)
+
+    const next =
+      new Date(
+        Date.UTC(
+          year,
+          monthNumber,
+          1
+        )
+      )
+
+    const nextText =
+      `${next.getUTCFullYear()}-${String(
+        next.getUTCMonth() +
+          1
+      ).padStart(
+        2,
+        '0'
+      )}-01T00:00:00+08:00`
+
     const {
+      data,
       error,
     } =
-      await supabase
+      await db
         .from(
           'taxi_discount_records'
         )
-        .delete()
-        .eq(
-          'id',
-          item.id
-        )
+        .select(`
+          id,
+          parking_lot_id,
+          vehicle_plate,
+          entry_time,
+          exit_time,
+          discount_amount,
+          used_free_discount,
+          discount_date,
+          is_holiday
+        `)
         .eq(
           'parking_lot_id',
-          selectedLotId
+          lotId
+        )
+        .gte(
+          'entry_time',
+          start
+        )
+        .lt(
+          'entry_time',
+          nextText
+        )
+        .order(
+          'entry_time',
+          {
+            ascending:
+              true,
+          }
         )
 
     if (
       error
     ) {
-      setMessage(
-        '刪除失敗：' +
-          error.message
+      throw new Error(
+        error.message
       )
+    }
+
+    return (
+      data ||
+      []
+    ) as TaxiRecord[]
+  }
+
+  async function createSelectedTaxiFiles() {
+    if (
+      !taxiSelectedLots.length
+    ) {
+      throw new Error(
+        '請至少選擇一個需要輸出計程車報表的停車場。'
+      )
+    }
+
+    const files: {
+      lotId: string
+      lotName: string
+      fileName: string
+      blob: Blob
+      count: number
+    }[] = []
+
+    for (
+      const lotId of
+      taxiSelectedLots
+    ) {
+      const lot =
+        parkingLots.find(
+          (
+            item
+          ) =>
+            item.id ===
+            lotId
+        )
+
+      if (
+        !lot
+      ) {
+        continue
+      }
+
+      const records =
+        await loadTaxiRecords(
+          lotId
+        )
+
+      const officialRows =
+        buildTaxiOfficialRows(
+          records
+        )
+
+      /*
+       * 即使該月 0 筆，
+       * 仍可以輸出一張空白正式月報。
+       */
+      const blob =
+        await generateTaxiPdfBlob(
+          lot.name,
+          taxiMonth,
+          officialRows
+        )
+
+      files.push({
+        lotId,
+        lotName:
+          lot.name,
+
+        fileName:
+          `${safeFileName(
+            lot.name
+          )}_${taxiMonth}_計程車優惠報表.pdf`,
+
+        blob,
+
+        count:
+          officialRows.length,
+      })
+    }
+
+    return files
+  }
+
+  async function downloadTaxiReports() {
+    if (
+      taxiDownloading
+    ) {
       return
     }
 
-    await loadRecords()
+    setTaxiDownloading(
+      true
+    )
+
+    setMessage(
+      '正在製作計程車正式月報…'
+    )
+
+    try {
+      const files =
+        await createSelectedTaxiFiles()
+
+      if (
+        files.length ===
+        1
+      ) {
+        saveBlob(
+          files[0].blob,
+          files[0].fileName
+        )
+
+        setMessage(
+          `${files[0].lotName} 計程車月報已完成。`
+        )
+
+        return
+      }
+
+      const JSZip =
+        (
+          await import(
+            'jszip'
+          )
+        ).default
+
+      const zip =
+        new JSZip()
+
+      for (
+        const file of
+        files
+      ) {
+        zip.file(
+          file.fileName,
+          file.blob
+        )
+      }
+
+      const zipBlob =
+        await zip.generateAsync({
+          type:
+            'blob',
+          compression:
+            'DEFLATE',
+          compressionOptions: {
+            level:
+              6,
+          },
+        })
+
+      saveBlob(
+        zipBlob,
+        `${taxiMonth}_計程車優惠月報_${files.length}場.zip`
+      )
+
+      setMessage(
+        `已完成 ${files.length} 個停車場計程車月報 ZIP。`
+      )
+    } catch (
+      error: any
+    ) {
+      setMessage(
+        `計程車報表失敗：${error?.message || '未知錯誤'}`
+      )
+    } finally {
+      setTaxiDownloading(
+        false
+      )
+    }
   }
 
-  const selectedLot =
-    useMemo(
-      () =>
-        parkingLots.find(
-          (
-            lot
-          ) =>
-            lot.id ===
-            selectedLotId
-        ),
-      [
-        parkingLots,
-        selectedLotId,
-      ]
+  async function shareTaxiReports() {
+    if (
+      taxiSharing
+    ) {
+      return
+    }
+
+    setTaxiSharing(
+      true
     )
 
-  const officialRows =
-    useMemo(
-      () => {
-        const sorted =
-          [
-            ...records,
-          ].sort(
-            (
-              a,
-              b
-            ) =>
-              new Date(
-                a.entry_time
-              ).getTime() -
-              new Date(
-                b.entry_time
-              ).getTime()
-          )
+    setMessage(
+      '正在準備手機分享檔案…'
+    )
 
-        const counter:
-          Record<
-            string,
-            number
-          > =
-          {}
+    try {
+      const files =
+        await createSelectedTaxiFiles()
 
-        return sorted.map(
-          (
-            row
-          ) => {
-            const date =
-              displayDate(
-                row.entry_time
-              )
+      let shareFile:
+        File
 
-            counter[
-              date
-            ] =
-              (
-                counter[
-                  date
-                ] ||
-                0
-              ) +
-              1
-
-            return {
-              id:
-                row.id,
-              dailyIndex:
-                counter[
-                  date
-                ],
-              date,
-              plate:
-                row.vehicle_plate,
-              entry:
-                displayTime(
-                  row.entry_time
-                ),
-              exit:
-                displayTime(
-                  row.exit_time
-                ),
-              discount:
-                Number(
-                  row.discount_amount ||
-                    0
-                ),
-              holiday:
-                row.is_holiday
-                  ? '是'
-                  : '否',
+      if (
+        files.length ===
+        1
+      ) {
+        shareFile =
+          new File(
+            [
+              files[0].blob,
+            ],
+            files[0].fileName,
+            {
+              type:
+                'application/pdf',
             }
+          )
+      } else {
+        const JSZip =
+          (
+            await import(
+              'jszip'
+            )
+          ).default
+
+        const zip =
+          new JSZip()
+
+        files.forEach(
+          (
+            item
+          ) => {
+            zip.file(
+              item.fileName,
+              item.blob
+            )
           }
         )
-      },
-      [
-        records,
-      ]
-    )
 
-  function exportCsv() {
-    const lines =
-      [
-        [
-          '每日項次',
-          '日期',
-          '車牌',
-          '進場時間',
-          '離場時間',
-          '銷單金額',
-          '是否假日',
-        ].join(
-          ','
-        ),
+        const zipBlob =
+          await zip.generateAsync({
+            type:
+              'blob',
+            compression:
+              'DEFLATE',
+            compressionOptions: {
+              level:
+                6,
+            },
+          })
 
-        ...officialRows.map(
-          (
-            row
-          ) =>
+        shareFile =
+          new File(
             [
-              row.dailyIndex,
-              row.date,
-              row.plate,
-              row.entry,
-              row.exit,
-              row.discount,
-              row.holiday,
-            ].join(
-              ','
-            )
-        ),
-      ]
+              zipBlob,
+            ],
+            `${taxiMonth}_計程車優惠月報_${files.length}場.zip`,
+            {
+              type:
+                'application/zip',
+            }
+          )
+      }
 
-    const blob =
-      new Blob(
-        [
-          '\uFEFF' +
-            lines.join(
-              '\r\n'
-            ),
-        ],
-        {
-          type:
-            'text/csv;charset=utf-8;',
+      const nav =
+        navigator as Navigator & {
+          canShare?: (
+            data: ShareData
+          ) => boolean
         }
+
+      if (
+        !navigator.share
+      ) {
+        saveBlob(
+          shareFile,
+          shareFile.name
+        )
+
+        setMessage(
+          '此瀏覽器不支援直接分享檔案，已改為下載；下載後可由 LINE 選擇檔案傳送。'
+        )
+
+        return
+      }
+
+      if (
+        nav.canShare &&
+        !nav.canShare({
+          files: [
+            shareFile,
+          ],
+        })
+      ) {
+        saveBlob(
+          shareFile,
+          shareFile.name
+        )
+
+        setMessage(
+          '目前手機瀏覽器不支援分享此檔案格式，已改為下載。'
+        )
+
+        return
+      }
+
+      await navigator.share({
+        title:
+          `${taxiMonth} 計程車優惠月報`,
+
+        text:
+          `${taxiMonth} 計程車優惠月報`,
+
+        files: [
+          shareFile,
+        ],
+      })
+
+      setMessage(
+        '已開啟手機分享功能，可選擇 LINE 聊天室傳送。'
       )
+    } catch (
+      error: any
+    ) {
+      if (
+        error?.name ===
+        'AbortError'
+      ) {
+        setMessage(
+          '已取消分享。'
+        )
 
-    const url =
-      URL.createObjectURL(
-        blob
+        return
+      }
+
+      setMessage(
+        `分享失敗：${error?.message || '未知錯誤'}`
       )
-
-    const a =
-      document.createElement(
-        'a'
+    } finally {
+      setTaxiSharing(
+        false
       )
+    }
+  }
 
-    a.href =
-      url
+  if (
+    accessDenied
+  ) {
+    return (
+      <div className="card">
+        <h1>
+          報表中心
+        </h1>
 
-    a.download =
-      `${selectedLot?.name || '停車場'}_計程車優惠_${filterMonth}.csv`
-
-    a.click()
-
-    URL.revokeObjectURL(
-      url
+        <div
+          style={{
+            color:
+              '#b91c1c',
+          }}
+        >
+          {
+            message
+          }
+        </div>
+      </div>
     )
   }
 
@@ -1282,41 +2281,195 @@ export default function TaxiDiscountPage() {
           40,
       }}
     >
-      <div>
-        <h1>
-          計程車折扣
-        </h1>
+      <h1
+        style={{
+          marginTop:
+            0,
+          marginBottom:
+            6,
+        }}
+      >
+        報表中心
+      </h1>
 
+      <p
+        className="muted"
+        style={{
+          marginTop:
+            0,
+        }}
+      >
+        統一處理會計及主管每月需要的報表。
+      </p>
+
+      <div
+        className="card"
+        style={{
+          marginTop:
+            18,
+        }}
+      >
         <div
-          className="muted"
+          className="field"
+          style={{
+            maxWidth:
+              260,
+          }}
         >
-          目前工作停車場：
-          {selectedLot?.name ||
-            '尚未選擇'}
+          <label>
+            會計報表月份
+          </label>
+
+          <input
+            type="month"
+            value={
+              month
+            }
+            onChange={(
+              event
+            ) =>
+              setMonth(
+                event
+                  .target
+                  .value
+              )
+            }
+          />
         </div>
       </div>
 
-      {!selectedLotId && (
-        <div
-          className="card"
-          style={{
-            marginTop:
-              20,
-            color:
-              '#b45309',
-            fontWeight:
-              700,
-          }}
-        >
-          請先在左側選擇目前工作停車場。
-        </div>
-      )}
-
-      <form
-        onSubmit={
-          saveRecord
-        }
+      <div
+        style={{
+          display:
+            'grid',
+          gridTemplateColumns:
+            'repeat(auto-fit,minmax(280px,1fr))',
+          gap:
+            16,
+          marginTop:
+            18,
+        }}
       >
+        <div className="card">
+          <h2>
+            每月簽到表
+          </h2>
+
+          <div
+            style={{
+              fontSize:
+                28,
+              fontWeight:
+                800,
+            }}
+          >
+            {
+              attendanceRows.length
+            }{' '}
+            份
+          </div>
+
+          <div className="muted">
+            {
+              attendanceLotCount
+            }{' '}
+            個停車場
+          </div>
+
+          <button
+            className="btn"
+            type="button"
+            style={{
+              marginTop:
+                14,
+            }}
+            disabled={
+              attendanceDownloading ||
+              !attendanceRows.length
+            }
+            onClick={
+              downloadAttendanceZip
+            }
+          >
+            {attendanceDownloading
+              ? 'ZIP 建立中…'
+              : '下載簽到表 ZIP'}
+          </button>
+        </div>
+
+        <div className="card">
+          <h2>
+            最新月租名單
+          </h2>
+
+          <div className="muted">
+            下載當下最新資料，不使用快照。
+          </div>
+
+          <button
+            className="btn"
+            type="button"
+            style={{
+              marginTop:
+                14,
+            }}
+            disabled={
+              rentalDownloading
+            }
+            onClick={
+              downloadLatestMonthlyRentals
+            }
+          >
+            {rentalDownloading
+              ? 'Excel 製作中…'
+              : '下載最新月租 Excel'}
+          </button>
+        </div>
+
+        <div className="card">
+          <h2>
+            簽約異動
+          </h2>
+
+          <div>
+            新增：
+            <strong>
+              {
+                joinedCount
+              }
+            </strong>
+            　退租：
+            <strong>
+              {
+                cancelledCount
+              }
+            </strong>
+          </div>
+
+          <button
+            className="btn"
+            type="button"
+            style={{
+              marginTop:
+                14,
+            }}
+            disabled={
+              changeDownloading ||
+              !changes.length
+            }
+            onClick={
+              downloadContractChanges
+            }
+          >
+            {changeDownloading
+              ? 'Excel 製作中…'
+              : '下載簽約異動 Excel'}
+          </button>
+        </div>
+      </div>
+
+      {role ===
+        'supervisor' && (
         <div
           className="card"
           style={{
@@ -1324,383 +2477,278 @@ export default function TaxiDiscountPage() {
               20,
           }}
         >
-          <h2>
-            優惠計算
-          </h2>
+          <div
+            style={{
+              display:
+                'flex',
+              justifyContent:
+                'space-between',
+              alignItems:
+                'flex-start',
+              gap:
+                12,
+              flexWrap:
+                'wrap',
+            }}
+          >
+            <div>
+              <h2
+                style={{
+                  marginTop:
+                    0,
+                  marginBottom:
+                    6,
+                }}
+              >
+                計程車折扣月報
+              </h2>
+
+              <div className="muted">
+                主管專用。預設上個月，可自行勾選需要計程車報表的停車場。
+              </div>
+            </div>
+
+            <div
+              className="field"
+              style={{
+                minWidth:
+                  200,
+              }}
+            >
+              <label>
+                報表月份
+              </label>
+
+              <input
+                type="month"
+                value={
+                  taxiMonth
+                }
+                onChange={(
+                  event
+                ) =>
+                  setTaxiMonth(
+                    event
+                      .target
+                      .value
+                  )
+                }
+              />
+            </div>
+          </div>
+
+          <div
+            style={{
+              marginTop:
+                16,
+              padding:
+                12,
+              background:
+                '#f0f9ff',
+              color:
+                '#075985',
+              borderRadius:
+                10,
+            }}
+          >
+            平面停車場不需要計程車報表時不要勾選。系統會記住本機上次選擇，下個月不用重新一間一間選。
+          </div>
+
+          <div
+            style={{
+              display:
+                'flex',
+              gap:
+                8,
+              flexWrap:
+                'wrap',
+              marginTop:
+                14,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() =>
+                saveTaxiSelection(
+                  parkingLots.map(
+                    (
+                      lot
+                    ) =>
+                      lot.id
+                  )
+                )
+              }
+            >
+              全選
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                saveTaxiSelection(
+                  []
+                )
+              }
+            >
+              清除選取
+            </button>
+
+            <span
+              className="muted"
+              style={{
+                alignSelf:
+                  'center',
+              }}
+            >
+              已選{' '}
+              {
+                taxiSelectedLots.length
+              }{' '}
+              場
+            </span>
+          </div>
 
           <div
             style={{
               display:
                 'grid',
               gridTemplateColumns:
-                'repeat(auto-fit,minmax(220px,1fr))',
+                'repeat(auto-fit,minmax(230px,1fr))',
               gap:
+                8,
+              marginTop:
                 14,
+              maxHeight:
+                360,
+              overflowY:
+                'auto',
             }}
           >
-            <div className="field">
-              <label>
-                停車場
-              </label>
-
-              <select
-                value={
-                  selectedLotId
-                }
-                disabled
-              >
-                {!selectedLotId && (
-                  <option value="">
-                    尚未選擇
-                  </option>
-                )}
-
-                {parkingLots.map(
-                  (
-                    lot
-                  ) => (
-                    <option
-                      key={
+            {parkingLots.map(
+              (
+                lot
+              ) => (
+                <label
+                  key={
+                    lot.id
+                  }
+                  style={{
+                    display:
+                      'flex',
+                    gap:
+                      8,
+                    alignItems:
+                      'center',
+                    padding:
+                      10,
+                    border:
+                      '1px solid #e5e7eb',
+                    borderRadius:
+                      8,
+                    background:
+                      taxiSelectedLots.includes(
                         lot.id
-                      }
-                      value={
+                      )
+                        ? '#eff6ff'
+                        : '#fff',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={
+                      taxiSelectedLots.includes(
                         lot.id
-                      }
-                    >
-                      {
-                        lot.name
-                      }
-                    </option>
-                  )
-                )}
-              </select>
-            </div>
+                      )
+                    }
+                    onChange={() =>
+                      toggleTaxiLot(
+                        lot.id
+                      )
+                    }
+                  />
 
-            <div className="field">
-              <label>
-                車牌
-              </label>
-
-              <input
-                value={
-                  vehiclePlate
-                }
-                onChange={(
-                  event
-                ) =>
-                  setVehiclePlate(
-                    event
-                      .target
-                      .value
-                  )
-                }
-              />
-            </div>
-
-            <div className="field">
-              <label>
-                進場時間
-              </label>
-
-              <input
-                type="datetime-local"
-                value={
-                  entryTime
-                }
-                onChange={(
-                  event
-                ) =>
-                  setEntryTime(
-                    event
-                      .target
-                      .value
-                  )
-                }
-              />
-            </div>
-
-            <div className="field">
-              <label>
-                出場時間
-              </label>
-
-              <input
-                type="datetime-local"
-                value={
-                  exitTime
-                }
-                onChange={(
-                  event
-                ) =>
-                  setExitTime(
-                    event
-                      .target
-                      .value
-                  )
-                }
-              />
-            </div>
-
-            <div className="field">
-              <label>
-                每小時費率
-              </label>
-
-              <input
-                type="number"
-                min="0"
-                value={
-                  hourlyRate
-                }
-                onChange={(
-                  event
-                ) =>
-                  setHourlyRate(
-                    event
-                      .target
-                      .value
-                  )
-                }
-              />
-            </div>
-
-            <div className="field">
-              <label>
-                計費方式
-              </label>
-
-              <select
-                value={
-                  billingMode
-                }
-                onChange={(
-                  event
-                ) =>
-                  setBillingMode(
-                    event
-                      .target
-                      .value as BillingMode
-                  )
-                }
-              >
-                <option value="hour">
-                  每小時進位
-                </option>
-
-                <option value="half_hour">
-                  每半小時進位
-                </option>
-
-                <option value="actual">
-                  實際分鐘
-                </option>
-              </select>
-            </div>
-
-            <div className="field">
-              <label>
-                最高上限區間
-              </label>
-
-              <select
-                value={
-                  capHours
-                }
-                onChange={(
-                  event
-                ) =>
-                  setCapHours(
-                    event
-                      .target
-                      .value
-                  )
-                }
-              >
-                <option value="4">
-                  每 4 小時
-                </option>
-
-                <option value="8">
-                  每 8 小時
-                </option>
-
-                <option value="12">
-                  每 12 小時
-                </option>
-              </select>
-            </div>
-
-            <div className="field">
-              <label>
-                最高金額
-              </label>
-
-              <input
-                type="number"
-                min="0"
-                value={
-                  capAmount
-                }
-                onChange={(
-                  event
-                ) =>
-                  setCapAmount(
-                    event
-                      .target
-                      .value
-                  )
-                }
-              />
-            </div>
-
-            <div className="field">
-              <label>
-                是否假日
-              </label>
-
-              <select
-                value={
-                  isHoliday
-                    ? 'yes'
-                    : 'no'
-                }
-                onChange={(
-                  event
-                ) =>
-                  setIsHoliday(
-                    event
-                      .target
-                      .value ===
-                      'yes'
-                  )
-                }
-              >
-                <option value="no">
-                  否
-                </option>
-
-                <option value="yes">
-                  是
-                </option>
-              </select>
-            </div>
+                  <span>
+                    {
+                      lot.name
+                    }
+                  </span>
+                </label>
+              )
+            )}
           </div>
 
           <div
-            className="field"
             style={{
+              display:
+                'flex',
+              gap:
+                10,
+              flexWrap:
+                'wrap',
               marginTop:
-                14,
+                18,
             }}
           >
-            <label>
-              備註
-            </label>
+            <button
+              type="button"
+              className="btn"
+              disabled={
+                taxiDownloading ||
+                !taxiSelectedLots.length
+              }
+              onClick={
+                downloadTaxiReports
+              }
+            >
+              {taxiDownloading
+                ? 'PDF 製作中…'
+                : taxiSelectedLots.length ===
+                    1
+                  ? '下載選取停車場 PDF'
+                  : '下載選取場站 ZIP'}
+            </button>
 
-            <input
-              value={
-                notes
+            <button
+              type="button"
+              disabled={
+                taxiSharing ||
+                !taxiSelectedLots.length
               }
-              onChange={(
-                event
-              ) =>
-                setNotes(
-                  event
-                    .target
-                    .value
-                )
+              onClick={
+                shareTaxiReports
               }
-            />
+              style={{
+                padding:
+                  '10px 16px',
+                border:
+                  '1px solid #16a34a',
+                borderRadius:
+                  8,
+                background:
+                  '#f0fdf4',
+                color:
+                  '#166534',
+                fontWeight:
+                  700,
+              }}
+            >
+              {taxiSharing
+                ? '準備分享中…'
+                : '手機分享至 LINE'}
+            </button>
           </div>
 
-          <button
-            type="button"
-            className="btn"
-            disabled={
-              !selectedLotId
-            }
-            onClick={
-              calculate
-            }
+          <div
+            className="muted"
+            style={{
+              marginTop:
+                10,
+            }}
           >
-            計算優惠
-          </button>
-
-          {result && (
-            <div
-              style={{
-                marginTop:
-                  16,
-                padding:
-                  16,
-                background:
-                  '#f8fafc',
-                borderRadius:
-                  10,
-              }}
-            >
-              <div>
-                原始金額：
-                NT${' '}
-                {money(
-                  result.originalAmount
-                )}
-              </div>
-
-              <div>
-                優惠：
-                NT${' '}
-                {money(
-                  result.discountAmount
-                )}
-              </div>
-
-              <h3>
-                銷單後金額：
-                NT${' '}
-                {money(
-                  result.finalAmount
-                )}
-              </h3>
-
-              <div
-                className="muted"
-              >
-                {
-                  result.reason
-                }
-              </div>
-
-              <button
-                type="submit"
-                className="btn"
-                disabled={
-                  saving
-                }
-                style={{
-                  marginTop:
-                    12,
-                }}
-              >
-                {saving
-                  ? '儲存中…'
-                  : '確認並加入報表'}
-              </button>
-            </div>
-          )}
-
-          {message && (
-            <div
-              style={{
-                marginTop:
-                  14,
-              }}
-            >
-              {message}
-            </div>
-          )}
+            選 1 場會產生單一 PDF；選多場會產生 ZIP。手機按「分享」後會開啟系統分享選單，可再選 LINE 與聊天對象。
+          </div>
         </div>
-      </form>
+      )}
 
       <div
         className="card"
@@ -1709,102 +2757,46 @@ export default function TaxiDiscountPage() {
             20,
         }}
       >
-        <div
-          className="row"
+        <h2
+          style={{
+            marginTop:
+              0,
+          }}
         >
-          <div>
-            <h2>
-              計程車優惠報表
-            </h2>
-
-            <div
-              className="muted"
-            >
-              {
-                selectedLot?.name
-              }
-            </div>
-          </div>
-
-          <input
-            type="month"
-            value={
-              filterMonth
-            }
-            onChange={(
-              event
-            ) =>
-              setFilterMonth(
-                event
-                  .target
-                  .value
-              )
-            }
-          />
-
-          <button
-            type="button"
-            onClick={
-              exportCsv
-            }
-          >
-            匯出 CSV
-          </button>
-        </div>
+          {month} 簽到表上傳狀況
+        </h2>
 
         <div
           style={{
             overflowX:
               'auto',
-            marginTop:
-              14,
           }}
         >
           <table
             className="table"
             style={{
               minWidth:
-                850,
+                720,
             }}
           >
             <thead>
               <tr>
                 <th>
-                  每日項次
+                  停車場
                 </th>
 
                 <th>
-                  日期
+                  檔名
                 </th>
 
                 <th>
-                  車牌
-                </th>
-
-                <th>
-                  進場
-                </th>
-
-                <th>
-                  離場
-                </th>
-
-                <th>
-                  銷單金額
-                </th>
-
-                <th>
-                  是否假日
-                </th>
-
-                <th>
-                  操作
+                  上傳時間
                 </th>
               </tr>
             </thead>
 
             <tbody>
-              {officialRows.map(
+              {attendanceRows.map(
                 (
                   row
                 ) => (
@@ -1814,89 +2806,43 @@ export default function TaxiDiscountPage() {
                     }
                   >
                     <td>
-                      {
-                        row.dailyIndex
-                      }
+                      {lotNameMap.get(
+                        row.parking_lot_id
+                      ) ||
+                        '-'}
                     </td>
 
                     <td>
                       {
-                        row.date
+                        row.file_name
                       }
                     </td>
 
                     <td>
-                      {
-                        row.plate
-                      }
-                    </td>
-
-                    <td>
-                      {
-                        row.entry
-                      }
-                    </td>
-
-                    <td>
-                      {
-                        row.exit
-                      }
-                    </td>
-
-                    <td>
-                      {
-                        row.discount
-                      }
-                    </td>
-
-                    <td>
-                      {
-                        row.holiday
-                      }
-                    </td>
-
-                    <td>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const item =
-                            records.find(
-                              (
-                                record
-                              ) =>
-                                record.id ===
-                                row.id
-                            )
-
-                          if (
-                            item
-                          ) {
-                            deleteRecord(
-                              item
-                            )
-                          }
-                        }}
-                      >
-                        刪除
-                      </button>
+                      {new Date(
+                        row.uploaded_at
+                      ).toLocaleString(
+                        'zh-TW'
+                      )}
                     </td>
                   </tr>
                 )
               )}
 
-              {officialRows.length ===
-                0 && (
+              {!attendanceRows.length && (
                 <tr>
                   <td
                     colSpan={
-                      8
+                      3
                     }
                     style={{
                       textAlign:
                         'center',
+                      padding:
+                        24,
                     }}
                   >
-                    目前沒有資料
+                    本月份尚未上傳簽到表
                   </td>
                 </tr>
               )}
@@ -1904,6 +2850,22 @@ export default function TaxiDiscountPage() {
           </table>
         </div>
       </div>
+
+      {message && (
+        <div
+          className="card"
+          style={{
+            marginTop:
+              16,
+            whiteSpace:
+              'pre-wrap',
+          }}
+        >
+          {
+            message
+          }
+        </div>
+      )}
     </div>
   )
 }

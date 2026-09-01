@@ -8,6 +8,10 @@ import {
 
 import { createClient } from '@/lib/supabase/client'
 
+type UserRole =
+  | 'supervisor'
+  | 'accountant'
+
 type ParkingLot = {
   id: string
   name: string
@@ -60,16 +64,54 @@ type ChangeRow = {
   created_at: string
 }
 
+type TaxiRecord = {
+  id: string
+  parking_lot_id: string
+  vehicle_plate: string
+  entry_time: string
+  exit_time: string
+  discount_amount: number
+  used_free_discount: boolean
+  discount_date: string | null
+  is_holiday: boolean
+}
+
+type TaxiOfficialRow = {
+  dailyIndex: number
+  date: string
+  plate: string
+  entry: string
+  exit: string
+  discount: number
+  holiday: string
+}
+
+const TAXI_SELECTED_STORAGE =
+  'accounting-taxi-report-selected-lots'
+
 function currentMonthText() {
   const now =
     new Date()
 
   return `${now.getFullYear()}-${String(
     now.getMonth() + 1
-  ).padStart(
-    2,
-    '0'
-  )}`
+  ).padStart(2, '0')}`
+}
+
+function previousMonthText() {
+  const now =
+    new Date()
+
+  const date =
+    new Date(
+      now.getFullYear(),
+      now.getMonth() - 1,
+      1
+    )
+
+  return `${date.getFullYear()}-${String(
+    date.getMonth() + 1
+  ).padStart(2, '0')}`
 }
 
 function monthStart(
@@ -82,19 +124,17 @@ function nextMonthStart(
   month: string
 ) {
   const [
-    yearText,
-    monthText,
+    year,
+    monthNumber,
   ] =
-    month.split('-')
+    month
+      .split('-')
+      .map(Number)
 
   const date =
     new Date(
-      Number(
-        yearText
-      ),
-      Number(
-        monthText
-      ),
+      year,
+      monthNumber,
       1
     )
 
@@ -124,88 +164,28 @@ function safeFileName(
     .trim()
 }
 
-function safeSheetName(
-  value: string,
-  fallback: string
-) {
-  const result =
-    String(
-      value ||
-        fallback
-    )
-      .replace(
-        /[\\/*?:[\]]/g,
-        '_'
-      )
-      .slice(
-        0,
-        31
-      )
-
-  return (
-    result ||
-    fallback
-  )
-}
-
 function vehicleTypeText(
   value?: string | null
 ) {
   if (
-    value ===
-      'car' ||
-    value ===
-      '汽車'
+    value === 'car' ||
+    value === '汽車'
   ) {
     return '汽車'
   }
 
   if (
-    value ===
-      'motorcycle' ||
-    value ===
-      '機車'
+    value === 'motorcycle' ||
+    value === '機車'
   ) {
     return '機車'
   }
 
   if (
-    value ===
-      'heavy_motorcycle' ||
-    value ===
-      '重機'
+    value === 'heavy_motorcycle' ||
+    value === '重機'
   ) {
     return '重機'
-  }
-
-  return (
-    value ||
-    ''
-  )
-}
-
-function rentalStatusText(
-  value?: string | null
-) {
-  if (
-    value ===
-    'active'
-  ) {
-    return '有效'
-  }
-
-  if (
-    value ===
-    'cancelled'
-  ) {
-    return '已退租'
-  }
-
-  if (
-    value ===
-    'inactive'
-  ) {
-    return '停用'
   }
 
   return (
@@ -218,17 +198,42 @@ function paymentStatusText(
   value?: string | null
 ) {
   if (
-    value ===
-    'paid'
+    value === 'paid'
   ) {
     return '已繳'
   }
 
   if (
-    value ===
-    'unpaid'
+    value === 'unpaid'
   ) {
     return '未繳'
+  }
+
+  return (
+    value ||
+    ''
+  )
+}
+
+function rentalStatusText(
+  value?: string | null
+) {
+  if (
+    value === 'active'
+  ) {
+    return '有效'
+  }
+
+  if (
+    value === 'cancelled'
+  ) {
+    return '已退租'
+  }
+
+  if (
+    value === 'inactive'
+  ) {
+    return '停用'
   }
 
   return (
@@ -241,15 +246,13 @@ function changeTypeText(
   value: string
 ) {
   if (
-    value ===
-    'joined'
+    value === 'joined'
   ) {
     return '新增'
   }
 
   if (
-    value ===
-    'cancelled'
+    value === 'cancelled'
   ) {
     return '退租'
   }
@@ -293,8 +296,543 @@ function saveBlob(
         url
       )
     },
-    1000
+    1500
   )
+}
+
+function localDateText() {
+  const now =
+    new Date()
+
+  return `${now.getFullYear()}-${String(
+    now.getMonth() + 1
+  ).padStart(
+    2,
+    '0'
+  )}-${String(
+    now.getDate()
+  ).padStart(
+    2,
+    '0'
+  )}`
+}
+
+function taipeiParts(
+  value: string
+) {
+  const date =
+    new Date(value)
+
+  const parts =
+    new Intl.DateTimeFormat(
+      'en-CA',
+      {
+        timeZone:
+          'Asia/Taipei',
+
+        year:
+          'numeric',
+
+        month:
+          '2-digit',
+
+        day:
+          '2-digit',
+
+        hour:
+          '2-digit',
+
+        minute:
+          '2-digit',
+
+        hour12:
+          false,
+      }
+    ).formatToParts(
+      date
+    )
+
+  const map =
+    Object.fromEntries(
+      parts.map(
+        (
+          item
+        ) => [
+          item.type,
+          item.value,
+        ]
+      )
+    )
+
+  return {
+    date:
+      `${map.year}/${map.month}/${map.day}`,
+
+    dateKey:
+      `${map.year}-${map.month}-${map.day}`,
+
+    time:
+      `${map.hour}:${map.minute}`,
+  }
+}
+
+function buildTaxiOfficialRows(
+  rows: TaxiRecord[]
+) {
+  const sorted =
+    [...rows].sort(
+      (
+        a,
+        b
+      ) =>
+        new Date(
+          a.entry_time
+        ).getTime() -
+        new Date(
+          b.entry_time
+        ).getTime()
+    )
+
+  const dailyCounters =
+    new Map<
+      string,
+      number
+    >()
+
+  return sorted.map(
+    (
+      row
+    ): TaxiOfficialRow => {
+      const entry =
+        taipeiParts(
+          row.entry_time
+        )
+
+      const exit =
+        taipeiParts(
+          row.exit_time
+        )
+
+      const dailyIndex =
+        (
+          dailyCounters.get(
+            entry.dateKey
+          ) ||
+          0
+        ) + 1
+
+      dailyCounters.set(
+        entry.dateKey,
+        dailyIndex
+      )
+
+      return {
+        dailyIndex,
+
+        date:
+          entry.date,
+
+        plate:
+          row.vehicle_plate ||
+          '',
+
+        entry:
+          entry.time,
+
+        exit:
+          exit.time,
+
+        discount:
+          Number(
+            row.discount_amount ||
+            0
+          ),
+
+        holiday:
+          row.is_holiday
+            ? '是'
+            : '否',
+      }
+    }
+  )
+}
+
+function createTaxiReportElement(
+  lotName: string,
+  month: string,
+  rows: TaxiOfficialRow[]
+) {
+  const wrapper =
+    document.createElement(
+      'div'
+    )
+
+  wrapper.style.position =
+    'fixed'
+
+  wrapper.style.left =
+    '-99999px'
+
+  wrapper.style.top =
+    '0'
+
+  wrapper.style.width =
+    '1120px'
+
+  wrapper.style.padding =
+    '20px'
+
+  wrapper.style.background =
+    '#ffffff'
+
+  wrapper.style.color =
+    '#000000'
+
+  wrapper.style.fontFamily =
+    '"Microsoft JhengHei", Arial, sans-serif'
+
+  const table =
+    document.createElement(
+      'table'
+    )
+
+  table.style.width =
+    '100%'
+
+  table.style.borderCollapse =
+    'collapse'
+
+  table.style.tableLayout =
+    'fixed'
+
+  function makeCell(
+    text: string,
+    tag:
+      | 'th'
+      | 'td' =
+      'td'
+  ) {
+    const cell =
+      document.createElement(
+        tag
+      )
+
+    cell.textContent =
+      text
+
+    cell.style.border =
+      '2px solid #000'
+
+    cell.style.padding =
+      '6px'
+
+    cell.style.height =
+      '32px'
+
+    cell.style.textAlign =
+      'center'
+
+    cell.style.fontSize =
+      '14px'
+
+    return cell
+  }
+
+  const titleRow =
+    document.createElement(
+      'tr'
+    )
+
+  const titleCell =
+    makeCell(
+      `新北市政府交通局計程車免費停車統計表（${lotName}）`,
+      'th'
+    )
+
+  titleCell.colSpan =
+    7
+
+  titleCell.style.height =
+    '58px'
+
+  titleCell.style.fontSize =
+    '24px'
+
+  titleCell.style.fontWeight =
+    '700'
+
+  titleRow.appendChild(
+    titleCell
+  )
+
+  table.appendChild(
+    titleRow
+  )
+
+  const monthRow =
+    document.createElement(
+      'tr'
+    )
+
+  const monthCell =
+    makeCell(
+      `統計月份：${month}`,
+      'th'
+    )
+
+  monthCell.colSpan =
+    7
+
+  monthCell.style.textAlign =
+    'left'
+
+  monthCell.style.paddingLeft =
+    '12px'
+
+  monthRow.appendChild(
+    monthCell
+  )
+
+  table.appendChild(
+    monthRow
+  )
+
+  const header =
+    document.createElement(
+      'tr'
+    )
+
+  const headers = [
+    '每日項次',
+    '日期',
+    '車牌',
+    '進場時間',
+    '離場時間',
+    '銷單金額',
+    '是否假日',
+  ]
+
+  headers.forEach(
+    (
+      label
+    ) => {
+      const cell =
+        makeCell(
+          label,
+          'th'
+        )
+
+      cell.style.fontWeight =
+        '700'
+
+      header.appendChild(
+        cell
+      )
+    }
+  )
+
+  table.appendChild(
+    header
+  )
+
+  rows.forEach(
+    (
+      row
+    ) => {
+      const tr =
+        document.createElement(
+          'tr'
+        )
+
+      const values = [
+        String(
+          row.dailyIndex
+        ),
+        row.date,
+        row.plate,
+        row.entry,
+        row.exit,
+        String(
+          row.discount
+        ),
+        row.holiday,
+      ]
+
+      values.forEach(
+        (
+          value
+        ) => {
+          tr.appendChild(
+            makeCell(
+              value
+            )
+          )
+        }
+      )
+
+      table.appendChild(
+        tr
+      )
+    }
+  )
+
+  /*
+   * 正式報表保留至少 32 列。
+   */
+  for (
+    let index =
+      rows.length;
+    index <
+    32;
+    index++
+  ) {
+    const tr =
+      document.createElement(
+        'tr'
+      )
+
+    for (
+      let column = 0;
+      column <
+      7;
+      column++
+    ) {
+      tr.appendChild(
+        makeCell(
+          column ===
+          0
+            ? '\u00a0'
+            : ''
+        )
+      )
+    }
+
+    table.appendChild(
+      tr
+    )
+  }
+
+  wrapper.appendChild(
+    table
+  )
+
+  document.body.appendChild(
+    wrapper
+  )
+
+  return wrapper
+}
+
+async function generateTaxiPdfBlob(
+  lotName: string,
+  month: string,
+  rows: TaxiOfficialRow[]
+) {
+  const html2canvas =
+    (
+      await import(
+        'html2canvas'
+      )
+    ).default
+
+  const {
+    jsPDF,
+  } =
+    await import(
+      'jspdf'
+    )
+
+  const element =
+    createTaxiReportElement(
+      lotName,
+      month,
+      rows
+    )
+
+  try {
+    const canvas =
+      await html2canvas(
+        element,
+        {
+          scale:
+            2,
+
+          backgroundColor:
+            '#ffffff',
+
+          useCORS:
+            true,
+        }
+      )
+
+    const pdf =
+      new jsPDF({
+        orientation:
+          'landscape',
+
+        unit:
+          'mm',
+
+        format:
+          'a4',
+      })
+
+    const image =
+      canvas.toDataURL(
+        'image/jpeg',
+        0.95
+      )
+
+    const pageWidth =
+      297
+
+    const pageHeight =
+      210
+
+    const ratio =
+      Math.min(
+        281 /
+          canvas.width,
+
+        194 /
+          canvas.height
+      )
+
+    const width =
+      canvas.width *
+      ratio
+
+    const height =
+      canvas.height *
+      ratio
+
+    pdf.addImage(
+      image,
+      'JPEG',
+      (
+        pageWidth -
+        width
+      ) /
+        2,
+      8,
+      width,
+      height
+    )
+
+    return pdf.output(
+      'blob'
+    )
+  } finally {
+    if (
+      document.body.contains(
+        element
+      )
+    ) {
+      document.body.removeChild(
+        element
+      )
+    }
+  }
 }
 
 export default function AccountingReportCenterPage() {
@@ -305,11 +843,27 @@ export default function AccountingReportCenterPage() {
     supabase as any
 
   const [
+    role,
+    setRole,
+  ] =
+    useState<
+      UserRole | null
+    >(null)
+
+  const [
     month,
     setMonth,
   ] =
     useState(
       currentMonthText()
+    )
+
+  const [
+    taxiMonth,
+    setTaxiMonth,
+  ] =
+    useState(
+      previousMonthText()
     )
 
   const [
@@ -337,34 +891,68 @@ export default function AccountingReportCenterPage() {
     >([])
 
   const [
+    taxiSelectedLots,
+    setTaxiSelectedLots,
+  ] =
+    useState<
+      string[]
+    >([])
+
+  const [
     loading,
     setLoading,
   ] =
-    useState(true)
+    useState(
+      true
+    )
 
   const [
     accessDenied,
     setAccessDenied,
   ] =
-    useState(false)
+    useState(
+      false
+    )
 
   const [
     attendanceDownloading,
     setAttendanceDownloading,
   ] =
-    useState(false)
+    useState(
+      false
+    )
 
   const [
     rentalDownloading,
     setRentalDownloading,
   ] =
-    useState(false)
+    useState(
+      false
+    )
 
   const [
     changeDownloading,
     setChangeDownloading,
   ] =
-    useState(false)
+    useState(
+      false
+    )
+
+  const [
+    taxiDownloading,
+    setTaxiDownloading,
+  ] =
+    useState(
+      false
+    )
+
+  const [
+    taxiSharing,
+    setTaxiSharing,
+  ] =
+    useState(
+      false
+    )
 
   const [
     message,
@@ -372,23 +960,102 @@ export default function AccountingReportCenterPage() {
   ] =
     useState('')
 
-  useEffect(() => {
-    loadInitial()
-  }, [])
+  useEffect(
+    () => {
+      void loadInitial()
+    },
+    []
+  )
 
-  useEffect(() => {
+  useEffect(
+    () => {
+      if (
+        !loading &&
+        !accessDenied
+      ) {
+        void loadMonthData(
+          month
+        )
+      }
+    },
+    [
+      month,
+    ]
+  )
+
+  useEffect(
+    () => {
+      if (
+        typeof window ===
+        'undefined'
+      ) {
+        return
+      }
+
+      const saved =
+        window.localStorage.getItem(
+          TAXI_SELECTED_STORAGE
+        )
+
+      if (
+        !saved
+      ) {
+        return
+      }
+
+      try {
+        const parsed =
+          JSON.parse(
+            saved
+          )
+
+        if (
+          Array.isArray(
+            parsed
+          )
+        ) {
+          setTaxiSelectedLots(
+            parsed.filter(
+              (
+                value
+              ) =>
+                typeof value ===
+                'string'
+            )
+          )
+        }
+      } catch {
+        //
+      }
+    },
+    []
+  )
+
+  function saveTaxiSelection(
+    ids: string[]
+  ) {
+    setTaxiSelectedLots(
+      ids
+    )
+
     if (
-      !loading &&
-      !accessDenied
+      typeof window !==
+      'undefined'
     ) {
-      loadMonthData()
+      window.localStorage.setItem(
+        TAXI_SELECTED_STORAGE,
+        JSON.stringify(
+          ids
+        )
+      )
     }
-  }, [
-    month,
-  ])
+  }
 
   async function loadInitial() {
-    setLoading(true)
+    setLoading(
+      true
+    )
+
     setMessage('')
 
     try {
@@ -426,7 +1093,7 @@ export default function AccountingReportCenterPage() {
             'profiles'
           )
           .select(
-            'id, role, is_active'
+            'role, is_active'
           )
           .eq(
             'id',
@@ -453,9 +1120,9 @@ export default function AccountingReportCenterPage() {
         !profile.is_active ||
         (
           profile.role !==
-            'accountant' &&
+            'supervisor' &&
           profile.role !==
-            'supervisor'
+            'accountant'
         )
       ) {
         setAccessDenied(
@@ -463,11 +1130,15 @@ export default function AccountingReportCenterPage() {
         )
 
         setMessage(
-          '此帳號沒有會計報表中心權限。'
+          '此帳號沒有報表中心權限。'
         )
 
         return
       }
+
+      setRole(
+        profile.role
+      )
 
       const {
         data:
@@ -481,6 +1152,10 @@ export default function AccountingReportCenterPage() {
           )
           .select(
             'id, name'
+          )
+          .eq(
+            'status',
+            'active'
           )
           .order(
             'name'
@@ -496,14 +1171,19 @@ export default function AccountingReportCenterPage() {
         return
       }
 
-      setParkingLots(
+      const loadedLots =
         (
           lots ||
           []
         ) as ParkingLot[]
+
+      setParkingLots(
+        loadedLots
       )
 
-      await loadMonthData()
+      await loadMonthData(
+        month
+      )
     } catch (
       error: any
     ) {
@@ -518,17 +1198,18 @@ export default function AccountingReportCenterPage() {
     }
   }
 
-  async function loadMonthData() {
-    setMessage('')
-
+  async function loadMonthData(
+    targetMonth:
+      string
+  ) {
     const start =
       monthStart(
-        month
+        targetMonth
       )
 
     const next =
       nextMonthStart(
-        month
+        targetMonth
       )
 
     const {
@@ -627,19 +1308,12 @@ export default function AccountingReportCenterPage() {
               false,
           }
         )
-        .order(
-          'created_at',
-          {
-            ascending:
-              false,
-          }
-        )
 
     if (
       changeError
     ) {
       setMessage(
-        `簽約異動讀取失敗：${changeError.message}`
+        `異動資料讀取失敗：${changeError.message}`
       )
 
       return
@@ -655,26 +1329,20 @@ export default function AccountingReportCenterPage() {
 
   const lotNameMap =
     useMemo(
-      () => {
-        const map =
-          new Map<
-            string,
-            string
-          >()
-
-        parkingLots.forEach(
-          (
-            lot
-          ) => {
-            map.set(
+      () =>
+        new Map<
+          string,
+          string
+        >(
+          parkingLots.map(
+            (
+              lot
+            ) => [
               lot.id,
-              lot.name
-            )
-          }
-        )
-
-        return map
-      },
+              lot.name,
+            ]
+          )
+        ),
       [
         parkingLots,
       ]
@@ -697,22 +1365,34 @@ export default function AccountingReportCenterPage() {
     )
 
   const joinedCount =
-    changes.filter(
-      (
-        row
-      ) =>
-        row.change_type ===
-        'joined'
-    ).length
+    useMemo(
+      () =>
+        changes.filter(
+          (
+            row
+          ) =>
+            row.change_type ===
+            'joined'
+        ).length,
+      [
+        changes,
+      ]
+    )
 
   const cancelledCount =
-    changes.filter(
-      (
-        row
-      ) =>
-        row.change_type ===
-        'cancelled'
-    ).length
+    useMemo(
+      () =>
+        changes.filter(
+          (
+            row
+          ) =>
+            row.change_type ===
+            'cancelled'
+        ).length,
+      [
+        changes,
+      ]
+    )
 
   async function downloadAttendanceZip() {
     if (
@@ -737,7 +1417,7 @@ export default function AccountingReportCenterPage() {
     )
 
     setMessage(
-      '正在下載簽到表並建立 ZIP，請勿關閉頁面…'
+      '正在下載簽到表並建立 ZIP…'
     )
 
     try {
@@ -751,13 +1431,12 @@ export default function AccountingReportCenterPage() {
       const zip =
         new JSZip()
 
-      const usedNames =
-        new Set<
-          string
-        >()
+      const usedPaths =
+        new Set<string>()
 
       for (
-        let index = 0;
+        let index =
+          0;
         index <
         attendanceRows.length;
         index++
@@ -767,19 +1446,10 @@ export default function AccountingReportCenterPage() {
             index
           ]
 
-        const lotName =
-          safeFileName(
-            lotNameMap.get(
-              row.parking_lot_id
-            ) ||
-              '未知停車場'
-          )
-
         const {
           data:
-            fileBlob,
-          error:
-            downloadError,
+            blob,
+          error,
         } =
           await supabase
             .storage
@@ -791,28 +1461,33 @@ export default function AccountingReportCenterPage() {
             )
 
         if (
-          downloadError ||
-          !fileBlob
+          error ||
+          !blob
         ) {
           throw new Error(
-            `${lotName}／${row.file_name} 下載失敗：${
-              downloadError?.message ||
-              '未知錯誤'
-            }`
+            `${row.file_name} 下載失敗：${error?.message || '未知錯誤'}`
           )
         }
+
+        const lotName =
+          safeFileName(
+            lotNameMap.get(
+              row.parking_lot_id
+            ) ||
+              '未知停車場'
+          )
 
         let fileName =
           safeFileName(
             row.file_name
           )
 
-        let fullPath =
+        let path =
           `${lotName}/${fileName}`
 
         if (
-          usedNames.has(
-            fullPath
+          usedPaths.has(
+            path
           )
         ) {
           fileName =
@@ -823,17 +1498,17 @@ export default function AccountingReportCenterPage() {
               '0'
             )}_${fileName}`
 
-          fullPath =
+          path =
             `${lotName}/${fileName}`
         }
 
-        usedNames.add(
-          fullPath
+        usedPaths.add(
+          path
         )
 
         zip.file(
-          fullPath,
-          fileBlob
+          path,
+          blob
         )
       }
 
@@ -857,16 +1532,13 @@ export default function AccountingReportCenterPage() {
       )
 
       setMessage(
-        `${month} 簽到表 ZIP 已完成，共 ${attendanceRows.length} 份檔案。`
+        `${month} 簽到表下載完成，共 ${attendanceRows.length} 份。`
       )
     } catch (
       error: any
     ) {
       setMessage(
-        `簽到表下載失敗：${
-          error?.message ||
-          '未知錯誤'
-        }`
+        `簽到表下載失敗：${error?.message || '未知錯誤'}`
       )
     } finally {
       setAttendanceDownloading(
@@ -875,6 +1547,14 @@ export default function AccountingReportCenterPage() {
     }
   }
 
+  /*
+   * =====================================================
+   * 最新月租名單
+   *
+   * 每個停車場各產生一個 Excel，
+   * 再全部壓縮成 ZIP。
+   * =====================================================
+   */
   async function downloadLatestMonthlyRentals() {
     if (
       rentalDownloading
@@ -887,7 +1567,7 @@ export default function AccountingReportCenterPage() {
     )
 
     setMessage(
-      '正在讀取目前最新月租資料並製作 Excel…'
+      '正在讀取所有停車場最新月租資料並建立 ZIP…'
     )
 
     try {
@@ -933,10 +1613,6 @@ export default function AccountingReportCenterPage() {
         )
       }
 
-      /*
-       * 最新月租名單只放目前仍在租用中的資料。
-       * 已退租者會出現在「簽約異動」報表。
-       */
       const rentals =
         (
           data ||
@@ -949,23 +1625,48 @@ export default function AccountingReportCenterPage() {
             'cancelled'
         ) as RentalRow[]
 
+      if (
+        rentals.length ===
+        0
+      ) {
+        setMessage(
+          '目前沒有可匯出的月租資料。'
+        )
+
+        return
+      }
+
       const XLSX =
         await import(
           'xlsx'
         )
 
-      const workbook =
-        XLSX.utils.book_new()
+      const JSZip =
+        (
+          await import(
+            'jszip'
+          )
+        ).default
+
+      const zip =
+        new JSZip()
+
+      const dateText =
+        localDateText()
+
+      let exportedLotCount =
+        0
+
+      let exportedRowCount =
+        0
 
       function mapRental(
-        row: RentalRow
+        row: RentalRow,
+        lotName: string
       ) {
         return {
           停車場:
-            lotNameMap.get(
-              row.parking_lot_id
-            ) ||
-            '',
+            lotName,
 
           客戶編號:
             row.customer_code ||
@@ -1039,130 +1740,200 @@ export default function AccountingReportCenterPage() {
         }
       }
 
-      const allRows =
-        rentals.map(
-          mapRental
-        )
-
-      const allSheet =
-        XLSX.utils.json_to_sheet(
-          allRows
-        )
-
-      XLSX.utils.book_append_sheet(
-        workbook,
-        allSheet,
-        '全部月租'
-      )
-
-      const usedSheetNames =
-        new Set<string>([
-          '全部月租',
-        ])
-
       for (
         const lot of
         parkingLots
       ) {
-        const lotRows =
-          rentals
-            .filter(
-              (
-                row
-              ) =>
-                row.parking_lot_id ===
-                lot.id
-            )
-            .map(
-              mapRental
-            )
+        const lotRentals =
+          rentals.filter(
+            (
+              row
+            ) =>
+              row.parking_lot_id ===
+              lot.id
+          )
 
+        /*
+         * 沒有月租資料的場站不建立空白檔案。
+         */
         if (
-          lotRows.length ===
+          lotRentals.length ===
           0
         ) {
           continue
         }
 
-        let sheetName =
-          safeSheetName(
-            lot.name,
-            '停車場'
+        const excelRows =
+          lotRentals.map(
+            (
+              row
+            ) =>
+              mapRental(
+                row,
+                lot.name
+              )
           )
 
-        let suffix =
-          2
+        const workbook =
+          XLSX.utils.book_new()
 
-        while (
-          usedSheetNames.has(
-            sheetName
-          )
-        ) {
-          const suffixText =
-            `_${suffix}`
-
-          sheetName =
-            `${safeSheetName(
-              lot.name,
-              '停車場'
-            ).slice(
-              0,
-              31 -
-                suffixText.length
-            )}${suffixText}`
-
-          suffix++
-        }
-
-        usedSheetNames.add(
-          sheetName
-        )
-
-        const sheet =
+        const worksheet =
           XLSX.utils.json_to_sheet(
-            lotRows
+            excelRows
           )
+
+        worksheet[
+          '!cols'
+        ] = [
+          {
+            wch:
+              30,
+          },
+          {
+            wch:
+              14,
+          },
+          {
+            wch:
+              14,
+          },
+          {
+            wch:
+              16,
+          },
+          {
+            wch:
+              14,
+          },
+          {
+            wch:
+              10,
+          },
+          {
+            wch:
+              18,
+          },
+          {
+            wch:
+              12,
+          },
+          {
+            wch:
+              12,
+          },
+          {
+            wch:
+              12,
+          },
+          {
+            wch:
+              12,
+          },
+          {
+            wch:
+              12,
+          },
+          {
+            wch:
+              16,
+          },
+          {
+            wch:
+              12,
+          },
+          {
+            wch:
+              30,
+          },
+          {
+            wch:
+              20,
+          },
+        ]
 
         XLSX.utils.book_append_sheet(
           workbook,
-          sheet,
-          sheetName
+          worksheet,
+          '月租名單'
         )
+
+        const excelData =
+          XLSX.write(
+            workbook,
+            {
+              bookType:
+                'xlsx',
+
+              type:
+                'array',
+            }
+          )
+
+        const excelBlob =
+          new Blob(
+            [
+              excelData,
+            ],
+            {
+              type:
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            }
+          )
+
+        const fileName =
+          `${safeFileName(
+            lot.name
+          )}_${dateText}_最新月租名單.xlsx`
+
+        zip.file(
+          fileName,
+          excelBlob
+        )
+
+        exportedLotCount++
+
+        exportedRowCount +=
+          lotRentals.length
       }
 
-      const generatedAt =
-        new Date()
+      if (
+        exportedLotCount ===
+        0
+      ) {
+        setMessage(
+          '目前沒有任何停車場有可匯出的月租資料。'
+        )
 
-      const dateText =
-        `${generatedAt.getFullYear()}-${String(
-          generatedAt.getMonth() +
-            1
-        ).padStart(
-          2,
-          '0'
-        )}-${String(
-          generatedAt.getDate()
-        ).padStart(
-          2,
-          '0'
-        )}`
+        return
+      }
 
-      XLSX.writeFile(
-        workbook,
-        `${dateText}_所有停車場_最新月租名單.xlsx`
+      const zipBlob =
+        await zip.generateAsync({
+          type:
+            'blob',
+
+          compression:
+            'DEFLATE',
+
+          compressionOptions: {
+            level:
+              6,
+          },
+        })
+
+      saveBlob(
+        zipBlob,
+        `${dateText}_所有停車場_最新月租名單.zip`
       )
 
       setMessage(
-        `最新月租名單 Excel 已完成，共 ${rentals.length} 筆。下載內容為按下按鈕當下的最新資料。`
+        `最新月租名單完成：${exportedLotCount} 個停車場，共 ${exportedRowCount} 筆月租資料。`
       )
     } catch (
       error: any
     ) {
       setMessage(
-        `月租名單下載失敗：${
-          error?.message ||
-          '未知錯誤'
-        }`
+        `月租名單下載失敗：${error?.message || '未知錯誤'}`
       )
     } finally {
       setRentalDownloading(
@@ -1328,19 +2099,487 @@ export default function AccountingReportCenterPage() {
       )
 
       setMessage(
-        `${month} 簽約異動 Excel 已完成：新增 ${joinedCount} 筆、退租 ${cancelledCount} 筆。`
+        `${month} 簽約異動完成：新增 ${joinedCount} 筆、退租 ${cancelledCount} 筆。`
       )
     } catch (
       error: any
     ) {
       setMessage(
-        `簽約異動下載失敗：${
-          error?.message ||
-          '未知錯誤'
-        }`
+        `簽約異動下載失敗：${error?.message || '未知錯誤'}`
       )
     } finally {
       setChangeDownloading(
+        false
+      )
+    }
+  }
+
+  function toggleTaxiLot(
+    lotId: string
+  ) {
+    if (
+      taxiSelectedLots.includes(
+        lotId
+      )
+    ) {
+      saveTaxiSelection(
+        taxiSelectedLots.filter(
+          (
+            id
+          ) =>
+            id !==
+            lotId
+        )
+      )
+
+      return
+    }
+
+    saveTaxiSelection([
+      ...taxiSelectedLots,
+      lotId,
+    ])
+  }
+
+  async function loadTaxiRecords(
+    lotId: string
+  ) {
+    const start =
+      `${taxiMonth}-01T00:00:00+08:00`
+
+    const [
+      year,
+      monthNumber,
+    ] =
+      taxiMonth
+        .split('-')
+        .map(Number)
+
+    const nextDate =
+      new Date(
+        year,
+        monthNumber,
+        1
+      )
+
+    const next =
+      `${nextDate.getFullYear()}-${String(
+        nextDate.getMonth() + 1
+      ).padStart(
+        2,
+        '0'
+      )}-01T00:00:00+08:00`
+
+    const {
+      data,
+      error,
+    } =
+      await db
+        .from(
+          'taxi_discount_records'
+        )
+        .select(`
+          id,
+          parking_lot_id,
+          vehicle_plate,
+          entry_time,
+          exit_time,
+          discount_amount,
+          used_free_discount,
+          discount_date,
+          is_holiday
+        `)
+        .eq(
+          'parking_lot_id',
+          lotId
+        )
+        .gte(
+          'entry_time',
+          start
+        )
+        .lt(
+          'entry_time',
+          next
+        )
+        .order(
+          'entry_time',
+          {
+            ascending:
+              true,
+          }
+        )
+
+    if (
+      error
+    ) {
+      throw new Error(
+        error.message
+      )
+    }
+
+    return (
+      data ||
+      []
+    ) as TaxiRecord[]
+  }
+
+  async function createSelectedTaxiFiles() {
+    if (
+      taxiSelectedLots.length ===
+      0
+    ) {
+      throw new Error(
+        '請至少選擇一個需要輸出計程車報表的停車場。'
+      )
+    }
+
+    const files: {
+      lotId: string
+      lotName: string
+      fileName: string
+      blob: Blob
+      count: number
+    }[] = []
+
+    for (
+      const lotId of
+      taxiSelectedLots
+    ) {
+      const lot =
+        parkingLots.find(
+          (
+            item
+          ) =>
+            item.id ===
+            lotId
+        )
+
+      if (
+        !lot
+      ) {
+        continue
+      }
+
+      const records =
+        await loadTaxiRecords(
+          lot.id
+        )
+
+      const officialRows =
+        buildTaxiOfficialRows(
+          records
+        )
+
+      const blob =
+        await generateTaxiPdfBlob(
+          lot.name,
+          taxiMonth,
+          officialRows
+        )
+
+      files.push({
+        lotId:
+          lot.id,
+
+        lotName:
+          lot.name,
+
+        fileName:
+          `${safeFileName(
+            lot.name
+          )}_${taxiMonth}_計程車優惠報表.pdf`,
+
+        blob,
+
+        count:
+          officialRows.length,
+      })
+    }
+
+    return files
+  }
+
+  async function downloadTaxiReports() {
+    if (
+      taxiDownloading
+    ) {
+      return
+    }
+
+    setTaxiDownloading(
+      true
+    )
+
+    setMessage(
+      '正在製作計程車正式月報…'
+    )
+
+    try {
+      const files =
+        await createSelectedTaxiFiles()
+
+      if (
+        files.length ===
+        0
+      ) {
+        setMessage(
+          '沒有可下載的計程車報表。'
+        )
+
+        return
+      }
+
+      if (
+        files.length ===
+        1
+      ) {
+        saveBlob(
+          files[0].blob,
+          files[0].fileName
+        )
+
+        setMessage(
+          `${files[0].lotName} 計程車月報已完成。`
+        )
+
+        return
+      }
+
+      const JSZip =
+        (
+          await import(
+            'jszip'
+          )
+        ).default
+
+      const zip =
+        new JSZip()
+
+      for (
+        const file of
+        files
+      ) {
+        zip.file(
+          file.fileName,
+          file.blob
+        )
+      }
+
+      const zipBlob =
+        await zip.generateAsync({
+          type:
+            'blob',
+
+          compression:
+            'DEFLATE',
+
+          compressionOptions: {
+            level:
+              6,
+          },
+        })
+
+      saveBlob(
+        zipBlob,
+        `${taxiMonth}_計程車優惠月報_${files.length}場.zip`
+      )
+
+      setMessage(
+        `已完成 ${files.length} 個停車場計程車月報。`
+      )
+    } catch (
+      error: any
+    ) {
+      setMessage(
+        `計程車報表失敗：${error?.message || '未知錯誤'}`
+      )
+    } finally {
+      setTaxiDownloading(
+        false
+      )
+    }
+  }
+
+  async function shareTaxiReports() {
+    if (
+      taxiSharing
+    ) {
+      return
+    }
+
+    setTaxiSharing(
+      true
+    )
+
+    setMessage(
+      '正在準備手機分享檔案…'
+    )
+
+    try {
+      const files =
+        await createSelectedTaxiFiles()
+
+      if (
+        files.length ===
+        0
+      ) {
+        setMessage(
+          '沒有可分享的計程車報表。'
+        )
+
+        return
+      }
+
+      let shareFile:
+        File
+
+      if (
+        files.length ===
+        1
+      ) {
+        shareFile =
+          new File(
+            [
+              files[0].blob,
+            ],
+            files[0].fileName,
+            {
+              type:
+                'application/pdf',
+            }
+          )
+      } else {
+        const JSZip =
+          (
+            await import(
+              'jszip'
+            )
+          ).default
+
+        const zip =
+          new JSZip()
+
+        for (
+          const item of
+          files
+        ) {
+          zip.file(
+            item.fileName,
+            item.blob
+          )
+        }
+
+        const zipBlob =
+          await zip.generateAsync({
+            type:
+              'blob',
+
+            compression:
+              'DEFLATE',
+
+            compressionOptions: {
+              level:
+                6,
+            },
+          })
+
+        shareFile =
+          new File(
+            [
+              zipBlob,
+            ],
+            `${taxiMonth}_計程車優惠月報_${files.length}場.zip`,
+            {
+              type:
+                'application/zip',
+            }
+          )
+      }
+
+      if (
+        typeof navigator ===
+        'undefined' ||
+        typeof navigator.share !==
+        'function'
+      ) {
+        saveBlob(
+          shareFile,
+          shareFile.name
+        )
+
+        setMessage(
+          '此瀏覽器不支援直接分享檔案，已改為下載。下載後可從 LINE 選擇檔案傳送。'
+        )
+
+        return
+      }
+
+      const shareData:
+        ShareData = {
+        title:
+          `${taxiMonth} 計程車優惠月報`,
+
+        text:
+          `${taxiMonth} 計程車優惠月報`,
+
+        files: [
+          shareFile,
+        ],
+      }
+
+      const shareNavigator =
+        navigator as Navigator & {
+          canShare?: (
+            data:
+              ShareData
+          ) => boolean
+        }
+
+      if (
+        typeof shareNavigator.canShare ===
+          'function' &&
+        !shareNavigator.canShare(
+          shareData
+        )
+      ) {
+        saveBlob(
+          shareFile,
+          shareFile.name
+        )
+
+        setMessage(
+          '目前手機不支援直接分享此檔案格式，已改為下載。'
+        )
+
+        return
+      }
+
+      await navigator.share(
+        shareData
+      )
+
+      setMessage(
+        '已開啟手機分享功能，可選擇 LINE 與聊天對象。'
+      )
+    } catch (
+      error: any
+    ) {
+      if (
+        error?.name ===
+        'AbortError'
+      ) {
+        setMessage(
+          '已取消分享。'
+        )
+
+        return
+      }
+
+      setMessage(
+        `分享失敗：${error?.message || '未知錯誤'}`
+      )
+    } finally {
+      setTaxiSharing(
         false
       )
     }
@@ -1355,10 +2594,11 @@ export default function AccountingReportCenterPage() {
           報表中心
         </h1>
 
-        <p
+        <div
           style={{
             color:
               '#b91c1c',
+
             fontWeight:
               700,
           }}
@@ -1366,7 +2606,7 @@ export default function AccountingReportCenterPage() {
           {
             message
           }
-        </p>
+        </div>
       </div>
     )
   }
@@ -1383,11 +2623,12 @@ export default function AccountingReportCenterPage() {
           style={{
             marginTop:
               0,
+
             marginBottom:
               6,
           }}
         >
-          會計報表中心
+          報表中心
         </h1>
 
         <p
@@ -1397,7 +2638,7 @@ export default function AccountingReportCenterPage() {
               0,
           }}
         >
-          統一下載所有停車場的簽到表、最新月租名單與簽約新增／退租異動。
+          統一處理每月簽到表、最新月租名單、簽約異動及主管計程車折扣月報。
         </p>
       </div>
 
@@ -1409,56 +2650,31 @@ export default function AccountingReportCenterPage() {
         }}
       >
         <div
+          className="field"
           style={{
-            display:
-              'flex',
-            gap:
-              14,
-            alignItems:
-              'end',
-            flexWrap:
-              'wrap',
+            maxWidth:
+              260,
           }}
         >
-          <div
-            className="field"
-            style={{
-              minWidth:
-                220,
-            }}
-          >
-            <label>
-              報表月份
-            </label>
+          <label>
+            會計報表月份
+          </label>
 
-            <input
-              type="month"
-              value={
-                month
-              }
-              onChange={(
+          <input
+            type="month"
+            value={
+              month
+            }
+            onChange={(
+              event
+            ) =>
+              setMonth(
                 event
-              ) =>
-                setMonth(
-                  event
-                    .target
-                    .value
-                )
-              }
-            />
-          </div>
-
-          <button
-            type="button"
-            onClick={
-              loadMonthData
+                  .target
+                  .value
+              )
             }
-            disabled={
-              loading
-            }
-          >
-            重新整理本月資料
-          </button>
+          />
         </div>
       </div>
 
@@ -1466,10 +2682,13 @@ export default function AccountingReportCenterPage() {
         style={{
           display:
             'grid',
+
           gridTemplateColumns:
             'repeat(auto-fit,minmax(280px,1fr))',
+
           gap:
             16,
+
           marginTop:
             18,
         }}
@@ -1488,8 +2707,10 @@ export default function AccountingReportCenterPage() {
             style={{
               fontSize:
                 30,
+
               fontWeight:
                 800,
+
               margin:
                 '8px 0',
             }}
@@ -1512,7 +2733,7 @@ export default function AccountingReportCenterPage() {
             className="muted"
             style={{
               marginTop:
-                4,
+                5,
             }}
           >
             月份：
@@ -1538,8 +2759,8 @@ export default function AccountingReportCenterPage() {
             }}
           >
             {attendanceDownloading
-              ? '正在建立 ZIP…'
-              : '下載本月全部簽到表 ZIP'}
+              ? 'ZIP 建立中…'
+              : '下載本月簽到表 ZIP'}
           </button>
         </div>
 
@@ -1555,13 +2776,11 @@ export default function AccountingReportCenterPage() {
 
           <div
             style={{
-              marginTop:
-                12,
               lineHeight:
                 1.7,
             }}
           >
-            直接讀取月租管理目前最新資料，不使用快照。
+            每個停車場各產生一份 Excel，再統一壓縮成 ZIP。
           </div>
 
           <div
@@ -1571,7 +2790,7 @@ export default function AccountingReportCenterPage() {
                 8,
             }}
           >
-            建議每月 25 日由會計下載一次作帳版本。
+            下載內容為按下按鈕當下的最新月租資料，不使用快照。
           </div>
 
           <button
@@ -1589,8 +2808,8 @@ export default function AccountingReportCenterPage() {
             }}
           >
             {rentalDownloading
-              ? '正在製作 Excel…'
-              : '下載最新月租名單 Excel'}
+              ? 'ZIP 製作中…'
+              : '下載各停車場月租 ZIP'}
           </button>
         </div>
 
@@ -1608,16 +2827,16 @@ export default function AccountingReportCenterPage() {
             style={{
               display:
                 'flex',
+
               gap:
-                18,
+                20,
+
               marginTop:
-                12,
+                10,
             }}
           >
             <div>
-              <div
-                className="muted"
-              >
+              <div className="muted">
                 新增
               </div>
 
@@ -1625,6 +2844,7 @@ export default function AccountingReportCenterPage() {
                 style={{
                   fontSize:
                     26,
+
                   fontWeight:
                     800,
                 }}
@@ -1636,9 +2856,7 @@ export default function AccountingReportCenterPage() {
             </div>
 
             <div>
-              <div
-                className="muted"
-              >
+              <div className="muted">
                 退租
               </div>
 
@@ -1646,6 +2864,7 @@ export default function AccountingReportCenterPage() {
                 style={{
                   fontSize:
                     26,
+
                   fontWeight:
                     800,
                 }}
@@ -1664,7 +2883,7 @@ export default function AccountingReportCenterPage() {
                 8,
             }}
           >
-            僅包含新增與退租，不包含一般資料修改與續租日期異動。
+            僅包含新增與退租，不包含一般資料修改。
           </div>
 
           <button
@@ -1684,17 +2903,332 @@ export default function AccountingReportCenterPage() {
             }}
           >
             {changeDownloading
-              ? '正在製作 Excel…'
-              : '下載本月簽約異動 Excel'}
+              ? 'Excel 製作中…'
+              : '下載簽約異動 Excel'}
           </button>
         </div>
       </div>
+
+      {role ===
+        'supervisor' && (
+        <div
+          className="card"
+          style={{
+            marginTop:
+              20,
+          }}
+        >
+          <div
+            style={{
+              display:
+                'flex',
+
+              justifyContent:
+                'space-between',
+
+              alignItems:
+                'flex-start',
+
+              gap:
+                12,
+
+              flexWrap:
+                'wrap',
+            }}
+          >
+            <div>
+              <h2
+                style={{
+                  marginTop:
+                    0,
+
+                  marginBottom:
+                    6,
+                }}
+              >
+                計程車折扣月報
+              </h2>
+
+              <div className="muted">
+                主管專用。預設為上個月份，可自行指定需要輸出的停車場。
+              </div>
+            </div>
+
+            <div
+              className="field"
+              style={{
+                minWidth:
+                  210,
+              }}
+            >
+              <label>
+                計程車報表月份
+              </label>
+
+              <input
+                type="month"
+                value={
+                  taxiMonth
+                }
+                onChange={(
+                  event
+                ) =>
+                  setTaxiMonth(
+                    event
+                      .target
+                      .value
+                  )
+                }
+              />
+            </div>
+          </div>
+
+          <div
+            style={{
+              marginTop:
+                14,
+
+              padding:
+                12,
+
+              borderRadius:
+                10,
+
+              background:
+                '#f0f9ff',
+
+              color:
+                '#075985',
+            }}
+          >
+            平面停車場不需要計程車折扣時不要勾選。系統會在目前這台裝置記住你選過的停車場。
+          </div>
+
+          <div
+            style={{
+              display:
+                'flex',
+
+              gap:
+                8,
+
+              flexWrap:
+                'wrap',
+
+              marginTop:
+                14,
+
+              alignItems:
+                'center',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() =>
+                saveTaxiSelection(
+                  parkingLots.map(
+                    (
+                      lot
+                    ) =>
+                      lot.id
+                  )
+                )
+              }
+            >
+              全選
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                saveTaxiSelection(
+                  []
+                )
+              }
+            >
+              清除選取
+            </button>
+
+            <span className="muted">
+              已選{' '}
+              {
+                taxiSelectedLots.length
+              }{' '}
+              場
+            </span>
+          </div>
+
+          <div
+            style={{
+              display:
+                'grid',
+
+              gridTemplateColumns:
+                'repeat(auto-fit,minmax(230px,1fr))',
+
+              gap:
+                8,
+
+              marginTop:
+                14,
+
+              maxHeight:
+                360,
+
+              overflowY:
+                'auto',
+            }}
+          >
+            {parkingLots.map(
+              (
+                lot
+              ) => (
+                <label
+                  key={
+                    lot.id
+                  }
+                  style={{
+                    display:
+                      'flex',
+
+                    gap:
+                      8,
+
+                    alignItems:
+                      'center',
+
+                    padding:
+                      10,
+
+                    border:
+                      '1px solid #e5e7eb',
+
+                    borderRadius:
+                      8,
+
+                    background:
+                      taxiSelectedLots.includes(
+                        lot.id
+                      )
+                        ? '#eff6ff'
+                        : '#ffffff',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={
+                      taxiSelectedLots.includes(
+                        lot.id
+                      )
+                    }
+                    onChange={() =>
+                      toggleTaxiLot(
+                        lot.id
+                      )
+                    }
+                  />
+
+                  <span>
+                    {
+                      lot.name
+                    }
+                  </span>
+                </label>
+              )
+            )}
+          </div>
+
+          <div
+            style={{
+              display:
+                'flex',
+
+              gap:
+                10,
+
+              flexWrap:
+                'wrap',
+
+              marginTop:
+                18,
+            }}
+          >
+            <button
+              type="button"
+              className="btn"
+              disabled={
+                taxiDownloading ||
+                taxiSelectedLots.length ===
+                  0
+              }
+              onClick={
+                downloadTaxiReports
+              }
+            >
+              {taxiDownloading
+                ? '報表製作中…'
+                : taxiSelectedLots.length ===
+                    1
+                  ? '下載選取停車場 PDF'
+                  : '下載選取場站 ZIP'}
+            </button>
+
+            <button
+              type="button"
+              disabled={
+                taxiSharing ||
+                taxiSelectedLots.length ===
+                  0
+              }
+              onClick={
+                shareTaxiReports
+              }
+              style={{
+                padding:
+                  '10px 16px',
+
+                border:
+                  '1px solid #16a34a',
+
+                borderRadius:
+                  8,
+
+                background:
+                  '#f0fdf4',
+
+                color:
+                  '#166534',
+
+                fontWeight:
+                  700,
+
+                cursor:
+                  'pointer',
+              }}
+            >
+              {taxiSharing
+                ? '準備分享中…'
+                : '手機分享至 LINE'}
+            </button>
+          </div>
+
+          <div
+            className="muted"
+            style={{
+              marginTop:
+                10,
+            }}
+          >
+            選 1 場會產生單一 PDF；選多場會產生 ZIP。手機支援檔案分享時，可直接開啟系統分享選單後選擇 LINE。
+          </div>
+        </div>
+      )}
 
       <div
         className="card"
         style={{
           marginTop:
-            18,
+            20,
         }}
       >
         <h2
@@ -1716,7 +3250,7 @@ export default function AccountingReportCenterPage() {
             className="table"
             style={{
               minWidth:
-                760,
+                720,
             }}
           >
             <thead>
@@ -1780,6 +3314,7 @@ export default function AccountingReportCenterPage() {
                       style={{
                         textAlign:
                           'center',
+
                         padding:
                           24,
                       }}
@@ -1793,12 +3328,25 @@ export default function AccountingReportCenterPage() {
         </div>
       </div>
 
+      {loading && (
+        <div
+          className="muted"
+          style={{
+            marginTop:
+              12,
+          }}
+        >
+          報表資料讀取中…
+        </div>
+      )}
+
       {message && (
         <div
           className="card"
           style={{
             marginTop:
               16,
+
             whiteSpace:
               'pre-wrap',
           }}
