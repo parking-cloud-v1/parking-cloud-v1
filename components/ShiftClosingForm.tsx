@@ -72,10 +72,6 @@ export default function ShiftClosingForm({
   const [apsMonthlyAmount,setApsMonthlyAmount]=useState(num(initialReport?.aps_monthly_amount))
   const [electronicPaymentTotal,setElectronicPaymentTotal]=useState(num(initialReport?.electronic_payment_total))
   const [mobilePaymentTotal,setMobilePaymentTotal]=useState(num(initialReport?.mobile_payment_total))
-  const [refundNote,setRefundNote]=useState(initialReport?.refund_note || '')
-  const [refundAmount,setRefundAmount]=useState(num(initialReport?.refund_amount))
-  const [temporaryCash,setTemporaryCash]=useState(num(initialReport?.temporary_cash))
-  const [monthlyCash,setMonthlyCash]=useState(num(initialReport?.monthly_cash))
   const [operatorName,setOperatorName]=useState(initialReport?.operator_name || '')
   const [notes,setNotes]=useState(initialReport?.notes || '')
   const [details,setDetails]=useState<DetailRow[]>(
@@ -87,11 +83,32 @@ export default function ShiftClosingForm({
     }]
   )
 
-  const cashActual = useMemo(
-    ()=>num(amountPaid)-num(electronicPaymentTotal)-num(mobilePaymentTotal),
-    [amountPaid,electronicPaymentTotal,mobilePaymentTotal]
+  const digitalPaymentTotal = useMemo(
+    () =>
+      num(electronicPaymentTotal) +
+      num(mobilePaymentTotal),
+    [electronicPaymentTotal, mobilePaymentTotal]
   )
-  const dailyCashTotal = useMemo(()=>num(temporaryCash)+num(monthlyCash),[temporaryCash,monthlyCash])
+
+  const monthlyCash = useMemo(
+    () => num(apsMonthlyAmount),
+    [apsMonthlyAmount]
+  )
+
+  const temporaryCashActual = useMemo(
+    () =>
+      num(amountPaid) -
+      digitalPaymentTotal -
+      monthlyCash,
+    [amountPaid, digitalPaymentTotal, monthlyCash]
+  )
+
+  const dailyCashTotal = useMemo(
+    () =>
+      temporaryCashActual +
+      monthlyCash,
+    [temporaryCashActual, monthlyCash]
+  )
   const remittanceTotal = useMemo(
     ()=>details.reduce((sum,r)=>sum+num(r.temporary_cash)+num(r.monthly_cash),0),
     [details]
@@ -129,10 +146,10 @@ export default function ShiftClosingForm({
         aps_monthly_amount: num(apsMonthlyAmount),
         electronic_payment_total: num(electronicPaymentTotal),
         mobile_payment_total: num(mobilePaymentTotal),
-        cash_actual: num(cashActual),
-        refund_note: refundNote || null,
-        refund_amount: num(refundAmount),
-        temporary_cash: num(temporaryCash),
+        cash_actual: num(temporaryCashActual),
+        refund_note: null,
+        refund_amount: 0,
+        temporary_cash: num(temporaryCashActual),
         monthly_cash: num(monthlyCash),
         daily_cash_total: num(dailyCashTotal),
         remittance_total: num(remittanceTotal),
@@ -203,11 +220,9 @@ export default function ShiftClosingForm({
         <div className="field"><label>APS 本日月租金額</label><input type="number" value={apsMonthlyAmount} onChange={e=>setApsMonthlyAmount(num(e.target.value))}/></div>
         <div className="field"><label>電子支付本日總額</label><input type="number" value={electronicPaymentTotal} onChange={e=>setElectronicPaymentTotal(num(e.target.value))}/></div>
         <div className="field"><label>手機支付本日總額</label><input type="number" value={mobilePaymentTotal} onChange={e=>setMobilePaymentTotal(num(e.target.value))}/></div>
-        <div className="field"><label>扣除電子支付＋手機支付後的現金實收</label><input type="number" value={cashActual} readOnly/></div>
-        <div className="field"><label>退款金額</label><input type="number" value={refundAmount} onChange={e=>setRefundAmount(num(e.target.value))}/></div>
-        <div className="field" style={{gridColumn:'span 2'}}><label>退款說明</label><input value={refundNote} onChange={e=>setRefundNote(e.target.value)}/></div>
-        <div className="field"><label>本班臨停現金實收</label><input type="number" value={temporaryCash} onChange={e=>setTemporaryCash(num(e.target.value))}/></div>
-        <div className="field"><label>月租現金</label><input type="number" value={monthlyCash} onChange={e=>setMonthlyCash(num(e.target.value))}/></div>
+        <div className="field"><label>電子支付＋手機支付總和</label><input type="number" value={digitalPaymentTotal} readOnly/></div>
+        <div className="field"><label>本班臨停現金實收</label><input type="number" value={temporaryCashActual} readOnly/></div>
+        <div className="field"><label>月租現金</label><input type="number" value={monthlyCash} readOnly/></div>
         <div className="field"><label>當日現金總計</label><input type="number" value={dailyCashTotal} readOnly/></div>
       </div>
     </div>
