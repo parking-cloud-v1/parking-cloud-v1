@@ -35,7 +35,8 @@ type DenguePhoto = {
 }
 
 function todayText() {
-  const now = new Date()
+  const now =
+    new Date()
 
   const year =
     now.getFullYear()
@@ -62,9 +63,54 @@ function todayText() {
 function safeFileName(
   value: string
 ) {
-  return value.replace(
-    /[^a-zA-Z0-9._-]/g,
-    '_'
+  return String(
+    value || ''
+  )
+    .replace(
+      /[\\/:*?"<>|]/g,
+      '_'
+    )
+    .replace(
+      /\s+/g,
+      '_'
+    )
+}
+
+function createUuid() {
+  if (
+    typeof crypto !==
+      'undefined' &&
+    typeof crypto.randomUUID ===
+      'function'
+  ) {
+    return crypto.randomUUID()
+  }
+
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(
+    /[xy]/g,
+    (
+      char
+    ) => {
+      const random =
+        Math.floor(
+          Math.random() *
+            16
+        )
+
+      const value =
+        char ===
+        'x'
+          ? random
+          : (
+              random &
+              0x3
+            ) |
+            0x8
+
+      return value.toString(
+        16
+      )
+    }
   )
 }
 
@@ -137,6 +183,12 @@ export default function DenguePreventionPage() {
     useState(false)
 
   const [
+    downloadingRecordId,
+    setDownloadingRecordId,
+  ] =
+    useState('')
+
+  const [
     message,
     setMessage,
   ] =
@@ -161,8 +213,13 @@ export default function DenguePreventionPage() {
   ])
 
   async function loadParkingLots() {
-    setLoading(true)
-    setMessage('')
+    setLoading(
+      true
+    )
+
+    setMessage(
+      ''
+    )
 
     const {
       data,
@@ -190,7 +247,9 @@ export default function DenguePreventionPage() {
         `停車場讀取失敗：${error.message}`
       )
 
-      setLoading(false)
+      setLoading(
+        false
+      )
 
       return
     }
@@ -231,7 +290,9 @@ export default function DenguePreventionPage() {
       )
     }
 
-    setLoading(false)
+    setLoading(
+      false
+    )
   }
 
   async function loadRecords(
@@ -261,6 +322,13 @@ export default function DenguePreventionPage() {
         )
         .order(
           'work_date',
+          {
+            ascending:
+              false,
+          }
+        )
+        .order(
+          'created_at',
           {
             ascending:
               false,
@@ -339,7 +407,7 @@ export default function DenguePreventionPage() {
       5
     ) {
       alert(
-        '照片最多 5 張'
+        '佐證照片最多 5 張'
       )
     }
   }
@@ -373,7 +441,9 @@ export default function DenguePreventionPage() {
       return
     }
 
-    setMessage('')
+    setMessage(
+      ''
+    )
 
     if (
       !selectedLotId
@@ -381,6 +451,7 @@ export default function DenguePreventionPage() {
       setMessage(
         '請先選擇目前工作停車場'
       )
+
       return
     }
 
@@ -390,6 +461,7 @@ export default function DenguePreventionPage() {
       setMessage(
         '請選擇作業日期'
       )
+
       return
     }
 
@@ -399,6 +471,7 @@ export default function DenguePreventionPage() {
       setMessage(
         '請上傳登革熱防治表單'
       )
+
       return
     }
 
@@ -409,10 +482,13 @@ export default function DenguePreventionPage() {
       setMessage(
         '佐證照片必須上傳 5 張'
       )
+
       return
     }
 
-    setSaving(true)
+    setSaving(
+      true
+    )
 
     try {
       const {
@@ -430,11 +506,16 @@ export default function DenguePreventionPage() {
         setMessage(
           '登入狀態失效，請重新登入'
         )
+
         return
       }
 
+      /*
+       * 每筆紀錄都使用全新 UUID。
+       * 不會覆蓋舊資料。
+       */
       const recordId =
-        crypto.randomUUID()
+        createUuid()
 
       const formExt =
         formFile.name
@@ -443,7 +524,7 @@ export default function DenguePreventionPage() {
         'file'
 
       const formStoragePath =
-        `${selectedLotId}/${recordId}/form_${Date.now()}.${formExt}`
+        `${selectedLotId}/${recordId}/form_${createUuid()}.${formExt}`
 
       const {
         error:
@@ -469,6 +550,7 @@ export default function DenguePreventionPage() {
         setMessage(
           `表單上傳失敗：${formUploadError.message}`
         )
+
         return
       }
 
@@ -507,11 +589,25 @@ export default function DenguePreventionPage() {
       if (
         recordError
       ) {
+        await supabase
+          .storage
+          .from(
+            'dengue-prevention'
+          )
+          .remove([
+            formStoragePath,
+          ])
+
         setMessage(
           `建立登革熱紀錄失敗：${recordError.message}`
         )
+
         return
       }
+
+      const uploadedPhotoPaths:
+        string[] =
+        []
 
       for (
         let index = 0;
@@ -529,7 +625,7 @@ export default function DenguePreventionPage() {
           'jpg'
 
         const storagePath =
-          `${selectedLotId}/${recordId}/photo_${index + 1}_${Date.now()}.${ext}`
+          `${selectedLotId}/${recordId}/photo_${index + 1}_${createUuid()}.${ext}`
 
         const {
           error:
@@ -552,11 +648,49 @@ export default function DenguePreventionPage() {
         if (
           uploadError
         ) {
+          if (
+            uploadedPhotoPaths.length >
+            0
+          ) {
+            await supabase
+              .storage
+              .from(
+                'dengue-prevention'
+              )
+              .remove(
+                uploadedPhotoPaths
+              )
+          }
+
+          await supabase
+            .from(
+              'dengue_prevention_records'
+            )
+            .delete()
+            .eq(
+              'id',
+              recordId
+            )
+
+          await supabase
+            .storage
+            .from(
+              'dengue-prevention'
+            )
+            .remove([
+              formStoragePath,
+            ])
+
           setMessage(
             `第 ${index + 1} 張照片上傳失敗：${uploadError.message}`
           )
+
           return
         }
+
+        uploadedPhotoPaths.push(
+          storagePath
+        )
 
         const {
           error:
@@ -586,6 +720,7 @@ export default function DenguePreventionPage() {
           setMessage(
             `第 ${index + 1} 張照片紀錄失敗：${photoRowError.message}`
           )
+
           return
         }
       }
@@ -607,7 +742,7 @@ export default function DenguePreventionPage() {
       )
 
       setMessage(
-        '登革熱防治作業上傳完成'
+        '登革熱防治作業上傳完成，原有紀錄均已保留。'
       )
 
       await loadRecords(
@@ -621,7 +756,9 @@ export default function DenguePreventionPage() {
           '儲存失敗'
       )
     } finally {
-      setSaving(false)
+      setSaving(
+        false
+      )
     }
   }
 
@@ -648,8 +785,9 @@ export default function DenguePreventionPage() {
     ) {
       alert(
         error?.message ||
-          '檔案開啟失敗'
+          '表單開啟失敗'
       )
+
       return
     }
 
@@ -659,7 +797,7 @@ export default function DenguePreventionPage() {
     )
   }
 
-  async function openPhotos(
+  async function getRecordPhotos(
     recordId: string
   ) {
     const {
@@ -670,9 +808,13 @@ export default function DenguePreventionPage() {
         .from(
           'dengue_prevention_photos'
         )
-        .select(
-          'id, storage_path, file_name, sort_order'
-        )
+        .select(`
+          id,
+          record_id,
+          storage_path,
+          file_name,
+          sort_order
+        `)
         .eq(
           'record_id',
           recordId
@@ -684,136 +826,352 @@ export default function DenguePreventionPage() {
     if (
       error
     ) {
-      alert(
+      throw new Error(
         error.message
       )
-      return
     }
 
-    const rows =
-      (
-        data ||
-        []
-      ) as DenguePhoto[]
+    return (
+      data ||
+      []
+    ) as DenguePhoto[]
+  }
 
-    if (
-      rows.length ===
-      0
-    ) {
-      alert(
-        '目前沒有照片'
-      )
-      return
-    }
-
-    for (
-      const row of
-      rows
-    ) {
-      const {
-        data:
-          signedData,
-      } =
-        await supabase
-          .storage
-          .from(
-            'dengue-prevention'
-          )
-          .createSignedUrl(
-            row.storage_path,
-            60 * 10
-          )
+  async function openPhotos(
+    recordId: string
+  ) {
+    try {
+      const rows =
+        await getRecordPhotos(
+          recordId
+        )
 
       if (
-        signedData?.signedUrl
+        rows.length ===
+        0
       ) {
-        window.open(
-          signedData.signedUrl,
-          '_blank'
+        alert(
+          '目前沒有照片'
+        )
+
+        return
+      }
+
+      for (
+        const row of
+        rows
+      ) {
+        const {
+          data:
+            signedData,
+          error,
+        } =
+          await supabase
+            .storage
+            .from(
+              'dengue-prevention'
+            )
+            .createSignedUrl(
+              row.storage_path,
+              60 * 10
+            )
+
+        if (
+          !error &&
+          signedData?.signedUrl
+        ) {
+          window.open(
+            signedData.signedUrl,
+            '_blank'
+          )
+        }
+      }
+    } catch (
+      error: any
+    ) {
+      alert(
+        error?.message ||
+          '照片開啟失敗'
+      )
+    }
+  }
+
+  async function downloadPhotosZip(
+    record: DengueRecord
+  ) {
+    if (
+      downloadingRecordId
+    ) {
+      return
+    }
+
+    setDownloadingRecordId(
+      record.id
+    )
+
+    setMessage(
+      '照片下載中，正在建立 ZIP 壓縮檔…'
+    )
+
+    try {
+      const rows =
+        await getRecordPhotos(
+          record.id
+        )
+
+      if (
+        rows.length ===
+        0
+      ) {
+        setMessage(
+          '這筆紀錄沒有照片可下載'
+        )
+
+        return
+      }
+
+      const JSZip =
+        (
+          await import(
+            'jszip'
+          )
+        ).default
+
+      const zip =
+        new JSZip()
+
+      const folder =
+        zip.folder(
+          '登革熱防治照片'
+        )
+
+      if (
+        !folder
+      ) {
+        throw new Error(
+          'ZIP 建立失敗'
         )
       }
+
+      for (
+        let index = 0;
+        index <
+        rows.length;
+        index++
+      ) {
+        const row =
+          rows[index]
+
+        const {
+          data:
+            fileBlob,
+          error:
+            downloadError,
+        } =
+          await supabase
+            .storage
+            .from(
+              'dengue-prevention'
+            )
+            .download(
+              row.storage_path
+            )
+
+        if (
+          downloadError ||
+          !fileBlob
+        ) {
+          throw new Error(
+            `第 ${index + 1} 張照片下載失敗：${
+              downloadError?.message ||
+              '未知錯誤'
+            }`
+          )
+        }
+
+        const originalName =
+          row.file_name ||
+          `photo_${index + 1}.jpg`
+
+        const zipFileName =
+          `${String(
+            index + 1
+          ).padStart(
+            2,
+            '0'
+          )}_${safeFileName(
+            originalName
+          )}`
+
+        folder.file(
+          zipFileName,
+          fileBlob
+        )
+      }
+
+      const zipBlob =
+        await zip.generateAsync({
+          type:
+            'blob',
+
+          compression:
+            'DEFLATE',
+
+          compressionOptions: {
+            level:
+              6,
+          },
+        })
+
+      const url =
+        URL.createObjectURL(
+          zipBlob
+        )
+
+      const link =
+        document.createElement(
+          'a'
+        )
+
+      const lotName =
+        safeFileName(
+          currentLot?.name ||
+          '停車場'
+        )
+
+      link.href =
+        url
+
+      link.download =
+        `${lotName}_${record.work_date}_登革熱防治照片.zip`
+
+      document.body.appendChild(
+        link
+      )
+
+      link.click()
+
+      document.body.removeChild(
+        link
+      )
+
+      setTimeout(
+        () => {
+          URL.revokeObjectURL(
+            url
+          )
+        },
+        1000
+      )
+
+      setMessage(
+        `${rows.length} 張照片已完成打包並下載 ZIP。`
+      )
+    } catch (
+      error: any
+    ) {
+      setMessage(
+        `ZIP 下載失敗：${
+          error?.message ||
+          '未知錯誤'
+        }`
+      )
+    } finally {
+      setDownloadingRecordId(
+        ''
+      )
     }
   }
 
   async function deleteRecord(
     record: DengueRecord
   ) {
-    if (
-      !window.confirm(
-        `確定刪除 ${record.work_date} 的登革熱防治紀錄？`
+    const confirmed =
+      window.confirm(
+        `確定刪除這筆登革熱防治紀錄？\n\n作業日期：${record.work_date}\n表單：${record.form_file_name}\n\n刪除後表單及 5 張照片都無法復原。`
       )
+
+    if (
+      !confirmed
     ) {
       return
     }
 
-    const {
-      data:
-        photoRows,
-    } =
-      await supabase
-        .from(
-          'dengue_prevention_photos'
-        )
-        .select(
-          'storage_path'
-        )
-        .eq(
-          'record_id',
+    try {
+      const photoRows =
+        await getRecordPhotos(
           record.id
         )
 
-    const storagePaths =
-      [
-        record.form_storage_path,
-        ...(
-          photoRows ||
-          []
-        ).map(
-          (
-            item: any
-          ) =>
-            item.storage_path
-        ),
-      ]
+      const {
+        error:
+          deleteError,
+      } =
+        await supabase
+          .from(
+            'dengue_prevention_records'
+          )
+          .delete()
+          .eq(
+            'id',
+            record.id
+          )
+          .eq(
+            'parking_lot_id',
+            selectedLotId
+          )
 
-    await supabase
-      .storage
-      .from(
-        'dengue-prevention'
+      if (
+        deleteError
+      ) {
+        setMessage(
+          `刪除失敗：${deleteError.message}`
+        )
+
+        return
+      }
+
+      const storagePaths =
+        [
+          record.form_storage_path,
+
+          ...photoRows.map(
+            (
+              row
+            ) =>
+              row.storage_path
+          ),
+        ]
+
+      if (
+        storagePaths.length >
+        0
+      ) {
+        await supabase
+          .storage
+          .from(
+            'dengue-prevention'
+          )
+          .remove(
+            storagePaths
+          )
+      }
+
+      setMessage(
+        '登革熱防治紀錄已刪除'
       )
-      .remove(
-        storagePaths
+
+      await loadRecords(
+        selectedLotId
       )
-
-    const {
-      error,
-    } =
-      await supabase
-        .from(
-          'dengue_prevention_records'
-        )
-        .delete()
-        .eq(
-          'id',
-          record.id
-        )
-        .eq(
-          'parking_lot_id',
-          selectedLotId
-        )
-
-    if (
-      error
+    } catch (
+      error: any
     ) {
       setMessage(
-        `刪除失敗：${error.message}`
+        error?.message ||
+          '刪除失敗'
       )
-      return
     }
-
-    await loadRecords(
-      selectedLotId
-    )
   }
 
   return (
@@ -875,6 +1233,23 @@ export default function DenguePreventionPage() {
           <h2>
             新增防治作業
           </h2>
+
+          <div
+            style={{
+              marginBottom:
+                16,
+              padding:
+                12,
+              borderRadius:
+                8,
+              background:
+                '#f0f9ff',
+              color:
+                '#075985',
+            }}
+          >
+            每次上傳都會建立一筆全新紀錄，不會自動覆蓋任何舊表單或照片。
+          </div>
 
           <div
             style={{
@@ -980,6 +1355,7 @@ export default function DenguePreventionPage() {
                       6,
                   }}
                 >
+                  已選擇：
                   {
                     formFile.name
                   }
@@ -1004,6 +1380,8 @@ export default function DenguePreventionPage() {
                   'center',
                 gap:
                   10,
+                flexWrap:
+                  'wrap',
               }}
             >
               <div>
@@ -1014,7 +1392,7 @@ export default function DenguePreventionPage() {
                 <div
                   className="muted"
                 >
-                  必須上傳 5 張
+                  每筆必須上傳 5 張
                 </div>
               </div>
 
@@ -1060,7 +1438,7 @@ export default function DenguePreventionPage() {
                   index
                 ) => (
                   <div
-                    key={`${file.name}-${index}`}
+                    key={`${file.name}-${file.lastModified}-${index}`}
                     style={{
                       border:
                         '1px solid #cbd5e1',
@@ -1093,7 +1471,26 @@ export default function DenguePreventionPage() {
                           6,
                       }}
                     >
-                      照片 {index + 1}
+                      照片{' '}
+                      {index + 1}
+                    </div>
+
+                    <div
+                      className="muted"
+                      style={{
+                        fontSize:
+                          12,
+                        overflow:
+                          'hidden',
+                        textOverflow:
+                          'ellipsis',
+                        whiteSpace:
+                          'nowrap',
+                      }}
+                    >
+                      {
+                        file.name
+                      }
                     </div>
 
                     <button
@@ -1122,7 +1519,9 @@ export default function DenguePreventionPage() {
                   8,
               }}
             >
-              已選 {photos.length} / 5 張
+              已選{' '}
+              {photos.length}{' '}
+              / 5 張
             </div>
           </div>
 
@@ -1166,7 +1565,7 @@ export default function DenguePreventionPage() {
           >
             {saving
               ? '上傳中…'
-              : '儲存登革熱防治作業'}
+              : '新增登革熱防治紀錄'}
           </button>
 
           {message && (
@@ -1174,6 +1573,16 @@ export default function DenguePreventionPage() {
               style={{
                 marginTop:
                   14,
+                padding:
+                  10,
+                borderRadius:
+                  8,
+                background:
+                  message.includes(
+                    '完成'
+                  )
+                    ? '#ecfdf5'
+                    : '#f8fafc',
               }}
             >
               {
@@ -1191,21 +1600,51 @@ export default function DenguePreventionPage() {
             20,
         }}
       >
-        <h2>
-          歷史紀錄
-        </h2>
+        <div
+          style={{
+            display:
+              'flex',
+            justifyContent:
+              'space-between',
+            alignItems:
+              'center',
+            gap:
+              12,
+            flexWrap:
+              'wrap',
+          }}
+        >
+          <h2
+            style={{
+              margin:
+                0,
+            }}
+          >
+            歷史紀錄
+          </h2>
+
+          <span
+            className="muted"
+          >
+            共{' '}
+            {records.length}{' '}
+            筆
+          </span>
+        </div>
 
         <div
           style={{
             overflowX:
               'auto',
+            marginTop:
+              14,
           }}
         >
           <table
             className="table"
             style={{
               minWidth:
-                850,
+                1050,
             }}
           >
             <thead>
@@ -1227,7 +1666,15 @@ export default function DenguePreventionPage() {
                 </th>
 
                 <th>
+                  一鍵下載
+                </th>
+
+                <th>
                   備註
+                </th>
+
+                <th>
+                  上傳時間
                 </th>
 
                 <th>
@@ -1279,13 +1726,43 @@ export default function DenguePreventionPage() {
                           )
                         }
                       >
-                        查看 5 張照片
+                        查看照片
+                      </button>
+                    </td>
+
+                    <td>
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() =>
+                          downloadPhotosZip(
+                            record
+                          )
+                        }
+                        disabled={
+                          Boolean(
+                            downloadingRecordId
+                          )
+                        }
+                      >
+                        {downloadingRecordId ===
+                        record.id
+                          ? '壓縮中…'
+                          : '下載全部照片 ZIP'}
                       </button>
                     </td>
 
                     <td>
                       {record.notes ||
                         '-'}
+                    </td>
+
+                    <td>
+                      {new Date(
+                        record.created_at
+                      ).toLocaleString(
+                        'zh-TW'
+                      )}
                     </td>
 
                     <td>
@@ -1314,7 +1791,7 @@ export default function DenguePreventionPage() {
                   <tr>
                     <td
                       colSpan={
-                        6
+                        8
                       }
                       style={{
                         textAlign:
