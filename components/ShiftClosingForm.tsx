@@ -59,6 +59,23 @@ function localDateTime(value?: string | null) {
   )}-${pad(date.getDate())}T${pad(
     date.getHours()
   )}:${pad(date.getMinutes())}`
+
+}
+
+function datePartFromDateTimeLocal(
+  value: string,
+  fallback: string
+) {
+  if (!value) {
+    return fallback
+  }
+
+  const match =
+    value.match(
+      /^(\d{4}-\d{2}-\d{2})/
+    )
+
+  return match?.[1] || fallback
 }
 
 export default function ShiftClosingForm({
@@ -223,11 +240,21 @@ export default function ShiftClosingForm({
         : [
             {
               detail_start_date:
-                initialReport?.closing_date ||
-                today,
+                datePartFromDateTimeLocal(
+                  localDateTime(
+                    initialReport?.shift_start_at
+                  ),
+                  initialReport?.closing_date ||
+                    today
+                ),
               detail_end_date:
-                initialReport?.closing_date ||
-                today,
+                datePartFromDateTimeLocal(
+                  localDateTime(
+                    initialReport?.shift_end_at
+                  ),
+                  initialReport?.closing_date ||
+                    today
+                ),
               temporary_cash: 0,
               monthly_cash: 0,
             },
@@ -305,11 +332,15 @@ export default function ShiftClosingForm({
             ? {
                 ...item,
                 detail_start_date:
-                  item.detail_start_date ||
-                  closingDate,
+                  datePartFromDateTimeLocal(
+                    shiftStartAt,
+                    closingDate
+                  ),
                 detail_end_date:
-                  item.detail_end_date ||
-                  closingDate,
+                  datePartFromDateTimeLocal(
+                    shiftEndAt,
+                    closingDate
+                  ),
                 temporary_cash:
                   temporaryCashActual,
                 monthly_cash:
@@ -322,6 +353,8 @@ export default function ShiftClosingForm({
     temporaryCashActual,
     apsMonthlyCash,
     closingDate,
+    shiftStartAt,
+    shiftEndAt,
   ])
 
   const remittanceTotal =
@@ -366,9 +399,15 @@ export default function ShiftClosingForm({
       ...current,
       {
         detail_start_date:
-          closingDate,
+          datePartFromDateTimeLocal(
+            shiftStartAt,
+            closingDate
+          ),
         detail_end_date:
-          closingDate,
+          datePartFromDateTimeLocal(
+            shiftEndAt,
+            closingDate
+          ),
         temporary_cash: 0,
         monthly_cash: 0,
       },
@@ -1224,7 +1263,7 @@ export default function ShiftClosingForm({
 
           <div className="field">
             <label>
-              電子支付本日總額
+              電子支付本日總額（悠遊卡、一卡通）
             </label>
 
             <input
@@ -1247,7 +1286,7 @@ export default function ShiftClosingForm({
 
           <div className="field">
             <label>
-              手機支付本日總額
+              手機支付本日總額（LINE PAY、街口、悠遊付）
             </label>
 
             <input

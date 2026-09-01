@@ -30,9 +30,7 @@ type Rental = {
 type DueFilter =
   | 'all'
   | 'expired'
-  | '7'
-  | '14'
-  | '30'
+  | '20'
 
 function vehicleTypeText(
   value: string
@@ -130,7 +128,13 @@ function dueText(
     return '今天到期'
   }
 
-  return `${days} 天後到期`
+  if (
+    days <= 20
+  ) {
+    return `${days} 天後到期`
+  }
+
+  return '超過 20 天'
 }
 
 function escapeCsv(
@@ -194,7 +198,7 @@ export default function SmsListPage() {
     setDueFilter,
   ] =
     useState<DueFilter>(
-      'all'
+      '20'
     )
 
   const [
@@ -578,7 +582,7 @@ export default function SmsListPage() {
           <div
             className="muted"
           >
-            顯示目前「未繳費＋在租中」的月租戶，供每月繳費提醒使用。
+            顯示目前「未繳費＋在租中」的月租戶，預設以到期前 20 天內為提醒範圍。
           </div>
         </div>
 
@@ -698,24 +702,16 @@ export default function SmsListPage() {
                 )
               }
             >
-              <option value="all">
-                全部未繳
+              <option value="20">
+                20 天內到期
               </option>
 
               <option value="expired">
                 已到期
               </option>
 
-              <option value="7">
-                7 天內到期
-              </option>
-
-              <option value="14">
-                14 天內到期
-              </option>
-
-              <option value="30">
-                30 天內到期
+              <option value="all">
+                全部未繳
               </option>
             </select>
           </div>
