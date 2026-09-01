@@ -301,12 +301,20 @@ export default async function DashboardShell({
           </Link>
 
           <Link href="/dashboard/disaster-inspections">
-            防災檢查
-          </Link>
+  防災檢查
+</Link>
 
-          <Link href="/dashboard/shift-closing">
-            當日結班報表
-          </Link>
+<Link href="/dashboard/dengue-prevention">
+  登革熱防治作業
+</Link>
+
+<Link href="/dashboard/monthly-attendance">
+  每月簽到表
+</Link>
+
+<Link href="/dashboard/shift-closing">
+  當日結班報表
+</Link>
         </aside>
 
         <main className="main">
