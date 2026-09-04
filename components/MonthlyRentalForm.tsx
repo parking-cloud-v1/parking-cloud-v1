@@ -16,6 +16,7 @@ type ParkingLot = {
 type InitialData = {
   waitingId?: string
   parkingLotId?: string
+  customerCode?: string
   customerName?: string
   phone?: string
   vehiclePlate?: string
@@ -47,6 +48,11 @@ export default function MonthlyRentalForm({
 
   const [parkingLotId, setParkingLotId] =
     useState(defaultLotId)
+
+  const [customerCode, setCustomerCode] =
+    useState(
+      initialData?.customerCode || ''
+    )
 
   const [customerName, setCustomerName] =
     useState(
@@ -137,6 +143,15 @@ export default function MonthlyRentalForm({
       }
 
       if (
+        !customerCode.trim()
+      ) {
+        setMessage(
+          '請輸入客戶編號'
+        )
+        return
+      }
+
+      if (
         !customerName.trim()
       ) {
         setMessage(
@@ -174,6 +189,17 @@ export default function MonthlyRentalForm({
       ) {
         setMessage(
           '到期日不可早於起租日'
+        )
+        return
+      }
+
+      if (
+        paymentStatus ===
+          'paid' &&
+        !paymentDate
+      ) {
+        setMessage(
+          '已選擇「已繳」，請填寫收款日期'
         )
         return
       }
@@ -221,6 +247,58 @@ export default function MonthlyRentalForm({
         return
       }
 
+      /*
+       * 客戶編號是後續月租總表同步的重要識別值。
+       * 手動新增時先檢查同一停車場是否已有使用中的相同客戶編號，
+       * 避免之後 CSV / Excel 同步時誤認成同一筆。
+       */
+      const {
+        data:
+          duplicateCustomer,
+        error:
+          duplicateCustomerError,
+      } =
+        await supabase
+          .from(
+            'monthly_rentals'
+          )
+          .select(
+            'id, customer_name, vehicle_plate'
+          )
+          .eq(
+            'parking_lot_id',
+            parkingLotId
+          )
+          .eq(
+            'customer_code',
+            customerCode.trim()
+          )
+          .neq(
+            'rental_status',
+            'cancelled'
+          )
+          .limit(1)
+          .maybeSingle()
+
+      if (
+        duplicateCustomerError
+      ) {
+        setMessage(
+          '客戶編號檢查失敗：' +
+            duplicateCustomerError.message
+        )
+        return
+      }
+
+      if (
+        duplicateCustomer
+      ) {
+        setMessage(
+          `客戶編號 ${customerCode.trim()} 已存在，目前為 ${duplicateCustomer.customer_name || '未填姓名'}／${duplicateCustomer.vehicle_plate || '未填車牌'}，請確認是否重複新增。`
+        )
+        return
+      }
+
       const {
         data:
           createdRental,
@@ -234,6 +312,9 @@ export default function MonthlyRentalForm({
           .insert({
             parking_lot_id:
               parkingLotId,
+
+            customer_code:
+              customerCode.trim(),
 
             customer_name:
               customerName.trim(),
@@ -513,6 +594,37 @@ export default function MonthlyRentalForm({
           className="field"
         >
           <label>
+            客戶編號 *
+          </label>
+
+          <input
+            type="text"
+            value={
+              customerCode
+            }
+            onChange={(
+              e
+            ) =>
+              setCustomerCode(
+                e.target
+                  .value
+              )
+            }
+            placeholder="例如：3506"
+            required
+          />
+
+          <small
+            className="muted"
+          >
+            後續月租總表同步會優先使用客戶編號辨識，請與原停車系統一致。
+          </small>
+        </div>
+
+        <div
+          className="field"
+        >
+          <label>
             姓名 *
           </label>
 
@@ -726,7 +838,7 @@ export default function MonthlyRentalForm({
           className="field"
         >
           <label>
-            付款狀態
+            付款狀態 *
           </label>
 
           <select
@@ -743,6 +855,7 @@ export default function MonthlyRentalForm({
                   | 'paid'
               )
             }
+            required
           >
             <option value="unpaid">
               未繳
@@ -769,6 +882,7 @@ export default function MonthlyRentalForm({
                 value={
                   paymentDate
                 }
+                required
                 onChange={(
                   e
                 ) =>
