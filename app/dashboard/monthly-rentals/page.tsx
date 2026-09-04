@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/server'
 import MonthlyRentalActions from '@/components/MonthlyRentalActions'
 import ExcelExportButton from '@/components/ExcelExportButton'
 import CsvImportButton from '@/components/CsvImportButton'
-import MonthlyRentalLotLock from '@/components/MonthlyRentalLotLock'
+import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
 
 function formatRentalPeriod(
   startDate?: string | null,
@@ -209,8 +209,13 @@ export default async function MonthlyRentalsPage({
   const q =
     params.q || ''
 
+  /*
+   * 全系統目前工作停車場：
+   * 由左側 WorkParkingLotSelector 寫入 cookie，
+   * 月租管理只跟著這個場站，不再自己另選停車場。
+   */
   const lot =
-    params.lot || ''
+    await getCurrentWorkParkingLotId()
 
   const payment =
     params.payment || ''
@@ -349,13 +354,15 @@ export default async function MonthlyRentalsPage({
       )
   }
 
-  if (lot) {
-    query =
-      query.eq(
-        'parking_lot_id',
-        lot
-      )
-  }
+  const effectiveLotId =
+    lot ||
+    '00000000-0000-0000-0000-000000000000'
+
+  query =
+    query.eq(
+      'parking_lot_id',
+      effectiveLotId
+    )
 
   if (payment) {
     query =
@@ -633,11 +640,48 @@ export default async function MonthlyRentalsPage({
           </Link>
         </div>
       </div>
+      <div
+        className="card"
+        style={{
+          marginTop: 20,
+          padding: 16,
+          background: '#f8fafc',
+        }}
+      >
+        <div
+          style={{
+            fontSize: 13,
+            color: '#64748b',
+            marginBottom: 4,
+          }}
+        >
+          目前工作停車場
+        </div>
 
-      <MonthlyRentalLotLock
-        parkingLots={parkingLotOptions}
-        currentLotId={lot}
-      />
+        <strong
+          style={{
+            fontSize: 18,
+          }}
+        >
+          {parkingLotOptions.find(
+            (item: any) =>
+              item.id === lot
+          )?.name ||
+            '尚未選擇工作停車場'}
+        </strong>
+
+        {!lot && (
+          <div
+            style={{
+              marginTop: 8,
+              color: '#dc2626',
+              fontSize: 13,
+            }}
+          >
+            請先從左側「目前工作停車場」選擇場站。
+          </div>
+        )}
+      </div>
 
       {/* 統計 */}
 
@@ -752,14 +796,6 @@ export default async function MonthlyRentalsPage({
             />
           </div>
 
-          {lot && (
-            <input
-              type="hidden"
-              name="lot"
-              value={lot}
-            />
-          )}
-
           <div className="field">
             <label>
               付款
@@ -827,9 +863,7 @@ export default async function MonthlyRentalsPage({
 
             <Link
               href={
-                lot
-                  ? `/dashboard/monthly-rentals?lot=${encodeURIComponent(lot)}`
-                  : '/dashboard/monthly-rentals'
+                '/dashboard/monthly-rentals'
               }
               style={{
                 padding:

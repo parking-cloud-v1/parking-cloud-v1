@@ -7,6 +7,7 @@ import {
   useState,
 } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useWorkParkingLotId } from '@/components/useWorkParkingLot'
 
 type ParkingLot = {
   id: string
@@ -585,11 +586,12 @@ export default function TaxiDiscountPage() {
       ParkingLot[]
     >([])
 
-  const [
-    selectedLotId,
-    setSelectedLotId,
-  ] =
-    useState('')
+  /*
+   * 計程車折扣只使用左側全系統「目前工作停車場」。
+   * 不再在本頁另外選場，避免跟其他模組不同步。
+   */
+  const selectedLotId =
+    useWorkParkingLotId()
 
   const [
     vehiclePlate,
@@ -773,15 +775,6 @@ export default function TaxiDiscountPage() {
     setParkingLots(
       lots
     )
-
-    if (
-      lots.length >
-      0
-    ) {
-      setSelectedLotId(
-        lots[0].id
-      )
-    }
 
     setLoading(
       false
@@ -1690,41 +1683,42 @@ export default function TaxiDiscountPage() {
               className="field"
             >
               <label>
-                停車場
+                目前工作停車場
               </label>
 
-              <select
-                value={
-                  selectedLotId
-                }
-                onChange={(
-                  e
-                ) =>
-                  setSelectedLotId(
-                    e.target
-                      .value
-                  )
-                }
+              <div
+                style={{
+                  minHeight: 42,
+                  display: 'flex',
+                  alignItems: 'center',
+                  padding: '9px 12px',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: 8,
+                  background: '#f8fafc',
+                  fontWeight: 700,
+                }}
               >
-                {parkingLots.map(
+                {parkingLots.find(
                   (
                     lot
-                  ) => (
-                    <option
-                      key={
-                        lot.id
-                      }
-                      value={
-                        lot.id
-                      }
-                    >
-                      {
-                        lot.name
-                      }
-                    </option>
-                  )
-                )}
-              </select>
+                  ) =>
+                    lot.id ===
+                    selectedLotId
+                )?.name ||
+                  '尚未選擇工作停車場'}
+              </div>
+
+              {!selectedLotId && (
+                <div
+                  style={{
+                    marginTop: 6,
+                    color: '#dc2626',
+                    fontSize: 13,
+                  }}
+                >
+                  請先從左側「目前工作停車場」選擇場站。
+                </div>
+              )}
             </div>
 
             <div
