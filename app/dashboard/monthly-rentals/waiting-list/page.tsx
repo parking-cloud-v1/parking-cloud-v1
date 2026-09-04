@@ -10,6 +10,10 @@ import {
   createClient,
 } from '@/lib/supabase/client'
 
+import {
+  useWorkParkingLotId,
+} from '@/components/useWorkParkingLot'
+
 type ParkingLot = {
   id: string
   name: string
@@ -130,10 +134,15 @@ export default function WaitingListPage() {
     WaitingRow[]
   >([])
 
-  const [
-    selectedLotId,
-    setSelectedLotId,
-  ] = useState('')
+  /*
+   * 月租候補名單只跟隨左側
+   * 「目前工作停車場」。
+   *
+   * 不在本頁另外選場，避免和
+   * 月租管理、計程車折扣不同步。
+   */
+  const selectedLotId =
+    useWorkParkingLotId()
 
   const [
     search,
@@ -237,13 +246,6 @@ export default function WaitingListPage() {
         lots
       )
 
-      if (
-        lots.length > 0
-      ) {
-        setSelectedLotId(
-          lots[0].id
-        )
-      }
     } catch (
       error: any
     ) {
@@ -990,11 +992,20 @@ export default function WaitingListPage() {
         <button
           type="button"
           className="btn"
-          onClick={() =>
+          onClick={() => {
+            if (
+              !selectedLotId
+            ) {
+              setMessage(
+                '請先從左側「目前工作停車場」選擇場站。'
+              )
+              return
+            }
+
             setShowForm(
               true
             )
-          }
+          }}
         >
           ＋ 新增候補
         </button>
@@ -1018,41 +1029,47 @@ export default function WaitingListPage() {
             className="field"
           >
             <label>
-              停車場
+              目前工作停車場
             </label>
 
-            <select
-              value={
-                selectedLotId
-              }
-              onChange={(
-                event
-              ) => {
-                setSelectedLotId(
-                  event.target
-                    .value
-                )
-
-                setMessage('')
+            <div
+              style={{
+                minHeight:
+                  42,
+                display:
+                  'flex',
+                alignItems:
+                  'center',
+                padding:
+                  '9px 12px',
+                border:
+                  '1px solid #cbd5e1',
+                borderRadius:
+                  8,
+                background:
+                  '#f8fafc',
+                fontWeight:
+                  700,
               }}
             >
-              {parkingLots.map(
-                (lot) => (
-                  <option
-                    key={
-                      lot.id
-                    }
-                    value={
-                      lot.id
-                    }
-                  >
-                    {
-                      lot.name
-                    }
-                  </option>
-                )
-              )}
-            </select>
+              {selectedLot?.name ||
+                '尚未選擇工作停車場'}
+            </div>
+
+            {!selectedLotId && (
+              <div
+                style={{
+                  marginTop:
+                    6,
+                  color:
+                    '#dc2626',
+                  fontSize:
+                    13,
+                }}
+              >
+                請先從左側「目前工作停車場」選擇場站。
+              </div>
+            )}
           </div>
 
           <div
