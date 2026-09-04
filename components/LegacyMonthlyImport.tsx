@@ -41,6 +41,14 @@ type PreviewRow = {
   transaction_no: string
   notes: string
 
+  payment_status?:
+    | 'paid'
+    | 'unpaid'
+
+  payment_date?: string
+  invoice_number?: string
+  source_sheet?: string
+
   valid: boolean
   error: string
 }
@@ -371,6 +379,694 @@ async function decodeFile(file: File) {
     .replace(/^\uFEFF/, '')
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
+}
+
+
+function excelSerialToDate(
+  value: number
+) {
+  if (
+    !Number.isFinite(
+      value
+    ) ||
+    value <= 0
+  ) {
+    return ''
+  }
+
+  const excelEpoch =
+    Date.UTC(
+      1899,
+      11,
+      30
+    )
+
+  const date =
+    new Date(
+      excelEpoch +
+        Math.round(
+          value
+        ) *
+          86400000
+    )
+
+  return `${date.getUTCFullYear()}-${String(
+    date.getUTCMonth() + 1
+  ).padStart(
+    2,
+    '0'
+  )}-${String(
+    date.getUTCDate()
+  ).padStart(
+    2,
+    '0'
+  )}`
+}
+
+function rocYearToAd(
+  rocYear: number
+) {
+  return rocYear + 1911
+}
+
+function endOfMonthText(
+  year: number,
+  month: number
+) {
+  const date =
+    new Date(
+      year,
+      month,
+      0
+    )
+
+  return `${year}-${String(
+    month
+  ).padStart(
+    2,
+    '0'
+  )}-${String(
+    date.getDate()
+  ).padStart(
+    2,
+    '0'
+  )}`
+}
+
+function normalize408Phone(
+  value: any
+) {
+  const digits =
+    String(
+      value ?? ''
+    )
+      .replace(
+        /\D/g,
+        ''
+      )
+
+  if (
+    digits.length === 9 &&
+    digits.startsWith(
+      '9'
+    )
+  ) {
+    return `0${digits}`
+  }
+
+  return digits
+}
+
+function paymentDateFrom408Cell(
+  value: any,
+  periodYear: number,
+  periodStartMonth: number
+) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ''
+  ) {
+    return ''
+  }
+
+  if (
+    typeof value ===
+      'number' &&
+    Number.isFinite(
+      value
+    )
+  ) {
+    return excelSerialToDate(
+      value
+    )
+  }
+
+  const source =
+    String(
+      value
+    ).trim()
+
+  if (!source) {
+    return ''
+  }
+
+  const normal =
+    normalizeDate(
+      source
+    )
+
+  if (normal) {
+    return normal
+  }
+
+  const md =
+    source.match(
+      /(\d{1,2})\s*月\s*(\d{1,2})\s*日/
+    )
+
+  if (md) {
+    const month =
+      Number(
+        md[1]
+      )
+
+    const day =
+      Number(
+        md[2]
+      )
+
+    let year =
+      periodYear
+
+    /*
+     * 例如 1-2 月期別，
+     * 若繳費日在前一年的 12 月，
+     * 自動往前一年。
+     */
+    if (
+      periodStartMonth <= 2 &&
+      month >= 11
+    ) {
+      year--
+    }
+
+    return `${year}-${String(
+      month
+    ).padStart(
+      2,
+      '0'
+    )}-${String(
+      day
+    ).padStart(
+      2,
+      '0'
+    )}`
+  }
+
+  return ''
+}
+
+async function parse408Workbook(
+  file: File
+) {
+  const XLSX =
+    await import(
+      'xlsx'
+    )
+
+  const buffer =
+    await file.arrayBuffer()
+
+  const workbook =
+    XLSX.read(
+      buffer,
+      {
+        type:
+          'array',
+
+        cellDates:
+          false,
+
+        raw:
+          true,
+      }
+    )
+
+  const candidates =
+    workbook.SheetNames
+      .map(
+        (
+          sheetName
+        ) => {
+          const match =
+            sheetName.match(
+              /^408巷(\d{3})-(\d{2})-(\d{2})$/
+            )
+
+          if (!match) {
+            return null
+          }
+
+          return {
+            sheetName,
+
+            rocYear:
+              Number(
+                match[1]
+              ),
+
+            startMonth:
+              Number(
+                match[2]
+              ),
+
+            endMonth:
+              Number(
+                match[3]
+              ),
+          }
+        }
+      )
+      .filter(
+        Boolean
+      ) as {
+        sheetName:
+          string
+        rocYear:
+          number
+        startMonth:
+          number
+        endMonth:
+          number
+      }[]
+
+  if (
+    candidates.length ===
+    0
+  ) {
+    throw new Error(
+      '這份 Excel 找不到 408巷月租工作表，例如「408巷115-09-10」。'
+    )
+  }
+
+  const now =
+    new Date()
+
+  const currentRocYear =
+    now.getFullYear() -
+    1911
+
+  const currentMonth =
+    now.getMonth() + 1
+
+  /*
+   * 優先抓「目前月份所屬期別」。
+   * 例如 2026/09 → 408巷115-09-10。
+   *
+   * 若沒有目前期別，才選擇日期最近且不晚於今天的期別；
+   * 再沒有才退回最新期別。
+   */
+  let selected =
+    candidates.find(
+      (
+        item
+      ) =>
+        item.rocYear ===
+          currentRocYear &&
+        currentMonth >=
+          item.startMonth &&
+        currentMonth <=
+          item.endMonth
+    )
+
+  if (!selected) {
+    const sortable =
+      [...candidates].sort(
+        (
+          a,
+          b
+        ) =>
+          (
+            b.rocYear *
+              100 +
+            b.startMonth
+          ) -
+          (
+            a.rocYear *
+              100 +
+            a.startMonth
+          )
+      )
+
+    selected =
+      sortable.find(
+        (
+          item
+        ) =>
+          item.rocYear <
+            currentRocYear ||
+          (
+            item.rocYear ===
+              currentRocYear &&
+            item.startMonth <=
+              currentMonth
+          )
+      ) ||
+      sortable[0]
+  }
+
+  const sheet =
+    workbook.Sheets[
+      selected.sheetName
+    ]
+
+  const matrix =
+    XLSX.utils.sheet_to_json<
+      any[]
+    >(
+      sheet,
+      {
+        header:
+          1,
+
+        raw:
+          true,
+
+        defval:
+          '',
+      }
+    )
+
+  if (
+    matrix.length <
+    2
+  ) {
+    throw new Error(
+      `${selected.sheetName} 沒有可匯入資料。`
+    )
+  }
+
+  const header =
+    (
+      matrix[0] ||
+      []
+    ).map(
+      (
+        value
+      ) =>
+        String(
+          value ?? ''
+        )
+          .replace(
+            /\s+/g,
+            ''
+          )
+          .trim()
+    )
+
+  function findColumn(
+    ...names: string[]
+  ) {
+    for (
+      const name of names
+    ) {
+      const index =
+        header.findIndex(
+          (
+            item
+          ) =>
+            item ===
+            name
+        )
+
+      if (
+        index >= 0
+      ) {
+        return index
+      }
+    }
+
+    return -1
+  }
+
+  const paymentIndex =
+    findColumn(
+      '繳費狀態'
+    )
+
+  const customerCodeIndex =
+    findColumn(
+      '客戶編號'
+    )
+
+  const plateIndex =
+    findColumn(
+      '車牌',
+      '車號'
+    )
+
+  const customerNameIndex =
+    findColumn(
+      '姓名'
+    )
+
+  const phoneIndex =
+    findColumn(
+      '電話',
+      '手機'
+    )
+
+  const feeIndex =
+    findColumn(
+      '金額',
+      '應收費用',
+      '月租金額'
+    )
+
+  const invoiceIndex =
+    findColumn(
+      '發票號碼',
+      '發票編號'
+    )
+
+  const notesIndex =
+    findColumn(
+      '備註'
+    )
+
+  if (
+    customerCodeIndex <
+      0 ||
+    plateIndex <
+      0 ||
+    customerNameIndex <
+      0 ||
+    feeIndex <
+      0
+  ) {
+    throw new Error(
+      `${selected.sheetName} 缺少必要欄位：客戶編號、車牌、姓名或金額。`
+    )
+  }
+
+  const adYear =
+    rocYearToAd(
+      selected.rocYear
+    )
+
+  const startDate =
+    `${adYear}-${String(
+      selected.startMonth
+    ).padStart(
+      2,
+      '0'
+    )}-01`
+
+  const endDate =
+    endOfMonthText(
+      adYear,
+      selected.endMonth
+    )
+
+  const result:
+    PreviewRow[] =
+      []
+
+  for (
+    let rowIndex = 1;
+    rowIndex <
+    matrix.length;
+    rowIndex++
+  ) {
+    const row =
+      matrix[
+        rowIndex
+      ] ||
+      []
+
+    const customerCode =
+      String(
+        row[
+          customerCodeIndex
+        ] ??
+          ''
+      ).trim()
+
+    const plate =
+      String(
+        row[
+          plateIndex
+        ] ??
+          ''
+      )
+        .trim()
+        .toUpperCase()
+
+    const customerName =
+      String(
+        row[
+          customerNameIndex
+        ] ??
+          ''
+      ).trim()
+
+    /*
+     * 排除底部統計、空白列或非月租戶列。
+     */
+    if (
+      !customerCode ||
+      !plate ||
+      !customerName
+    ) {
+      continue
+    }
+
+    const fee =
+      Number(
+        String(
+          row[
+            feeIndex
+          ] ??
+            0
+        )
+          .replace(
+            /,/g,
+            ''
+          )
+          .trim()
+      ) || 0
+
+    const paymentCell =
+      paymentIndex >= 0
+        ? row[
+            paymentIndex
+          ]
+        : ''
+
+    const paymentDate =
+      paymentDateFrom408Cell(
+        paymentCell,
+        adYear,
+        selected.startMonth
+      )
+
+    const invoiceNumber =
+      invoiceIndex >= 0
+        ? String(
+            row[
+              invoiceIndex
+            ] ??
+              ''
+          ).trim()
+        : ''
+
+    const note =
+      notesIndex >= 0
+        ? String(
+            row[
+              notesIndex
+            ] ??
+              ''
+          ).trim()
+        : ''
+
+    const phone =
+      phoneIndex >= 0
+        ? normalize408Phone(
+            row[
+              phoneIndex
+            ]
+          )
+        : ''
+
+    const typeSource =
+      `${note} ${customerName}`
+
+    result.push({
+      customer_code:
+        customerCode,
+
+      vehicle_plate:
+        plate,
+
+      customer_name:
+        customerName,
+
+      phone,
+
+      vehicle_type:
+        detectVehicleType(
+          typeSource,
+          typeSource
+        ),
+
+      rental_type:
+        cleanRentalType(
+          typeSource
+        ) || '',
+
+      start_date:
+        startDate,
+
+      end_date:
+        endDate,
+
+      monthly_fee:
+        fee,
+
+      zero_action:
+        fee === 0
+          ? 'pending'
+          : 'not_applicable',
+
+      transaction_no:
+        '',
+
+      notes:
+        [
+          note,
+          `408巷來源：${selected.sheetName}`,
+        ]
+          .filter(
+            Boolean
+          )
+          .join(
+            ' / '
+          ),
+
+      payment_status:
+        paymentDate
+          ? 'paid'
+          : 'unpaid',
+
+      payment_date:
+        paymentDate,
+
+      invoice_number:
+        invoiceNumber,
+
+      source_sheet:
+        selected.sheetName,
+
+      valid:
+        true,
+
+      error:
+        '',
+    })
+  }
+
+  return {
+    rows:
+      result,
+
+    sheetName:
+      selected.sheetName,
+
+    period:
+      `${startDate} 到 ${endDate}`,
+  }
 }
 
 async function parseLegacyFile(
@@ -833,6 +1529,43 @@ export default function LegacyMonthlyImport({
     )
 
     try {
+      const is408Excel =
+        /\.xlsx?$/i.test(
+          file.name
+        )
+
+      if (
+        is408Excel
+      ) {
+        const parsed408 =
+          await parse408Workbook(
+            file
+          )
+
+        setRows(
+          parsed408.rows
+        )
+
+        const paidCount =
+          parsed408.rows.filter(
+            (
+              item
+            ) =>
+              item.payment_status ===
+              'paid'
+          ).length
+
+        const unpaidCount =
+          parsed408.rows.length -
+          paidCount
+
+        setMessage(
+          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，租期 ${parsed408.period}；月租 ${parsed408.rows.length} 筆，已繳 ${paidCount} 筆，未繳 ${unpaidCount} 筆。`
+        )
+
+        return
+      }
+
       const parsed =
         await parseLegacyFile(
           file
@@ -850,13 +1583,8 @@ export default function LegacyMonthlyImport({
         parsed.length -
         valid
 
-      const zeroPending =
-        parsed.filter((item) =>
-          isPendingZeroRow(item)
-        ).length
-
       setMessage(
-        `已辨識 ${parsed.length} 筆，可匯入 ${valid} 筆，格式異常 ${invalid} 筆。月租總表 0 元資料已自動略過。`
+        `已辨識 ${parsed.length} 筆，可匯入 ${valid} 筆，格式異常 ${invalid} 筆。`
       )
     } catch (
       error: any
@@ -1872,17 +2600,22 @@ export default function LegacyMonthlyImport({
                     newRow.monthly_fee,
 
                   payment_status:
-                    isZeroPaidRow(newRow)
-                      ? 'paid'
-                      : 'unpaid',
+                    newRow.payment_status ||
+                    (
+                      isZeroPaidRow(newRow)
+                        ? 'paid'
+                        : 'unpaid'
+                    ),
 
                   rental_status:
                     'active',
 
                   payment_date:
+                    newRow.payment_date ||
                     null,
 
                   invoice_number:
+                    newRow.invoice_number ||
                     null,
 
                   notes:
@@ -2158,12 +2891,25 @@ export default function LegacyMonthlyImport({
                   'active',
 
 
-                ...(isZeroPaidRow(newRow)
+                ...(newRow.payment_status
                   ? {
                       payment_status:
-                        'paid',
+                        newRow.payment_status,
+
+                      payment_date:
+                        newRow.payment_date ||
+                        null,
+
+                      invoice_number:
+                        newRow.invoice_number ||
+                        null,
                     }
-                  : {}),
+                  : isZeroPaidRow(newRow)
+                    ? {
+                        payment_status:
+                          'paid',
+                      }
+                    : {}),
 
                 notes:
                   importedNotes ||
@@ -2271,11 +3017,33 @@ export default function LegacyMonthlyImport({
             newRow.end_date
           )
 
+        const paymentChanged =
+          Boolean(
+            newRow.payment_status
+          ) &&
+          (
+            !sameValue(
+              currentRental?.payment_status,
+              newRow.payment_status
+            ) ||
+            !sameValue(
+              currentRental?.payment_date,
+              newRow.payment_date ||
+                ''
+            ) ||
+            !sameValue(
+              currentRental?.invoice_number,
+              newRow.invoice_number ||
+                ''
+            )
+          )
+
         const anyMainDataChanged =
           contractChanges.length >
             0 ||
           dateChanged ||
-          isPaidShortRow(newRow)
+          isPaidShortRow(newRow) ||
+          paymentChanged
 
         if (
           !anyMainDataChanged
@@ -2992,7 +3760,7 @@ export default function LegacyMonthlyImport({
         <input
           ref={inputRef}
           type="file"
-          accept=".csv,.CSV"
+          accept=".csv,.CSV,.xlsx,.XLSX,.xls,.XLS"
           onChange={
             chooseFile
           }
@@ -3200,7 +3968,7 @@ export default function LegacyMonthlyImport({
                   '100%',
 
                 minWidth:
-                  1380,
+                  1700,
 
                 borderCollapse:
                   'collapse',
@@ -3222,6 +3990,9 @@ export default function LegacyMonthlyImport({
                   <th>類型</th>
                   <th>租用期間</th>
                   <th>金額</th>
+                  <th>繳費</th>
+                  <th>繳費日期</th>
+                  <th>發票號碼</th>
                 </tr>
               </thead>
 
@@ -3355,6 +4126,50 @@ export default function LegacyMonthlyImport({
                         >
                           $
                           {row.monthly_fee.toLocaleString()}
+                        </td>
+
+                        <td
+                          style={{
+                            padding: 8,
+                            fontWeight:
+                              700,
+                            color:
+                              row.payment_status ===
+                              'paid'
+                                ? '#15803d'
+                                : row.payment_status ===
+                                    'unpaid'
+                                  ? '#b91c1c'
+                                  : undefined,
+                          }}
+                        >
+                          {row.payment_status ===
+                          'paid'
+                            ? '已繳'
+                            : row.payment_status ===
+                                'unpaid'
+                              ? '未繳'
+                              : '-'}
+                        </td>
+
+                        <td
+                          style={{
+                            padding: 8,
+                            whiteSpace:
+                              'nowrap',
+                          }}
+                        >
+                          {row.payment_date ||
+                            '-'}
+                        </td>
+
+                        <td
+                          style={{
+                            padding: 8,
+                          }}
+                        >
+                          {row.invoice_number ||
+                            '-'}
                         </td>
                       </tr>
                     )
