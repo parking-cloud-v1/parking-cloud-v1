@@ -548,6 +548,31 @@ export default async function MonthlyRentalsPage({
             匯入舊系統總表
           </Link>
 
+          {profile.role ===
+            'supervisor' && (
+            <Link
+              href="/dashboard/settings/monthly-rental-types"
+              style={{
+                padding:
+                  '9px 14px',
+                border:
+                  '1px solid #cbd5e1',
+                borderRadius:
+                  8,
+                background:
+                  '#fff',
+                color:
+                  '#334155',
+                textDecoration:
+                  'none',
+                fontWeight:
+                  600,
+              }}
+            >
+              月租類型設定
+            </Link>
+          )}
+
           <CsvImportButton
             parkingLots={
               parkingLotOptions
@@ -984,7 +1009,7 @@ export default async function MonthlyRentalsPage({
                 width:
                   '100%',
                 minWidth:
-                  1220,
+                  1380,
                 borderCollapse:
                   'collapse',
 
@@ -1009,15 +1034,17 @@ export default async function MonthlyRentalsPage({
                   }}
                 />
 
+                {/* 姓名：加寬並允許換行，避免壓到電話 */}
                 <col
                   style={{
-                    width: 85,
+                    width: 150,
                   }}
                 />
 
+                {/* 電話：保留固定寬度且不換行 */}
                 <col
                   style={{
-                    width: 110,
+                    width: 130,
                   }}
                 />
 
@@ -1245,9 +1272,28 @@ export default async function MonthlyRentalsPage({
                           style={{
                             padding:
                               8,
+
+                            /*
+                             * 姓名可換行，不再用 nowrap。
+                             * 長姓名／公司名稱只會在自己的欄位內換行，
+                             * 不會蓋到右側電話。
+                             */
                             whiteSpace:
-                              'nowrap',
+                              'normal',
+
+                            overflowWrap:
+                              'anywhere',
+
+                            wordBreak:
+                              'break-word',
+
+                            lineHeight:
+                              1.35,
                           }}
+                          title={
+                            item.customer_name ||
+                            ''
+                          }
                         >
                           {item.customer_name ||
                             '-'}
@@ -1257,8 +1303,15 @@ export default async function MonthlyRentalsPage({
                           style={{
                             padding:
                               8,
+
+                            /*
+                             * 電話固定一行，避免被姓名擠壓或重疊。
+                             */
                             whiteSpace:
                               'nowrap',
+
+                            minWidth:
+                              130,
                           }}
                         >
                           {item.phone ||

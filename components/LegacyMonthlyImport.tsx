@@ -12,6 +12,23 @@ type ParkingLot = {
   name: string
 }
 
+type MonthlyRentalTypeRule = {
+  id: string
+  parking_lot_id: string
+  type_name: string
+  vehicle_type:
+    | 'car'
+    | 'motorcycle'
+    | 'heavy_motorcycle'
+  match_amounts: string
+  keywords: string
+  keyword_mode:
+    | 'any'
+    | 'all'
+  priority: number
+  is_active: boolean
+}
+
 type ZeroAction =
   | 'not_applicable'
   | 'pending'
@@ -268,6 +285,353 @@ function cleanRentalType(value: string) {
   if (source.includes('一般')) return '一般'
   if (source.includes('機車')) return '機車'
   return source
+}
+
+function splitRuleValues(
+  value?: string | null
+) {
+  return String(
+    value || ''
+  )
+    .split(
+      /[,，、;；\n]+/
+    )
+    .map(
+      (
+        item
+      ) =>
+        item
+          .trim()
+    )
+    .filter(
+      Boolean
+    )
+}
+
+function parseRuleAmounts(
+  value?: string | null
+) {
+  return splitRuleValues(
+    value
+  )
+    .map(
+      (
+        item
+      ) =>
+        Number(
+          item
+            .replace(
+              /,/g,
+              ''
+            )
+            .replace(
+              /\$/g,
+              ''
+            )
+        )
+    )
+    .filter(
+      (
+        amount
+      ) =>
+        Number.isFinite(
+          amount
+        )
+    )
+}
+
+function rowRuleText(
+  row: PreviewRow
+) {
+  return [
+    row.rental_type ||
+      '',
+    row.notes ||
+      '',
+    row.customer_name ||
+      '',
+    row.vehicle_plate ||
+      '',
+    row.source_sheet ||
+      '',
+  ]
+    .join(' ')
+    .replace(
+      /\s+/g,
+      ' '
+    )
+    .toLowerCase()
+}
+
+function applyTypeRulesToRows(
+  rows: PreviewRow[],
+  rules:
+    MonthlyRentalTypeRule[]
+) {
+  if (
+    rules.length ===
+    0
+  ) {
+    return {
+      rows,
+      matchedCount:
+        0,
+    }
+  }
+
+  let matchedCount =
+    0
+
+  const sortedRules =
+    [...rules]
+      .filter(
+        (
+          rule
+        ) =>
+          rule.is_active
+      )
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          Number(
+            a.priority ||
+              100
+          ) -
+          Number(
+            b.priority ||
+              100
+          )
+      )
+
+  const nextRows =
+    rows.map(
+      (
+        row
+      ) => {
+        const source =
+          rowRuleText(
+            row
+          )
+
+        const matchedRule =
+          sortedRules.find(
+            (
+              rule
+            ) => {
+              const amounts =
+                parseRuleAmounts(
+                  rule.match_amounts
+                )
+
+              const keywords =
+                splitRuleValues(
+                  rule.keywords
+                )
+                  .map(
+                    (
+                      keyword
+                    ) =>
+                      keyword
+                        .toLowerCase()
+                  )
+
+              /*
+               * 安全保護：
+               * 金額與關鍵字都沒設定的規則不會套用。
+               */
+              if (
+                amounts.length ===
+                  0 &&
+                keywords.length ===
+                  0
+              ) {
+                return false
+              }
+
+              const amountMatched =
+                amounts.length ===
+                  0 ||
+                amounts.some(
+                  (
+                    amount
+                  ) =>
+                    Math.abs(
+                      Number(
+                        row.monthly_fee ||
+                          0
+                      ) -
+                        amount
+                    ) <
+                    0.001
+                )
+
+              if (
+                !amountMatched
+              ) {
+                return false
+              }
+
+              const keywordMatched =
+                keywords.length ===
+                  0 ||
+                (
+                  rule.keyword_mode ===
+                  'all'
+                    ? keywords.every(
+                        (
+                          keyword
+                        ) =>
+                          source.includes(
+                            keyword
+                          )
+                      )
+                    : keywords.some(
+                        (
+                          keyword
+                        ) =>
+                          source.includes(
+                            keyword
+                          )
+                      )
+                )
+
+              return keywordMatched
+            }
+          )
+
+        if (
+          !matchedRule
+        ) {
+          return row
+        }
+
+        matchedCount++
+
+        return {
+          ...row,
+
+          rental_type:
+            matchedRule.type_name,
+
+          vehicle_type:
+            matchedRule.vehicle_type,
+
+          notes: [
+            row.notes ||
+              '',
+            `主管類型規則：${matchedRule.type_name}`,
+          ]
+            .filter(
+              Boolean
+            )
+            .join(
+              ' / '
+            ),
+        }
+      }
+    )
+
+  return {
+    rows:
+      nextRows,
+    matchedCount,
+  }
+}
+
+async function applySupervisorTypeRules(
+  rows: PreviewRow[],
+  parkingLotId: string
+) {
+  if (
+    !parkingLotId ||
+    rows.length ===
+      0
+  ) {
+    return {
+      rows,
+      matchedCount:
+        0,
+      ruleCount:
+        0,
+    }
+  }
+
+  const supabase =
+    createClient()
+
+  const {
+    data,
+    error,
+  } =
+    await supabase
+      .from(
+        'monthly_rental_type_rules'
+      )
+      .select(`
+        id,
+        parking_lot_id,
+        type_name,
+        vehicle_type,
+        match_amounts,
+        keywords,
+        keyword_mode,
+        priority,
+        is_active
+      `)
+      .eq(
+        'parking_lot_id',
+        parkingLotId
+      )
+      .eq(
+        'is_active',
+        true
+      )
+      .order(
+        'priority',
+        {
+          ascending:
+            true,
+        }
+      )
+
+  if (
+    error
+  ) {
+    /*
+     * 若資料表尚未建立或讀取失敗，
+     * 不破壞原本匯入功能。
+     */
+    console.error(
+      '月租類型規則讀取失敗',
+      error
+    )
+
+    return {
+      rows,
+      matchedCount:
+        0,
+      ruleCount:
+        0,
+    }
+  }
+
+  const rules =
+    (data ||
+      []) as MonthlyRentalTypeRule[]
+
+  const applied =
+    applyTypeRulesToRows(
+      rows,
+      rules
+    )
+
+  return {
+    ...applied,
+    ruleCount:
+      rules.length,
+  }
 }
 
 function isZeroRow(row: PreviewRow) {
@@ -1542,12 +1906,18 @@ export default function LegacyMonthlyImport({
             file
           )
 
+        const ruled408 =
+          await applySupervisorTypeRules(
+            parsed408.rows,
+            parkingLotId
+          )
+
         setRows(
-          parsed408.rows
+          ruled408.rows
         )
 
         const paidCount =
-          parsed408.rows.filter(
+          ruled408.rows.filter(
             (
               item
             ) =>
@@ -1556,11 +1926,11 @@ export default function LegacyMonthlyImport({
           ).length
 
         const unpaidCount =
-          parsed408.rows.length -
+          ruled408.rows.length -
           paidCount
 
         setMessage(
-          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，租期 ${parsed408.period}；月租 ${parsed408.rows.length} 筆，已繳 ${paidCount} 筆，未繳 ${unpaidCount} 筆。`
+          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，租期 ${parsed408.period}；月租 ${ruled408.rows.length} 筆，已繳 ${paidCount} 筆，未繳 ${unpaidCount} 筆；主管類型規則 ${ruled408.ruleCount} 條，本次自動分類 ${ruled408.matchedCount} 筆。`
         )
 
         return
@@ -1571,20 +1941,28 @@ export default function LegacyMonthlyImport({
           file
         )
 
-      setRows(parsed)
+      const ruled =
+        await applySupervisorTypeRules(
+          parsed,
+          parkingLotId
+        )
+
+      setRows(
+        ruled.rows
+      )
 
       const valid =
-        parsed.filter(
+        ruled.rows.filter(
           (item) =>
             item.valid
         ).length
 
       const invalid =
-        parsed.length -
+        ruled.rows.length -
         valid
 
       setMessage(
-        `已辨識 ${parsed.length} 筆，可匯入 ${valid} 筆，格式異常 ${invalid} 筆。`
+        `已辨識 ${ruled.rows.length} 筆，可匯入 ${valid} 筆，格式異常 ${invalid} 筆；主管類型規則 ${ruled.ruleCount} 條，本次自動分類 ${ruled.matchedCount} 筆。`
       )
     } catch (
       error: any
