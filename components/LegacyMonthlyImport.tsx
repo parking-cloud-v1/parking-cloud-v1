@@ -470,6 +470,37 @@ async function parseLegacyFile(
           .join(',')
           .trim()
 
+      /*
+       * 舊系統的「月票種類」有些版本不在固定欄位，
+       * 可能落在 legacyType 後面的延伸欄位／備註欄。
+       *
+       * 因此車種辨識不能只看 legacyType，
+       * 要把該筆主列後半段全部一起判斷。
+       *
+       * 例如：
+       * 時段 = 月租24H
+       * 月票種類 = 機車
+       * 備註 = 0939886158 里民
+       *
+       * 必須辨識為：
+       * vehicle_type = motorcycle
+       * rental_type = 里民
+       */
+      const typeSource =
+        [
+          legacyType || '',
+          ...noteParts,
+        ]
+          .join(' ')
+          .replace(/,+/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+
+      const detectedRentalType =
+        cleanRentalType(
+          typeSource
+        )
+
       const parsedMonthlyFee =
         Number(
           String(monthlyFeeRaw || '')
@@ -502,11 +533,19 @@ async function parseLegacyFile(
 
         vehicle_type:
           detectVehicleType(
-            '',
-            legacyType || ''
+            detectedRentalType,
+            typeSource
           ),
 
-        rental_type: '',
+        rental_type:
+          TYPE_KEYWORDS.some(
+            (keyword) =>
+              typeSource.includes(
+                keyword
+              )
+          )
+            ? detectedRentalType
+            : '',
 
         start_date:
           normalizeDate(

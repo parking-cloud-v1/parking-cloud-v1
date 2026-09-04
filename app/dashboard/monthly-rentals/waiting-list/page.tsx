@@ -6,10 +6,9 @@ import {
   useState,
 } from 'react'
 
-import Link from 'next/link'
-
-import { createClient } from '@/lib/supabase/client'
-import { getSavedWorkParkingLotId } from '@/components/useWorkParkingLot'
+import {
+  createClient,
+} from '@/lib/supabase/client'
 
 type ParkingLot = {
   id: string
@@ -18,103 +17,77 @@ type ParkingLot = {
 
 type WaitingRow = {
   id: string
+
   parking_lot_id: string
 
-  wait_no:
-    number | null
+  wait_no: number
 
-  customer_name:
-    string
+  customer_name: string
 
-  phone:
-    string | null
+  phone: string | null
 
   vehicle_type:
-    string
+    | 'car'
+    | 'motorcycle'
+    | 'heavy_motorcycle'
 
   vehicle_plate:
-    string | null
+    | string
+    | null
 
   notes:
-    string | null
+    | string
+    | null
 
   status:
-    string
+    | 'waiting'
+    | 'converted'
+    | 'cancelled'
 
-  registered_date:
-    string | null
+  registered_date: string
 
   converted_at:
-    string | null
+    | string
+    | null
 
-  created_at:
-    string
+  created_at: string
 
   parking_lots?: {
     name: string
   } | null
 }
 
-type WaitingForm = {
-  customer_name:
-    string
-
-  phone:
-    string
-
+type FormData = {
+  customer_name: string
+  phone: string
   vehicle_type:
-    string
-
-  vehicle_plate:
-    string
-
-  notes:
-    string
+    | 'car'
+    | 'motorcycle'
+    | 'heavy_motorcycle'
+  vehicle_plate: string
+  notes: string
 }
 
-function normalizePhone(
-  value: string
-) {
-  return String(
-    value || ''
-  )
-    .replace(
-      /\s+/g,
-      ''
-    )
-    .replace(
-      /-/g,
-      ''
-    )
-    .trim()
-}
-
-function normalizePlate(
-  value: string
-) {
-  return String(
-    value || ''
-  )
-    .toUpperCase()
-    .replace(
-      /\s+/g,
-      ''
-    )
-    .trim()
+const emptyForm: FormData = {
+  customer_name: '',
+  phone: '',
+  vehicle_type: 'car',
+  vehicle_plate: '',
+  notes: '',
 }
 
 function vehicleTypeText(
-  value?: string | null
+  type: string
 ) {
   if (
-    value ===
+    type ===
     'motorcycle'
   ) {
     return '機車'
   }
 
   if (
-    value ===
+    type ===
     'heavy_motorcycle'
   ) {
     return '重機'
@@ -123,31 +96,20 @@ function vehicleTypeText(
   return '汽車'
 }
 
-function todayText() {
-  const now =
-    new Date()
+function normalizePhone(
+  value: string
+) {
+  return value
+    .replace(/\s/g, '')
+    .replace(/-/g, '')
+}
 
-  const year =
-    now.getFullYear()
-
-  const month =
-    String(
-      now.getMonth() +
-        1
-    ).padStart(
-      2,
-      '0'
-    )
-
-  const day =
-    String(
-      now.getDate()
-    ).padStart(
-      2,
-      '0'
-    )
-
-  return `${year}-${month}-${day}`
+function normalizePlate(
+  value: string
+) {
+  return value
+    .replace(/\s/g, '')
+    .toUpperCase()
 }
 
 export default function WaitingListPage() {
@@ -157,68 +119,72 @@ export default function WaitingListPage() {
   const [
     parkingLots,
     setParkingLots,
-  ] =
-    useState<
-      ParkingLot[]
-    >([])
-
-  const [
-    selectedLotId,
-    setSelectedLotId,
-  ] =
-    useState('')
+  ] = useState<
+    ParkingLot[]
+  >([])
 
   const [
     rows,
     setRows,
-  ] =
-    useState<
-      WaitingRow[]
-    >([])
+  ] = useState<
+    WaitingRow[]
+  >([])
+
+  const [
+    selectedLotId,
+    setSelectedLotId,
+  ] = useState('')
 
   const [
     search,
     setSearch,
-  ] =
-    useState('')
+  ] = useState('')
+
+  const [
+    vehicleFilter,
+    setVehicleFilter,
+  ] = useState('all')
 
   const [
     loading,
     setLoading,
-  ] =
-    useState(true)
+  ] = useState(true)
 
   const [
     saving,
     setSaving,
-  ] =
-    useState(false)
+  ] = useState(false)
 
   const [
     message,
     setMessage,
-  ] =
-    useState('')
+  ] = useState('')
+
+  const [
+    showForm,
+    setShowForm,
+  ] = useState(false)
+
+  const [
+    editingNoteId,
+    setEditingNoteId,
+  ] = useState('')
+
+  const [
+    editingNote,
+    setEditingNote,
+  ] = useState('')
 
   const [
     form,
     setForm,
   ] =
-    useState<WaitingForm>({
-      customer_name:
-        '',
-      phone:
-        '',
-      vehicle_type:
-        'car',
-      vehicle_plate:
-        '',
-      notes:
-        '',
-    })
+    useState<FormData>(
+      emptyForm
+    )
 
   useEffect(() => {
-    loadParkingLots()
+    loadInitial()
   }, [])
 
   useEffect(() => {
@@ -228,16 +194,13 @@ export default function WaitingListPage() {
       loadWaitingList(
         selectedLotId
       )
-    } else {
-      setRows([])
     }
   }, [
     selectedLotId,
   ])
 
-  async function loadParkingLots() {
+  async function loadInitial() {
     setLoading(true)
-    setMessage('')
 
     try {
       const {
@@ -268,36 +231,17 @@ export default function WaitingListPage() {
       }
 
       const lots =
-        (
-          data ||
-          []
-        ) as ParkingLot[]
+        data || []
 
       setParkingLots(
         lots
       )
 
-      const workLotId =
-        getSavedWorkParkingLotId()
-
       if (
-        workLotId &&
-        lots.some(
-          (lot) =>
-            lot.id ===
-            workLotId
-        )
+        lots.length > 0
       ) {
         setSelectedLotId(
-          workLotId
-        )
-      } else {
-        setSelectedLotId(
-          ''
-        )
-
-        setMessage(
-          '請先在左側「目前工作停車場」選擇停車場。'
+          lots[0].id
         )
       }
     } catch (
@@ -375,30 +319,15 @@ export default function WaitingListPage() {
       }
 
       const normalizedRows: WaitingRow[] =
-        (
-          data ||
-          []
-        ).map(
-          (
-            item: any
-          ) => ({
-            ...item,
+        (data || []).map((item: any) => ({
+          ...item,
+          parking_lots:
+            Array.isArray(item.parking_lots)
+              ? item.parking_lots[0] || null
+              : item.parking_lots || null,
+        }))
 
-            parking_lots:
-              Array.isArray(
-                item.parking_lots
-              )
-                ? item
-                    .parking_lots[0] ||
-                  null
-                : item.parking_lots ||
-                  null,
-          })
-        )
-
-      setRows(
-        normalizedRows
-      )
+      setRows(normalizedRows)
     } catch (
       error: any
     ) {
@@ -416,7 +345,7 @@ export default function WaitingListPage() {
       !selectedLotId
     ) {
       alert(
-        '請先在左側選擇目前工作停車場'
+        '請先選擇停車場'
       )
 
       return
@@ -490,7 +419,12 @@ export default function WaitingListPage() {
               'waiting',
 
             registered_date:
-              todayText(),
+              new Date()
+                .toISOString()
+                .slice(
+                  0,
+                  10
+                ),
 
             created_by:
               user.id,
@@ -498,66 +432,142 @@ export default function WaitingListPage() {
 
       if (error) {
         setMessage(
-          `新增候補失敗：${error.message}`
+          `新增失敗：${error.message}`
         )
 
         return
       }
 
-      setForm({
-        customer_name:
-          '',
-        phone:
-          '',
-        vehicle_type:
-          'car',
-        vehicle_plate:
-          '',
-        notes:
-          '',
-      })
+      setForm(
+        emptyForm
+      )
 
-      await loadWaitingList(
-        selectedLotId
+      setShowForm(
+        false
       )
 
       setMessage(
-        '候補名單新增成功'
+        '候補資料新增完成'
+      )
+
+      await loadWaitingList(
+        selectedLotId
       )
     } catch (
       error: any
     ) {
       setMessage(
         error?.message ||
-          '新增候補失敗'
+          '新增失敗'
       )
     } finally {
       setSaving(false)
     }
   }
 
-  async function deleteWaiting(
-    item: WaitingRow
+  function startEditNote(
+    row: WaitingRow
+  ) {
+    setEditingNoteId(
+      row.id
+    )
+
+    setEditingNote(
+      row.notes || ''
+    )
+  }
+
+  function cancelEditNote() {
+    setEditingNoteId('')
+    setEditingNote('')
+  }
+
+  async function saveWaitingNote(
+    row: WaitingRow
+  ) {
+    if (
+      saving
+    ) {
+      return
+    }
+
+    setSaving(true)
+    setMessage('')
+
+    try {
+      const {
+        error,
+      } =
+        await supabase
+          .from(
+            'monthly_waiting_list'
+          )
+          .update({
+            notes:
+              editingNote.trim() ||
+              null,
+
+            updated_at:
+              new Date()
+                .toISOString(),
+          })
+          .eq(
+            'id',
+            row.id
+          )
+          .eq(
+            'parking_lot_id',
+            row.parking_lot_id
+          )
+          .eq(
+            'status',
+            'waiting'
+          )
+
+      if (
+        error
+      ) {
+        setMessage(
+          `備註更新失敗：${error.message}`
+        )
+
+        return
+      }
+
+      setMessage(
+        `${row.customer_name} 的候補備註已更新`
+      )
+
+      cancelEditNote()
+
+      await loadWaitingList(
+        selectedLotId
+      )
+    } catch (
+      error: any
+    ) {
+      setMessage(
+        error?.message ||
+          '備註更新失敗'
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function cancelWaiting(
+    row: WaitingRow
   ) {
     const confirmed =
       window.confirm(
-        `確定刪除候補名單「${item.customer_name}」？`
+        `確定取消候補？\n\n` +
+          `順位：${row.wait_no}\n` +
+          `姓名：${row.customer_name}`
       )
 
     if (
       !confirmed
     ) {
-      return
-    }
-
-    if (
-      item.parking_lot_id !==
-      selectedLotId
-    ) {
-      alert(
-        '這筆資料不屬於目前工作停車場'
-      )
-
       return
     }
 
@@ -568,19 +578,138 @@ export default function WaitingListPage() {
         .from(
           'monthly_waiting_list'
         )
-        .delete()
+        .update({
+          status:
+            'cancelled',
+        })
         .eq(
           'id',
-          item.id
-        )
-        .eq(
-          'parking_lot_id',
-          selectedLotId
+          row.id
         )
 
     if (error) {
-      setMessage(
-        `刪除失敗：${error.message}`
+      alert(
+        `取消失敗：${error.message}`
+      )
+
+      return
+    }
+
+    setMessage(
+      `${row.customer_name} 已取消候補`
+    )
+
+    await loadWaitingList(
+      selectedLotId
+    )
+  }
+
+  async function moveUp(
+    index: number
+  ) {
+    if (
+      index <= 0
+    ) {
+      return
+    }
+
+    const current =
+      filteredRows[index]
+
+    const previous =
+      filteredRows[
+        index - 1
+      ]
+
+    if (
+      !current ||
+      !previous
+    ) {
+      return
+    }
+
+    const currentNo =
+      current.wait_no
+
+    const previousNo =
+      previous.wait_no
+
+    const {
+      error:
+        firstError,
+    } =
+      await supabase
+        .from(
+          'monthly_waiting_list'
+        )
+        .update({
+          wait_no:
+            -999999,
+        })
+        .eq(
+          'id',
+          current.id
+        )
+
+    if (
+      firstError
+    ) {
+      alert(
+        firstError.message
+      )
+
+      return
+    }
+
+    const {
+      error:
+        secondError,
+    } =
+      await supabase
+        .from(
+          'monthly_waiting_list'
+        )
+        .update({
+          wait_no:
+            currentNo,
+        })
+        .eq(
+          'id',
+          previous.id
+        )
+
+    if (
+      secondError
+    ) {
+      alert(
+        secondError.message
+      )
+
+      return
+    }
+
+    const {
+      error:
+        thirdError,
+    } =
+      await supabase
+        .from(
+          'monthly_waiting_list'
+        )
+        .update({
+          wait_no:
+            previousNo,
+        })
+        .eq(
+          'id',
+          current.id
+        )
+
+    if (
+      thirdError
+    ) {
+      alert(
+        thirdError.message
       )
 
       return
@@ -591,74 +720,232 @@ export default function WaitingListPage() {
     )
   }
 
-  const currentLot =
-    useMemo(
-      () =>
-        parkingLots.find(
-          (lot) =>
-            lot.id ===
-            selectedLotId
-        ),
-      [
-        parkingLots,
-        selectedLotId,
-      ]
-    )
-
-  const filteredRows =
-    useMemo(
-      () => {
-        const keyword =
-          search
-            .trim()
-            .toLowerCase()
-
-        if (!keyword) {
-          return rows
-        }
-
-        return rows.filter(
-          (row) => {
-            const text = [
-              row.customer_name,
-              row.phone ||
-                '',
-              row.vehicle_plate ||
-                '',
-              vehicleTypeText(
-                row.vehicle_type
-              ),
-              row.notes ||
-                '',
-            ]
-              .join(
-                ' '
-              )
-              .toLowerCase()
-
-            return text.includes(
-              keyword
-            )
-          }
-        )
-      },
-      [
-        rows,
-        search,
-      ]
-    )
-
-  if (
-    loading &&
-    parkingLots.length ===
-      0
+  async function moveDown(
+    index: number
   ) {
-    return (
-      <div>
-        讀取中…
-      </div>
+    if (
+      index >=
+      filteredRows.length -
+        1
+    ) {
+      return
+    }
+
+    const current =
+      filteredRows[index]
+
+    const next =
+      filteredRows[
+        index + 1
+      ]
+
+    if (
+      !current ||
+      !next
+    ) {
+      return
+    }
+
+    const currentNo =
+      current.wait_no
+
+    const nextNo =
+      next.wait_no
+
+    const {
+      error:
+        firstError,
+    } =
+      await supabase
+        .from(
+          'monthly_waiting_list'
+        )
+        .update({
+          wait_no:
+            -999999,
+        })
+        .eq(
+          'id',
+          current.id
+        )
+
+    if (
+      firstError
+    ) {
+      alert(
+        firstError.message
+      )
+
+      return
+    }
+
+    const {
+      error:
+        secondError,
+    } =
+      await supabase
+        .from(
+          'monthly_waiting_list'
+        )
+        .update({
+          wait_no:
+            currentNo,
+        })
+        .eq(
+          'id',
+          next.id
+        )
+
+    if (
+      secondError
+    ) {
+      alert(
+        secondError.message
+      )
+
+      return
+    }
+
+    const {
+      error:
+        thirdError,
+    } =
+      await supabase
+        .from(
+          'monthly_waiting_list'
+        )
+        .update({
+          wait_no:
+            nextNo,
+        })
+        .eq(
+          'id',
+          current.id
+        )
+
+    if (
+      thirdError
+    ) {
+      alert(
+        thirdError.message
+      )
+
+      return
+    }
+
+    await loadWaitingList(
+      selectedLotId
     )
   }
+
+  function convertToRental(
+    row: WaitingRow
+  ) {
+    const params =
+      new URLSearchParams()
+
+    params.set(
+      'waiting_id',
+      row.id
+    )
+
+    params.set(
+      'parking_lot_id',
+      row.parking_lot_id
+    )
+
+    params.set(
+      'customer_name',
+      row.customer_name
+    )
+
+    if (
+      row.phone
+    ) {
+      params.set(
+        'phone',
+        row.phone
+      )
+    }
+
+    if (
+      row.vehicle_plate
+    ) {
+      params.set(
+        'vehicle_plate',
+        row.vehicle_plate
+      )
+    }
+
+    params.set(
+      'vehicle_type',
+      row.vehicle_type
+    )
+
+    if (
+      row.notes
+    ) {
+      params.set(
+        'notes',
+        row.notes
+      )
+    }
+
+    window.location.href =
+      `/dashboard/monthly-rentals/new?${params.toString()}`
+  }
+
+  const filteredRows =
+    useMemo(() => {
+      const keyword =
+        search
+          .trim()
+          .toLowerCase()
+
+      return rows.filter(
+        (row) => {
+          if (
+            vehicleFilter !==
+              'all' &&
+            row.vehicle_type !==
+              vehicleFilter
+          ) {
+            return false
+          }
+
+          if (
+            !keyword
+          ) {
+            return true
+          }
+
+          const values = [
+            row.customer_name,
+            row.phone || '',
+            row.vehicle_plate ||
+              '',
+            row.notes || '',
+          ]
+            .join(' ')
+            .toLowerCase()
+
+          return values.includes(
+            keyword
+          )
+        }
+      )
+    }, [
+      rows,
+      search,
+      vehicleFilter,
+    ])
+
+  const selectedLot =
+    parkingLots.find(
+      (lot) =>
+        lot.id ===
+        selectedLotId
+    )
 
   return (
     <div
@@ -669,8 +956,7 @@ export default function WaitingListPage() {
     >
       <div
         style={{
-          display:
-            'flex',
+          display: 'flex',
           justifyContent:
             'space-between',
           alignItems:
@@ -683,8 +969,7 @@ export default function WaitingListPage() {
         <div>
           <h1
             style={{
-              marginTop:
-                0,
+              marginTop: 0,
               marginBottom:
                 6,
             }}
@@ -693,197 +978,130 @@ export default function WaitingListPage() {
           </h1>
 
           <div
-            className="muted"
-          >
-            {currentLot
-              ? `目前工作停車場：${currentLot.name}`
-              : '請先選擇目前工作停車場'}
-          </div>
-        </div>
-
-        <Link
-          href="/dashboard/monthly-rentals"
-          style={{
-            padding:
-              '9px 14px',
-            border:
-              '1px solid #cbd5e1',
-            borderRadius:
-              8,
-            background:
-              '#fff',
-            color:
-              '#334155',
-            textDecoration:
-              'none',
-            fontWeight:
-              600,
-          }}
-        >
-          返回月租管理
-        </Link>
-      </div>
-
-      {!selectedLotId && (
-        <div
-          className="card"
-          style={{
-            marginTop:
-              20,
-            background:
-              '#fffbeb',
-            color:
-              '#b45309',
-            fontWeight:
-              700,
-          }}
-        >
-          請先在左側「目前工作停車場」選擇停車場。
-          候補名單只會顯示目前工作停車場的資料。
-        </div>
-      )}
-
-      {selectedLotId &&
-        currentLot && (
-          <div
-            className="card"
             style={{
-              marginTop:
-                20,
-              background:
-                '#f8fafc',
+              color:
+                '#64748b',
             }}
           >
-            <div
-              className="muted"
-              style={{
-                fontSize:
-                  13,
-                marginBottom:
-                  4,
-              }}
-            >
-              目前工作停車場
-            </div>
-
-            <strong
-              style={{
-                fontSize:
-                  18,
-              }}
-            >
-              {
-                currentLot.name
-              }
-            </strong>
+            管理各停車場月租候補順位與轉正式月租。
           </div>
-        )}
+        </div>
+
+        <button
+          type="button"
+          className="btn"
+          onClick={() =>
+            setShowForm(
+              true
+            )
+          }
+        >
+          ＋ 新增候補
+        </button>
+      </div>
 
       <div
         className="card"
         style={{
-          marginTop:
-            20,
+          marginTop: 20,
         }}
       >
-        <h2
-          style={{
-            marginTop:
-              0,
-          }}
-        >
-          新增候補
-        </h2>
-
         <div
           style={{
-            display:
-              'grid',
+            display: 'grid',
             gridTemplateColumns:
-              'repeat(auto-fit, minmax(180px,1fr))',
-            gap:
-              12,
+              'minmax(220px,1fr) minmax(220px,1fr) 180px',
+            gap: 12,
           }}
         >
-          <div className="field">
+          <div
+            className="field"
+          >
             <label>
-              姓名
+              停車場
+            </label>
+
+            <select
+              value={
+                selectedLotId
+              }
+              onChange={(
+                event
+              ) => {
+                setSelectedLotId(
+                  event.target
+                    .value
+                )
+
+                setMessage('')
+              }}
+            >
+              {parkingLots.map(
+                (lot) => (
+                  <option
+                    key={
+                      lot.id
+                    }
+                    value={
+                      lot.id
+                    }
+                  >
+                    {
+                      lot.name
+                    }
+                  </option>
+                )
+              )}
+            </select>
+          </div>
+
+          <div
+            className="field"
+          >
+            <label>
+              搜尋
             </label>
 
             <input
               value={
-                form.customer_name
+                search
               }
               onChange={(
                 event
               ) =>
-                setForm(
-                  (
-                    current
-                  ) => ({
-                    ...current,
-                    customer_name:
-                      event
-                        .target
-                        .value,
-                  })
+                setSearch(
+                  event.target
+                    .value
                 )
               }
+              placeholder="姓名、電話、車牌、備註"
             />
           </div>
 
-          <div className="field">
-            <label>
-              電話
-            </label>
-
-            <input
-              value={
-                form.phone
-              }
-              onChange={(
-                event
-              ) =>
-                setForm(
-                  (
-                    current
-                  ) => ({
-                    ...current,
-                    phone:
-                      event
-                        .target
-                        .value,
-                  })
-                )
-              }
-            />
-          </div>
-
-          <div className="field">
+          <div
+            className="field"
+          >
             <label>
               車種
             </label>
 
             <select
               value={
-                form.vehicle_type
+                vehicleFilter
               }
               onChange={(
                 event
               ) =>
-                setForm(
-                  (
-                    current
-                  ) => ({
-                    ...current,
-                    vehicle_type:
-                      event
-                        .target
-                        .value,
-                  })
+                setVehicleFilter(
+                  event.target
+                    .value
                 )
               }
             >
+              <option value="all">
+                全部
+              </option>
+
               <option value="car">
                 汽車
               </option>
@@ -897,335 +1115,159 @@ export default function WaitingListPage() {
               </option>
             </select>
           </div>
-
-          <div className="field">
-            <label>
-              車牌
-            </label>
-
-            <input
-              value={
-                form.vehicle_plate
-              }
-              onChange={(
-                event
-              ) =>
-                setForm(
-                  (
-                    current
-                  ) => ({
-                    ...current,
-                    vehicle_plate:
-                      event
-                        .target
-                        .value,
-                  })
-                )
-              }
-            />
-          </div>
-
-          <div className="field">
-            <label>
-              備註
-            </label>
-
-            <input
-              value={
-                form.notes
-              }
-              onChange={(
-                event
-              ) =>
-                setForm(
-                  (
-                    current
-                  ) => ({
-                    ...current,
-                    notes:
-                      event
-                        .target
-                        .value,
-                  })
-                )
-              }
-            />
-          </div>
-        </div>
-
-        <div
-          style={{
-            marginTop:
-              14,
-          }}
-        >
-          <button
-            type="button"
-            className="btn"
-            onClick={
-              addWaiting
-            }
-            disabled={
-              saving ||
-              !selectedLotId
-            }
-          >
-            {saving
-              ? '新增中…'
-              : '新增候補'}
-          </button>
-        </div>
-      </div>
-
-      <div
-        className="card"
-        style={{
-          marginTop:
-            20,
-        }}
-      >
-        <div
-          style={{
-            display:
-              'flex',
-            justifyContent:
-              'space-between',
-            alignItems:
-              'center',
-            gap:
-              12,
-            flexWrap:
-              'wrap',
-          }}
-        >
-          <div>
-            <h2
-              style={{
-                margin:
-                  0,
-              }}
-            >
-              候補名單
-            </h2>
-
-            {currentLot && (
-              <div
-                className="muted"
-                style={{
-                  marginTop:
-                    4,
-                }}
-              >
-                {
-                  currentLot.name
-                }
-              </div>
-            )}
-          </div>
-
-          <div
-            style={{
-              display:
-                'flex',
-              gap:
-                10,
-              alignItems:
-                'center',
-              flexWrap:
-                'wrap',
-            }}
-          >
-            <input
-              value={
-                search
-              }
-              onChange={(
-                event
-              ) =>
-                setSearch(
-                  event.target
-                    .value
-                )
-              }
-              placeholder="搜尋姓名、電話、車牌、備註"
-              style={{
-                minWidth:
-                  260,
-              }}
-            />
-
-            <span className="muted">
-              共{' '}
-              {
-                filteredRows.length
-              }{' '}
-              筆
-            </span>
-          </div>
         </div>
 
         {message && (
           <div
             style={{
-              marginTop:
-                14,
-              padding:
-                10,
-              borderRadius:
-                8,
+              marginTop: 14,
+              padding: 12,
+              borderRadius: 8,
               background:
                 '#f8fafc',
-              color:
-                message.includes(
-                  '失敗'
-                ) ||
-                message.includes(
-                  '錯誤'
-                )
-                  ? '#b91c1c'
-                  : '#334155',
             }}
           >
             {message}
           </div>
         )}
+      </div>
 
-        {!selectedLotId ? (
-          <div
+      <div
+        className="card"
+        style={{
+          marginTop: 20,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent:
+              'space-between',
+            alignItems:
+              'center',
+            gap: 12,
+          }}
+        >
+          <h2
             style={{
-              padding:
-                30,
-              textAlign:
-                'center',
-              color:
-                '#64748b',
+              margin: 0,
             }}
           >
-            請先選擇目前工作停車場。
-          </div>
-        ) : filteredRows.length ===
-          0 ? (
-          <div
+            {selectedLot?.name ||
+              '候補名單'}
+          </h2>
+
+          <strong>
+            共{' '}
+            {
+              filteredRows.length
+            }{' '}
+            人
+          </strong>
+        </div>
+
+        <div
+          style={{
+            overflowX:
+              'auto',
+            marginTop: 16,
+          }}
+        >
+          <table
             style={{
-              padding:
-                30,
-              textAlign:
-                'center',
-              color:
-                '#64748b',
+              width: '100%',
+              minWidth:
+                1100,
+              borderCollapse:
+                'collapse',
             }}
           >
-            目前沒有候補資料。
-          </div>
-        ) : (
-          <div
-            style={{
-              overflowX:
-                'auto',
-              marginTop:
-                16,
-            }}
-          >
-            <table
-              style={{
-                width:
-                  '100%',
-                minWidth:
-                  980,
-                borderCollapse:
-                  'collapse',
-              }}
-            >
-              <thead>
-                <tr
-                  style={{
-                    textAlign:
-                      'left',
-                  }}
-                >
-                  <th
-                    style={{
-                      padding:
-                        9,
-                    }}
-                  >
-                    順位
-                  </th>
+            <thead>
+              <tr
+                style={{
+                  textAlign:
+                    'left',
+                }}
+              >
+                <th>
+                  順位
+                </th>
 
-                  <th
-                    style={{
-                      padding:
-                        9,
-                    }}
-                  >
-                    姓名
-                  </th>
+                <th>
+                  姓名
+                </th>
 
-                  <th
-                    style={{
-                      padding:
-                        9,
-                    }}
-                  >
-                    電話
-                  </th>
+                <th>
+                  電話
+                </th>
 
-                  <th
-                    style={{
-                      padding:
-                        9,
-                    }}
-                  >
-                    車種
-                  </th>
+                <th>
+                  車種
+                </th>
 
-                  <th
-                    style={{
-                      padding:
-                        9,
-                    }}
-                  >
-                    車牌
-                  </th>
+                <th>
+                  車牌
+                </th>
 
-                  <th
-                    style={{
-                      padding:
-                        9,
-                    }}
-                  >
-                    登記日期
-                  </th>
+                <th>
+                  登記日期
+                </th>
 
-                  <th
-                    style={{
-                      padding:
-                        9,
-                    }}
-                  >
-                    備註
-                  </th>
+                <th>
+                  備註
+                </th>
 
-                  <th
+                <th>
+                  順位調整
+                </th>
+
+                <th>
+                  操作
+                </th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td
+                    colSpan={
+                      9
+                    }
                     style={{
                       padding:
-                        9,
+                        20,
                     }}
                   >
-                    操作
-                  </th>
+                    讀取中…
+                  </td>
                 </tr>
-              </thead>
-
-              <tbody>
-                {filteredRows.map(
+              ) : filteredRows.length ===
+                0 ? (
+                <tr>
+                  <td
+                    colSpan={
+                      9
+                    }
+                    style={{
+                      padding:
+                        20,
+                      color:
+                        '#64748b',
+                    }}
+                  >
+                    目前沒有候補資料
+                  </td>
+                </tr>
+              ) : (
+                filteredRows.map(
                   (
-                    item,
+                    row,
                     index
                   ) => (
                     <tr
                       key={
-                        item.id
+                        row.id
                       }
                       style={{
                         borderTop:
@@ -1235,162 +1277,559 @@ export default function WaitingListPage() {
                       <td
                         style={{
                           padding:
-                            9,
+                            10,
+                          fontSize:
+                            18,
                           fontWeight:
-                            700,
-                        }}
-                      >
-                        {item.wait_no ??
-                          index +
-                            1}
-                      </td>
-
-                      <td
-                        style={{
-                          padding:
-                            9,
-                          fontWeight:
-                            700,
+                            800,
                         }}
                       >
                         {
-                          item.customer_name
+                          row.wait_no
                         }
                       </td>
 
                       <td
                         style={{
                           padding:
-                            9,
-                          whiteSpace:
-                            'nowrap',
+                            10,
+                          fontWeight:
+                            700,
                         }}
                       >
-                        {item.phone ||
+                        {
+                          row.customer_name
+                        }
+                      </td>
+
+                      <td
+                        style={{
+                          padding:
+                            10,
+                        }}
+                      >
+                        {row.phone ||
                           '-'}
                       </td>
 
                       <td
                         style={{
                           padding:
-                            9,
-                          whiteSpace:
-                            'nowrap',
+                            10,
                         }}
                       >
                         {vehicleTypeText(
-                          item.vehicle_type
+                          row.vehicle_type
                         )}
                       </td>
 
                       <td
                         style={{
                           padding:
-                            9,
+                            10,
                           fontWeight:
                             700,
-                          whiteSpace:
-                            'nowrap',
                         }}
                       >
-                        {item.vehicle_plate ||
+                        {row.vehicle_plate ||
                           '-'}
                       </td>
 
                       <td
                         style={{
                           padding:
-                            9,
+                            10,
                           whiteSpace:
                             'nowrap',
                         }}
                       >
-                        {item.registered_date ||
-                          '-'}
+                        {
+                          row.registered_date
+                        }
                       </td>
 
                       <td
                         style={{
                           padding:
-                            9,
+                            10,
                           minWidth:
-                            180,
+                            260,
+                          maxWidth:
+                            360,
                         }}
                       >
-                        {item.notes ||
-                          '-'}
-                      </td>
-
-                      <td
-                        style={{
-                          padding:
-                            9,
-                          whiteSpace:
-                            'nowrap',
-                        }}
-                      >
-                        <div
-                          style={{
-                            display:
-                              'flex',
-                            gap:
-                              8,
-                            flexWrap:
-                              'wrap',
-                          }}
-                        >
-                          <Link
-                            href={`/dashboard/monthly-rentals/new?parking_lot_id=${encodeURIComponent(
-                              selectedLotId
-                            )}&waiting_id=${encodeURIComponent(
-                              item.id
-                            )}`}
+                        {editingNoteId ===
+                        row.id ? (
+                          <textarea
+                            value={
+                              editingNote
+                            }
+                            onChange={(
+                              event
+                            ) =>
+                              setEditingNote(
+                                event.target
+                                  .value
+                              )
+                            }
+                            rows={
+                              3
+                            }
                             style={{
-                              color:
-                                '#2563eb',
-                              textDecoration:
-                                'none',
-                              fontWeight:
-                                700,
+                              width:
+                                '100%',
+                              minWidth:
+                                220,
+                              resize:
+                                'vertical',
+                            }}
+                            placeholder="輸入交接、聯絡狀況或其他備註"
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              whiteSpace:
+                                'pre-wrap',
+                              wordBreak:
+                                'break-word',
                             }}
                           >
-                            轉正式
-                          </Link>
+                            {row.notes ||
+                              '-'}
+                          </div>
+                        )}
+                      </td>
 
+                      <td
+                        style={{
+                          padding:
+                            10,
+                          whiteSpace:
+                            'nowrap',
+                        }}
+                      >
+                        <button
+                          type="button"
+                          disabled={
+                            index ===
+                            0
+                          }
+                          onClick={() =>
+                            moveUp(
+                              index
+                            )
+                          }
+                          style={{
+                            marginRight:
+                              6,
+                          }}
+                        >
+                          ↑
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={
+                            index ===
+                            filteredRows.length -
+                              1
+                          }
+                          onClick={() =>
+                            moveDown(
+                              index
+                            )
+                          }
+                        >
+                          ↓
+                        </button>
+                      </td>
+
+                      <td
+                        style={{
+                          padding:
+                            10,
+                          whiteSpace:
+                            'nowrap',
+                        }}
+                      >
+                        {editingNoteId ===
+                        row.id ? (
+                          <>
+                            <button
+                              type="button"
+                              className="btn"
+                              disabled={
+                                saving
+                              }
+                              onClick={() =>
+                                saveWaitingNote(
+                                  row
+                                )
+                              }
+                              style={{
+                                marginRight:
+                                  8,
+                              }}
+                            >
+                              {saving
+                                ? '儲存中…'
+                                : '儲存備註'}
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={
+                                saving
+                              }
+                              onClick={
+                                cancelEditNote
+                              }
+                              style={{
+                                marginRight:
+                                  8,
+                              }}
+                            >
+                              取消編輯
+                            </button>
+                          </>
+                        ) : (
                           <button
                             type="button"
                             onClick={() =>
-                              deleteWaiting(
-                                item
+                              startEditNote(
+                                row
                               )
                             }
                             style={{
-                              border:
-                                0,
-                              background:
-                                'transparent',
-                              color:
-                                '#dc2626',
-                              cursor:
-                                'pointer',
-                              fontWeight:
-                                700,
-                              padding:
-                                0,
+                              marginRight:
+                                8,
                             }}
                           >
-                            刪除
+                            改備註
                           </button>
-                        </div>
+                        )}
+
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() =>
+                            convertToRental(
+                              row
+                            )
+                          }
+                          style={{
+                            marginRight:
+                              8,
+                          }}
+                        >
+                          轉正式月租
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            cancelWaiting(
+                              row
+                            )
+                          }
+                        >
+                          取消候補
+                        </button>
                       </td>
                     </tr>
                   )
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
+                )
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
+
+      {showForm && (
+        <div
+          style={{
+            position:
+              'fixed',
+            inset: 0,
+            zIndex:
+              9999,
+            background:
+              'rgba(15,23,42,.55)',
+            display:
+              'flex',
+            alignItems:
+              'center',
+            justifyContent:
+              'center',
+            padding:
+              20,
+          }}
+        >
+          <div
+            style={{
+              width:
+                'min(620px,95vw)',
+              maxHeight:
+                '90vh',
+              overflow:
+                'auto',
+              background:
+                '#fff',
+              borderRadius:
+                14,
+              padding:
+                22,
+            }}
+          >
+            <div
+              style={{
+                display:
+                  'flex',
+                justifyContent:
+                  'space-between',
+                alignItems:
+                  'center',
+              }}
+            >
+              <h2
+                style={{
+                  margin:
+                    0,
+                }}
+              >
+                新增候補
+              </h2>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setShowForm(
+                    false
+                  )
+                }
+                style={{
+                  border: 0,
+                  background:
+                    'transparent',
+                  fontSize:
+                    26,
+                  cursor:
+                    'pointer',
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div
+              style={{
+                marginTop:
+                  18,
+                display:
+                  'grid',
+                gap: 14,
+              }}
+            >
+              <div
+                className="field"
+              >
+                <label>
+                  停車場
+                </label>
+
+                <input
+                  value={
+                    selectedLot?.name ||
+                    ''
+                  }
+                  disabled
+                />
+              </div>
+
+              <div
+                className="field"
+              >
+                <label>
+                  姓名 *
+                </label>
+
+                <input
+                  value={
+                    form.customer_name
+                  }
+                  onChange={(
+                    event
+                  ) =>
+                    setForm({
+                      ...form,
+                      customer_name:
+                        event
+                          .target
+                          .value,
+                    })
+                  }
+                />
+              </div>
+
+              <div
+                className="field"
+              >
+                <label>
+                  電話
+                </label>
+
+                <input
+                  value={
+                    form.phone
+                  }
+                  onChange={(
+                    event
+                  ) =>
+                    setForm({
+                      ...form,
+                      phone:
+                        event
+                          .target
+                          .value,
+                    })
+                  }
+                  placeholder="例如 0912345678"
+                />
+              </div>
+
+              <div
+                className="field"
+              >
+                <label>
+                  車種
+                </label>
+
+                <select
+                  value={
+                    form.vehicle_type
+                  }
+                  onChange={(
+                    event
+                  ) =>
+                    setForm({
+                      ...form,
+                      vehicle_type:
+                        event
+                          .target
+                          .value as FormData['vehicle_type'],
+                    })
+                  }
+                >
+                  <option value="car">
+                    汽車
+                  </option>
+
+                  <option value="motorcycle">
+                    機車
+                  </option>
+
+                  <option value="heavy_motorcycle">
+                    重機
+                  </option>
+                </select>
+              </div>
+
+              <div
+                className="field"
+              >
+                <label>
+                  車牌
+                </label>
+
+                <input
+                  value={
+                    form.vehicle_plate
+                  }
+                  onChange={(
+                    event
+                  ) =>
+                    setForm({
+                      ...form,
+                      vehicle_plate:
+                        event
+                          .target
+                          .value,
+                    })
+                  }
+                  placeholder="可先不填"
+                />
+              </div>
+
+              <div
+                className="field"
+              >
+                <label>
+                  備註
+                </label>
+
+                <textarea
+                  value={
+                    form.notes
+                  }
+                  onChange={(
+                    event
+                  ) =>
+                    setForm({
+                      ...form,
+                      notes:
+                        event
+                          .target
+                          .value,
+                    })
+                  }
+                  rows={
+                    4
+                  }
+                />
+              </div>
+
+              <div
+                style={{
+                  display:
+                    'flex',
+                  justifyContent:
+                    'flex-end',
+                  gap: 10,
+                }}
+              >
+                <button
+                  type="button"
+                  disabled={
+                    saving
+                  }
+                  onClick={() =>
+                    setShowForm(
+                      false
+                    )
+                  }
+                >
+                  取消
+                </button>
+
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={
+                    saving
+                  }
+                  onClick={
+                    addWaiting
+                  }
+                >
+                  {saving
+                    ? '儲存中…'
+                    : '新增候補'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

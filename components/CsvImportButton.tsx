@@ -1325,10 +1325,73 @@ async function classifyFolderCsv(
 }
 
 export default function CsvImportButton({
-  parkingLots,
+  parkingLots: parkingLotsProp = [],
 }: {
-  parkingLots: ParkingLot[]
+  parkingLots?: ParkingLot[]
 }) {
+  const [
+    loadedParkingLots,
+    setLoadedParkingLots,
+  ] = useState<ParkingLot[]>(
+    parkingLotsProp
+  )
+
+  const parkingLots =
+    parkingLotsProp.length > 0
+      ? parkingLotsProp
+      : loadedParkingLots
+
+  useEffect(() => {
+    if (
+      parkingLotsProp.length > 0
+    ) {
+      setLoadedParkingLots(
+        parkingLotsProp
+      )
+      return
+    }
+
+    async function loadParkingLots() {
+      const supabase =
+        createClient()
+
+      const {
+        data,
+        error,
+      } =
+        await supabase
+          .from(
+            'parking_lots'
+          )
+          .select(
+            'id, name'
+          )
+          .eq(
+            'status',
+            'active'
+          )
+          .order(
+            'name'
+          )
+
+      if (error) {
+        console.error(
+          '停車場讀取失敗',
+          error
+        )
+        return
+      }
+
+      setLoadedParkingLots(
+        (data || []) as ParkingLot[]
+      )
+    }
+
+    void loadParkingLots()
+  }, [
+    parkingLotsProp,
+  ])
+
   const inputRef =
     useRef<HTMLInputElement>(
       null
@@ -2008,22 +2071,21 @@ export default function CsvImportButton({
               )
             : undefined
 
-        if (
-          row.lotName &&
-          !lot
-        ) {
-          checked.push({
-            ...row,
-
-            matched: false,
-
-            message:
-              `找不到停車場：${row.lotName}`,
-          })
-
-          continue
-        }
-
+        /*
+         * 報表名稱與系統場站名稱可能不同。
+         *
+         * 例如報表：
+         * 「汐止金龍停車場」
+         *
+         * 系統可能是：
+         * 「汐止金龍市場地下停車場」
+         *
+         * 名稱模糊比對仍找不到時，不直接判定失敗；
+         * 改用「車牌」跨所有可存取停車場尋找。
+         *
+         * 只有唯一找到一個場站才自動採用，
+         * 避免同車牌跨場時誤寫繳費資料。
+         */
         if (!lot) {
           const candidateLots =
             parkingLots.filter(
@@ -2070,7 +2132,9 @@ export default function CsvImportButton({
               matched: false,
 
               message:
-                '找不到對應月租車牌',
+                row.lotName
+                  ? `停車場名稱未匹配，且找不到對應月租車牌：${row.lotName}`
+                  : '找不到對應月租車牌',
             })
 
             continue
