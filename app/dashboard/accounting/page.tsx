@@ -90,8 +90,7 @@ const TAXI_SELECTED_STORAGE =
   'accounting-taxi-report-selected-lots'
 
 function currentMonthText() {
-  const now =
-    new Date()
+  const now = new Date()
 
   return `${now.getFullYear()}-${String(
     now.getMonth() + 1
@@ -99,15 +98,13 @@ function currentMonthText() {
 }
 
 function previousMonthText() {
-  const now =
-    new Date()
+  const now = new Date()
 
-  const date =
-    new Date(
-      now.getFullYear(),
-      now.getMonth() - 1,
-      1
-    )
+  const date = new Date(
+    now.getFullYear(),
+    now.getMonth() - 1,
+    1
+  )
 
   return `${date.getFullYear()}-${String(
     date.getMonth() + 1
@@ -126,24 +123,19 @@ function nextMonthStart(
   const [
     year,
     monthNumber,
-  ] =
-    month
-      .split('-')
-      .map(Number)
+  ] = month
+    .split('-')
+    .map(Number)
 
-  const date =
-    new Date(
-      year,
-      monthNumber,
-      1
-    )
+  const date = new Date(
+    year,
+    monthNumber,
+    1
+  )
 
   return `${date.getFullYear()}-${String(
     date.getMonth() + 1
-  ).padStart(
-    2,
-    '0'
-  )}-01`
+  ).padStart(2, '0')}-01`
 }
 
 function safeFileName(
@@ -188,10 +180,7 @@ function vehicleTypeText(
     return '重機'
   }
 
-  return (
-    value ||
-    ''
-  )
+  return value || ''
 }
 
 function paymentStatusText(
@@ -209,10 +198,7 @@ function paymentStatusText(
     return '未繳'
   }
 
-  return (
-    value ||
-    ''
-  )
+  return value || ''
 }
 
 function rentalStatusText(
@@ -231,15 +217,18 @@ function rentalStatusText(
   }
 
   if (
+    value === 'expired'
+  ) {
+    return '已到期'
+  }
+
+  if (
     value === 'inactive'
   ) {
     return '停用'
   }
 
-  return (
-    value ||
-    ''
-  )
+  return value || ''
 }
 
 function changeTypeText(
@@ -301,8 +290,7 @@ function saveBlob(
 }
 
 function localDateText() {
-  const now =
-    new Date()
+  const now = new Date()
 
   return `${now.getFullYear()}-${String(
     now.getMonth() + 1
@@ -315,6 +303,70 @@ function localDateText() {
     2,
     '0'
   )}`
+}
+
+/*
+ * 報表中心最新月租名單規則：
+ *
+ * 1. 已退租 cancelled：永遠不匯出。
+ * 2. 到期超過 4 個月：不匯出。
+ * 3. 最近 4 個月內到期：仍保留。
+ * 4. 沒有到期日：保留，避免誤刪資料。
+ *
+ * 使用「今天往前推 4 個月」作為門檻。
+ */
+function fourMonthsAgoDateText() {
+  const now = new Date()
+
+  const cutoff = new Date(
+    now.getFullYear(),
+    now.getMonth() - 4,
+    now.getDate()
+  )
+
+  return `${cutoff.getFullYear()}-${String(
+    cutoff.getMonth() + 1
+  ).padStart(
+    2,
+    '0'
+  )}-${String(
+    cutoff.getDate()
+  ).padStart(
+    2,
+    '0'
+  )}`
+}
+
+function shouldIncludeRental(
+  row: RentalRow
+) {
+  if (
+    row.rental_status ===
+    'cancelled'
+  ) {
+    return false
+  }
+
+  if (
+    !row.end_date
+  ) {
+    return true
+  }
+
+  const cutoff =
+    fourMonthsAgoDateText()
+
+  /*
+   * Supabase date 欄位為 YYYY-MM-DD，
+   * 因此可直接做字串日期比較。
+   *
+   * 等於門檻日仍保留；
+   * 只有早於門檻日才算「超過 4 個月」。
+   */
+  return (
+    row.end_date >=
+    cutoff
+  )
 }
 
 function taipeiParts(
@@ -676,9 +728,6 @@ function createTaxiReportElement(
     }
   )
 
-  /*
-   * 正式報表保留至少 32 列。
-   */
   for (
     let index =
       rows.length;
@@ -785,9 +834,6 @@ async function generateTaxiPdfBlob(
 
     const pageWidth =
       297
-
-    const pageHeight =
-      210
 
     const ratio =
       Math.min(
@@ -1547,14 +1593,6 @@ export default function AccountingReportCenterPage() {
     }
   }
 
-  /*
-   * =====================================================
-   * 最新月租名單
-   *
-   * 每個停車場各產生一個 Excel，
-   * 再全部壓縮成 ZIP。
-   * =====================================================
-   */
   async function downloadLatestMonthlyRentals() {
     if (
       rentalDownloading
@@ -1613,6 +1651,11 @@ export default function AccountingReportCenterPage() {
         )
       }
 
+      /*
+       * 與月租管理總表同步：
+       * - 已退租排除
+       * - 到期超過 4 個月排除
+       */
       const rentals =
         (
           data ||
@@ -1621,8 +1664,9 @@ export default function AccountingReportCenterPage() {
           (
             row: RentalRow
           ) =>
-            row.rental_status !==
-            'cancelled'
+            shouldIncludeRental(
+              row
+            )
         ) as RentalRow[]
 
       if (
@@ -1753,9 +1797,6 @@ export default function AccountingReportCenterPage() {
               lot.id
           )
 
-        /*
-         * 沒有月租資料的場站不建立空白檔案。
-         */
         if (
           lotRentals.length ===
           0
@@ -1785,70 +1826,22 @@ export default function AccountingReportCenterPage() {
         worksheet[
           '!cols'
         ] = [
-          {
-            wch:
-              30,
-          },
-          {
-            wch:
-              14,
-          },
-          {
-            wch:
-              14,
-          },
-          {
-            wch:
-              16,
-          },
-          {
-            wch:
-              14,
-          },
-          {
-            wch:
-              10,
-          },
-          {
-            wch:
-              18,
-          },
-          {
-            wch:
-              12,
-          },
-          {
-            wch:
-              12,
-          },
-          {
-            wch:
-              12,
-          },
-          {
-            wch:
-              12,
-          },
-          {
-            wch:
-              12,
-          },
-          {
-            wch:
-              16,
-          },
-          {
-            wch:
-              12,
-          },
-          {
-            wch:
-              30,
-          },
-          {
-            wch:
-              20,
-          },
+          { wch: 30 },
+          { wch: 14 },
+          { wch: 14 },
+          { wch: 16 },
+          { wch: 14 },
+          { wch: 10 },
+          { wch: 18 },
+          { wch: 12 },
+          { wch: 12 },
+          { wch: 12 },
+          { wch: 12 },
+          { wch: 12 },
+          { wch: 16 },
+          { wch: 12 },
+          { wch: 30 },
+          { wch: 20 },
         ]
 
         XLSX.utils.book_append_sheet(
@@ -1927,7 +1920,7 @@ export default function AccountingReportCenterPage() {
       )
 
       setMessage(
-        `最新月租名單完成：${exportedLotCount} 個停車場，共 ${exportedRowCount} 筆月租資料。`
+        `最新月租名單完成：${exportedLotCount} 個停車場，共 ${exportedRowCount} 筆月租資料。已自動排除退租及到期超過 4 個月資料。`
       )
     } catch (
       error: any
@@ -2790,7 +2783,7 @@ export default function AccountingReportCenterPage() {
                 8,
             }}
           >
-            下載內容為按下按鈕當下的最新月租資料，不使用快照。
+            已退租及到期超過 4 個月的資料不會匯出；下載內容為按下按鈕當下的最新月租資料。
           </div>
 
           <button

@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/server'
 import MonthlyRentalActions from '@/components/MonthlyRentalActions'
 import ExcelExportButton from '@/components/ExcelExportButton'
 import CsvImportButton from '@/components/CsvImportButton'
-import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
+import MonthlyRentalLotLock from '@/components/MonthlyRentalLotLock'
 
 function formatRentalPeriod(
   startDate?: string | null,
@@ -122,6 +122,40 @@ function cleanRentalType(
   return source || '-'
 }
 
+
+function fourMonthsAgoDateText() {
+  const now = new Date()
+
+  /*
+   * 月租總表只保留：
+   * - 尚未到期
+   * - 或到期未超過 4 個月
+   *
+   * 例如今天是 2026-09-04，
+   * 2026-05-04 之後的到期資料仍會顯示。
+   */
+  const cutoff = new Date(
+    now.getFullYear(),
+    now.getMonth() - 4,
+    now.getDate()
+  )
+
+  const year =
+    cutoff.getFullYear()
+
+  const month =
+    String(
+      cutoff.getMonth() + 1
+    ).padStart(2, '0')
+
+  const day =
+    String(
+      cutoff.getDate()
+    ).padStart(2, '0')
+
+  return `${year}-${month}-${day}`
+}
+
 export default async function MonthlyRentalsPage({
   searchParams,
 }: {
@@ -175,18 +209,17 @@ export default async function MonthlyRentalsPage({
   const q =
     params.q || ''
 
-  /*
-   * 這裡不再使用網址上的 lot。
-   * 全部以左側「目前工作停車場」為準。
-   */
   const lot =
-    await getCurrentWorkParkingLotId()
+    params.lot || ''
 
   const payment =
     params.payment || ''
 
   const status =
     params.status || ''
+
+  const fourMonthsAgo =
+    fourMonthsAgoDateText()
 
   const {
     data: parkingLots,
@@ -215,12 +248,6 @@ export default async function MonthlyRentalsPage({
         id: item.id,
         name: item.name,
       })
-    )
-
-  const currentParkingLot =
-    parkingLotOptions.find(
-      (item) =>
-        item.id === lot
     )
 
   let query =
@@ -284,6 +311,24 @@ export default async function MonthlyRentalsPage({
         }
       )
 
+  /*
+   * 月租總表固定排除：
+   * 1. 已退租資料
+   * 2. 到期超過 4 個月的舊資料
+   *
+   * 原始資料不刪除，退租歷史仍保留在
+   * monthly_rental_changes / 簽約異動。
+   */
+  query =
+    query
+      .neq(
+        'rental_status',
+        'cancelled'
+      )
+      .or(
+        `end_date.is.null,end_date.gte.${fourMonthsAgo}`
+      )
+
   if (q.trim()) {
     const keyword =
       q
@@ -304,25 +349,11 @@ export default async function MonthlyRentalsPage({
       )
   }
 
-  /*
-   * 有選工作停車場：
-   * 只顯示該停車場。
-   *
-   * 沒有選：
-   * 故意查不存在的 ID，
-   * 避免誤顯示全部停車場。
-   */
   if (lot) {
     query =
       query.eq(
         'parking_lot_id',
         lot
-      )
-  } else {
-    query =
-      query.eq(
-        'parking_lot_id',
-        '__no_work_lot_selected__'
       )
   }
 
@@ -443,8 +474,7 @@ export default async function MonthlyRentalsPage({
 
       <div
         style={{
-          display:
-            'flex',
+          display: 'flex',
           justifyContent:
             'space-between',
           alignItems:
@@ -471,16 +501,13 @@ export default async function MonthlyRentalsPage({
                 0,
             }}
           >
-            {currentParkingLot
-              ? `目前工作停車場：${currentParkingLot.name}`
-              : '請先選擇目前工作停車場'}
+            管理各停車場月租戶、繳費、續租、退租與總表同步。已退租與到期超過 4 個月的資料不顯示於總表。
           </p>
         </div>
 
         <div
           style={{
-            display:
-              'flex',
+            display: 'flex',
             gap: 8,
             flexWrap:
               'wrap',
@@ -491,9 +518,7 @@ export default async function MonthlyRentalsPage({
           <Link
             href={
               lot
-                ? `/dashboard/monthly-rentals/import-legacy?lot=${encodeURIComponent(
-                    lot
-                  )}`
+                ? `/dashboard/monthly-rentals/import-legacy?lot=${encodeURIComponent(lot)}`
                 : '/dashboard/monthly-rentals/import-legacy'
             }
             style={{
@@ -511,14 +536,6 @@ export default async function MonthlyRentalsPage({
                 'none',
               fontWeight:
                 600,
-              pointerEvents:
-                lot
-                  ? 'auto'
-                  : 'none',
-              opacity:
-                lot
-                  ? 1
-                  : 0.5,
             }}
           >
             匯入舊系統總表
@@ -526,12 +543,7 @@ export default async function MonthlyRentalsPage({
 
           <CsvImportButton
             parkingLots={
-              lot &&
-              currentParkingLot
-                ? [
-                    currentParkingLot,
-                  ]
-                : []
+              parkingLotOptions
             }
           />
 
@@ -602,31 +614,19 @@ export default async function MonthlyRentalsPage({
           </Link>
 
           <ExcelExportButton
-            rows={
-              exportRows
-            }
+            rows={exportRows}
           />
 
           <Link
             href={
               lot
-                ? `/dashboard/monthly-rentals/new?parking_lot_id=${encodeURIComponent(
-                    lot
-                  )}`
-                : '/dashboard/monthly-rentals'
+                ? `/dashboard/monthly-rentals/new?parking_lot_id=${encodeURIComponent(lot)}`
+                : '/dashboard/monthly-rentals/new'
             }
             className="btn"
             style={{
               textDecoration:
                 'none',
-              pointerEvents:
-                lot
-                  ? 'auto'
-                  : 'none',
-              opacity:
-                lot
-                  ? 1
-                  : 0.5,
             }}
           >
             ＋新增月租
@@ -634,81 +634,20 @@ export default async function MonthlyRentalsPage({
         </div>
       </div>
 
-      {/* 未選停車場 */}
-
-      {!lot && (
-        <div
-          className="card"
-          style={{
-            marginTop:
-              20,
-            color:
-              '#b45309',
-            fontWeight:
-              700,
-            background:
-              '#fffbeb',
-          }}
-        >
-          請先在左側「目前工作停車場」選擇停車場。
-          選擇後，月租管理會自動只顯示該停車場資料。
-        </div>
-      )}
-
-      {/* 目前停車場 */}
-
-      {lot &&
-        currentParkingLot && (
-          <div
-            className="card"
-            style={{
-              marginTop:
-                20,
-              padding:
-                16,
-              background:
-                '#f8fafc',
-              border:
-                '1px solid #cbd5e1',
-            }}
-          >
-            <div
-              style={{
-                fontSize:
-                  13,
-                color:
-                  '#64748b',
-                marginBottom:
-                  4,
-              }}
-            >
-              目前工作停車場
-            </div>
-
-            <strong
-              style={{
-                fontSize:
-                  18,
-              }}
-            >
-              {
-                currentParkingLot.name
-              }
-            </strong>
-          </div>
-        )}
+      <MonthlyRentalLotLock
+        parkingLots={parkingLotOptions}
+        currentLotId={lot}
+      />
 
       {/* 統計 */}
 
       <div
         style={{
-          display:
-            'grid',
+          display: 'grid',
           gridTemplateColumns:
             'repeat(4, minmax(150px, 1fr))',
           gap: 14,
-          marginTop:
-            22,
+          marginTop: 22,
         }}
       >
         <div className="card">
@@ -781,8 +720,7 @@ export default async function MonthlyRentalsPage({
       <div
         className="card"
         style={{
-          marginTop:
-            20,
+          marginTop: 20,
         }}
       >
         <form
@@ -813,6 +751,14 @@ export default async function MonthlyRentalsPage({
               placeholder="客戶編號、姓名、電話、車牌"
             />
           </div>
+
+          {lot && (
+            <input
+              type="hidden"
+              name="lot"
+              value={lot}
+            />
+          )}
 
           <div className="field">
             <label>
@@ -862,9 +808,6 @@ export default async function MonthlyRentalsPage({
                 已到期
               </option>
 
-              <option value="cancelled">
-                已退租
-              </option>
             </select>
           </div>
 
@@ -883,7 +826,11 @@ export default async function MonthlyRentalsPage({
             </button>
 
             <Link
-              href="/dashboard/monthly-rentals"
+              href={
+                lot
+                  ? `/dashboard/monthly-rentals?lot=${encodeURIComponent(lot)}`
+                  : '/dashboard/monthly-rentals'
+              }
               style={{
                 padding:
                   '9px 14px',
@@ -904,8 +851,6 @@ export default async function MonthlyRentalsPage({
           </div>
         </form>
       </div>
-
-      {/* 錯誤訊息 */}
 
       {parkingLotsError && (
         <div
@@ -956,36 +901,15 @@ export default async function MonthlyRentalsPage({
               'space-between',
             alignItems:
               'center',
-            gap:
-              12,
-            flexWrap:
-              'wrap',
           }}
         >
-          <div>
-            <h2
-              style={{
-                margin:
-                  0,
-              }}
-            >
-              月租名單
-            </h2>
-
-            {currentParkingLot && (
-              <div
-                className="muted"
-                style={{
-                  marginTop:
-                    4,
-                }}
-              >
-                {
-                  currentParkingLot.name
-                }
-              </div>
-            )}
-          </div>
+          <h2
+            style={{
+              margin: 0,
+            }}
+          >
+            月租名單
+          </h2>
 
           <span className="muted">
             共 {totalCount} 筆
@@ -998,17 +922,14 @@ export default async function MonthlyRentalsPage({
             0) && (
           <div
             style={{
-              padding:
-                30,
+              padding: 30,
               textAlign:
                 'center',
               color:
                 '#64748b',
             }}
           >
-            {lot
-              ? '目前沒有符合條件的月租資料。'
-              : '請先選擇目前工作停車場。'}
+            目前沒有符合條件的月租資料。
           </div>
         )}
 
@@ -1032,6 +953,11 @@ export default async function MonthlyRentalsPage({
                   1220,
                 borderCollapse:
                   'collapse',
+
+                /*
+                 * 固定欄寬，
+                 * 避免類型欄把整張表撐開
+                 */
                 tableLayout:
                   'fixed',
               }}
@@ -1039,85 +965,75 @@ export default async function MonthlyRentalsPage({
               <colgroup>
                 <col
                   style={{
-                    width:
-                      170,
+                    width: 170,
                   }}
                 />
 
                 <col
                   style={{
-                    width:
-                      85,
+                    width: 85,
                   }}
                 />
 
                 <col
                   style={{
-                    width:
-                      85,
+                    width: 85,
                   }}
                 />
 
                 <col
                   style={{
-                    width:
-                      110,
+                    width: 110,
                   }}
                 />
 
                 <col
                   style={{
-                    width:
-                      90,
+                    width: 90,
                   }}
                 />
 
                 <col
                   style={{
-                    width:
-                      55,
+                    width: 55,
+                  }}
+                />
+
+                {/* 類型 */}
+                <col
+                  style={{
+                    width: 85,
+                  }}
+                />
+
+                {/* 租用期間 */}
+                <col
+                  style={{
+                    width: 210,
                   }}
                 />
 
                 <col
                   style={{
-                    width:
-                      85,
+                    width: 75,
                   }}
                 />
 
                 <col
                   style={{
-                    width:
-                      210,
+                    width: 80,
                   }}
                 />
 
                 <col
                   style={{
-                    width:
-                      75,
+                    width: 70,
                   }}
                 />
 
                 <col
                   style={{
-                    width:
-                      80,
-                  }}
-                />
-
-                <col
-                  style={{
-                    width:
-                      70,
-                  }}
-                />
-
-                <col
-                  style={{
-                    width:
-                      200,
+                    width: 200,
                   }}
                 />
               </colgroup>
@@ -1241,23 +1157,11 @@ export default async function MonthlyRentalsPage({
 
               <tbody>
                 {rentals.map(
-                  (
-                    item: any
-                  ) => {
+                  (item: any) => {
                     const rentalType =
                       cleanRentalType(
                         item.rental_type
                       )
-
-                    const parkingLotInfo =
-                      Array.isArray(
-                        item.parking_lots
-                      )
-                        ? item
-                            .parking_lots[0] ||
-                          null
-                        : item.parking_lots ||
-                          null
 
                     return (
                       <tr
@@ -1279,11 +1183,15 @@ export default async function MonthlyRentalsPage({
                               'ellipsis',
                           }}
                           title={
-                            parkingLotInfo?.name ||
+                            item
+                              .parking_lots
+                              ?.name ||
                             ''
                           }
                         >
-                          {parkingLotInfo?.name ||
+                          {item
+                            .parking_lots
+                            ?.name ||
                             '-'}
                         </td>
 
@@ -1350,16 +1258,22 @@ export default async function MonthlyRentalsPage({
                           )}
                         </td>
 
+                        {/* 類型 */}
+
                         <td
                           style={{
                             padding:
                               8,
+
                             whiteSpace:
                               'nowrap',
+
                             overflow:
                               'hidden',
+
                             textOverflow:
                               'ellipsis',
+
                             maxWidth:
                               85,
                           }}
@@ -1371,6 +1285,8 @@ export default async function MonthlyRentalsPage({
                             rentalType
                           }
                         </td>
+
+                        {/* 租用期間 */}
 
                         <td
                           style={{
@@ -1388,6 +1304,8 @@ export default async function MonthlyRentalsPage({
                           )}
                         </td>
 
+                        {/* 金額 */}
+
                         <td
                           style={{
                             padding:
@@ -1401,9 +1319,11 @@ export default async function MonthlyRentalsPage({
                           $
                           {Number(
                             item.monthly_fee ||
-                              0
+                            0
                           ).toLocaleString()}
                         </td>
+
+                        {/* 付款 */}
 
                         <td
                           style={{
@@ -1427,26 +1347,19 @@ export default async function MonthlyRentalsPage({
                                 已繳
                               </div>
 
-                              {item.payment_date && (
-                                <div
-                                  style={{
-                                    fontSize:
-                                      13,
-                                    color:
-                                      '#64748b',
-                                    marginTop:
-                                      3,
-                                    whiteSpace:
-                                      'nowrap',
-                                    fontWeight:
-                                      500,
-                                  }}
-                                >
-                                  {
-                                    item.payment_date
-                                  }
-                                </div>
-                              )}
+                             {item.payment_date && (
+  <div
+    style={{
+      fontSize: 13,
+      color: '#64748b',
+      marginTop: 3,
+      whiteSpace: 'nowrap',
+      fontWeight: 500,
+    }}
+  >
+    {item.payment_date}
+  </div>
+)}
                             </div>
                           ) : (
                             <span
@@ -1464,6 +1377,8 @@ export default async function MonthlyRentalsPage({
                           )}
                         </td>
 
+                        {/* 狀態 */}
+
                         <td
                           style={{
                             padding:
@@ -1478,6 +1393,8 @@ export default async function MonthlyRentalsPage({
                             item.rental_status
                           )}
                         </td>
+
+                        {/* 操作 */}
 
                         <td
                           style={{

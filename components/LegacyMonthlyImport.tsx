@@ -85,95 +85,68 @@ function normalizePlate(value: string) {
     .toUpperCase()
 }
 
+
+function normalizeCustomerCode(
+  value?: string | null
+) {
+  return String(
+    value || ''
+  )
+    .trim()
+    .replace(/\s+/g, '')
+    .toUpperCase()
+}
+
 function extractPhone(value: string) {
   const source =
     String(value || '')
 
   /*
-   * 電話辨識優先順序：
-   *
-   * 1. 台灣手機 09xxxxxxxx
-   * 2. 少開頭 0 的手機 9xxxxxxxx
-   * 3. 最後才抓市話
-   *
-   * 只要備註裡同時有手機與市話，
-   * 一律優先保留手機號碼。
-   */
-
-  /*
-   * 1. 標準手機號碼
-   *
+   * 自動從備註中抓取手機號碼。
    * 支援：
    * 0912345678
    * 0912-345-678
    * 0912 345 678
-   * 0912-345678
-   * 0912 345678
+   * 手機：0912345678
    */
-  const mobileMatches =
+  const mobileMatch =
     source.match(
-      /09\d{2}(?:[\s\-]?\d){6}/g
-    ) || []
+      /09\d{2}[\s\-]?\d{3}[\s\-]?\d{3}/
+    )
 
-  for (
-    const candidate of
-    mobileMatches
-  ) {
-    const digits =
-      candidate.replace(
-        /\D/g,
-        ''
-      )
-
-    if (
-      digits.length === 10 &&
-      /^09\d{8}$/.test(
-        digits
-      )
-    ) {
-      return digits
-    }
+  if (mobileMatch) {
+    return mobileMatch[0]
+      .replace(/\s/g, '')
+      .replace(/\-/g, '')
   }
 
   /*
-   * 2. 少了開頭 0 的手機號碼
-   *
-   * 支援：
+   * 也支援少了開頭 0 的手機號碼。
+   * 例如：
    * 912345678
    * 912-345-678
    * 912 345 678
    *
-   * 自動補成：
+   * 系統會自動補成：
    * 0912345678
    */
-  const missingZeroMatches =
+  const mobileMissingZeroMatch =
     source.match(
-      /(?:^|[^0-9])9\d{2}(?:[\s\-]?\d){6}(?!\d)/g
-    ) || []
+      /(?:^|[^0-9])9\d{2}[\s\-]?\d{3}[\s\-]?\d{3}(?!\d)/
+    )
 
-  for (
-    const candidate of
-    missingZeroMatches
-  ) {
+  if (mobileMissingZeroMatch) {
     const digits =
-      candidate.replace(
-        /\D/g,
-        ''
-      )
+      mobileMissingZeroMatch[0]
+        .replace(/\D/g, '')
 
-    if (
-      digits.length === 9 &&
-      /^9\d{8}$/.test(
-        digits
-      )
-    ) {
+    if (digits.length === 9) {
       return `0${digits}`
     }
   }
 
   /*
-   * 3. 沒有手機時才抓市話
-   *
+   * 再嘗試抓取市話。
    * 支援：
    * 02-23456789
    * 02 23456789
@@ -186,20 +159,9 @@ function extractPhone(value: string) {
     )
 
   if (landlineMatch) {
-    const digits =
-      landlineMatch[0]
-        .replace(/\D/g, '')
-
-    /*
-     * 避免把手機誤當市話。
-     */
-    if (
-      !/^09\d{8}$/.test(
-        digits
-      )
-    ) {
-      return digits
-    }
+    return landlineMatch[0]
+      .replace(/\s/g, '')
+      .replace(/\-/g, '')
   }
 
   return ''
@@ -1632,6 +1594,118 @@ export default function LegacyMonthlyImport({
         return
       }
 
+      /*
+       * 已退租保護：
+       * - 有客戶編號時，以「同停車場 + 客戶編號」優先判斷。
+       * - 沒有客戶編號時，才改用「同停車場 + 車牌」判斷。
+       *
+       * 只要 monthly_rentals 內已存在 cancelled 歷史，
+       * 之後重新匯入舊總表時都不會把它改回 active，
+       * 也不會重新新增回月租總表。
+       */
+      const cancelledCustomerCodes =
+        new Set<string>()
+
+      const cancelledPlates =
+        new Set<string>()
+
+      for (
+        const rental of
+        currentRentals ||
+        []
+      ) {
+        if (
+          rental.rental_status !==
+          'cancelled'
+        ) {
+          continue
+        }
+
+        const code =
+          normalizeCustomerCode(
+            rental.customer_code
+          )
+
+        const plate =
+          normalizePlate(
+            rental.vehicle_plate
+          )
+
+        if (code) {
+          cancelledCustomerCodes.add(
+            code
+          )
+        }
+
+        if (plate) {
+          cancelledPlates.add(
+            plate
+          )
+        }
+      }
+
+      function isRetiredImportRow(
+        row: {
+          customer_code?: string | null
+          vehicle_plate?: string | null
+        }
+      ) {
+        const code =
+          normalizeCustomerCode(
+            row.customer_code
+          )
+
+        if (code) {
+          return cancelledCustomerCodes.has(
+            code
+          )
+        }
+
+        const plate =
+          normalizePlate(
+            row.vehicle_plate ||
+              ''
+          )
+
+        return Boolean(
+          plate &&
+            cancelledPlates.has(
+              plate
+            )
+        )
+      }
+
+      const effectiveRows =
+        validRows.filter(
+          (row) =>
+            !isRetiredImportRow(
+              row
+            )
+        )
+
+      const retiredSkipped =
+        validRows.length -
+        effectiveRows.length
+
+      /*
+       * 重建本次有效名單。
+       * 已退租資料即使再次出現在匯入檔，
+       * 也不視為目前有效月租戶。
+       */
+      newMap.clear()
+
+      for (
+        const row of
+        effectiveRows
+      ) {
+        newMap.set(
+          normalizePlate(
+            row.vehicle_plate
+          ),
+          row
+        )
+      }
+
       const rentalMap =
         new Map<
           string,
@@ -1643,6 +1717,17 @@ export default function LegacyMonthlyImport({
         currentRentals ||
         []
       ) {
+        /*
+         * cancelled 只作為歷史保護資料，
+         * 絕對不拿來做「重新啟用」更新。
+         */
+        if (
+          rental.rental_status ===
+          'cancelled'
+        ) {
+          continue
+        }
+
         const key =
           normalizePlate(
             rental.vehicle_plate
@@ -1651,15 +1736,7 @@ export default function LegacyMonthlyImport({
         const existing =
           rentalMap.get(key)
 
-        if (
-          !existing ||
-          (
-            existing.rental_status ===
-              'cancelled' &&
-            rental.rental_status !==
-              'cancelled'
-          )
-        ) {
+        if (!existing) {
           rentalMap.set(
             key,
             rental
@@ -1678,7 +1755,7 @@ export default function LegacyMonthlyImport({
 
       for (
         const newRow of
-        validRows
+        effectiveRows
       ) {
         const key =
           normalizePlate(
@@ -2410,6 +2487,17 @@ export default function LegacyMonthlyImport({
           const oldRow of
           previousMembers
         ) {
+          /*
+           * 已經是退租歷史的資料不要重複建立退租紀錄。
+           */
+          if (
+            isRetiredImportRow(
+              oldRow
+            )
+          ) {
+            continue
+          }
+
           const key =
             normalizePlate(
               oldRow.vehicle_plate
@@ -2688,7 +2776,7 @@ export default function LegacyMonthlyImport({
             finalStatus,
 
           notes:
-            `新加入 ${inserted} 筆；簽約資料異動 ${updated} 筆；退租 ${cancelled} 筆；只有租期更新 ${dateOnlyChanged} 筆；0元找零不足已繳 ${paidShortUpdated} 筆；公務車 ${officialVehicleUpdated} 筆；完全未異動 ${unchanged} 筆；失敗 ${failed} 筆`,
+            `新加入 ${inserted} 筆；簽約資料異動 ${updated} 筆；退租 ${cancelled} 筆；已退租保護略過 ${retiredSkipped} 筆；只有租期更新 ${dateOnlyChanged} 筆；0元找零不足已繳 ${paidShortUpdated} 筆；公務車 ${officialVehicleUpdated} 筆；完全未異動 ${unchanged} 筆；失敗 ${failed} 筆`,
         })
         .eq(
           'id',
@@ -2700,6 +2788,7 @@ export default function LegacyMonthlyImport({
 新增 ${inserted} 筆、
 簽約資料異動 ${updated} 筆、
 退租 ${cancelled} 筆、
+已退租保護略過 ${retiredSkipped} 筆、
 只有租期更新 ${dateOnlyChanged} 筆、
 0元找零不足已繳 ${paidShortUpdated} 筆、
 公務車 ${officialVehicleUpdated} 筆、
@@ -2806,7 +2895,7 @@ export default function LegacyMonthlyImport({
         </h2>
 
         <p className="muted">
-          先分析與上一份總表的差異，確認後才正式匯入。正常續租造成的日期變更不會列入簽約異動。月租總表內金額為 0 元的資料會自動略過，不會匯入。備註內若同時出現手機與市話，系統會優先保留手機號碼；手機少了開頭 0（例如 912345678）也會自動補成 0912345678，真的找不到手機時才使用市話。
+          先分析與上一份總表的差異，確認後才正式匯入。正常續租造成的日期變更不會列入簽約異動。月租總表內金額為 0 元的資料會自動略過，不會匯入。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
         </p>
 
         <div
