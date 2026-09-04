@@ -294,11 +294,10 @@ export default function MonthlyRentalTypeRuleManager({
     }
 
     if (
-      !form.match_amounts.trim() &&
-      !form.keywords.trim()
+      !form.match_amounts.trim()
     ) {
       setMessage(
-        '「可辨識金額」與「關鍵字」至少要設定一項，避免規則套用到全部月租戶。'
+        '請設定至少一個「可辨識金額」。金額是主要判斷條件，關鍵字可不填。'
       )
       return
     }
@@ -674,7 +673,7 @@ export default function MonthlyRentalTypeRuleManager({
 
           <div className="field">
             <label>
-              可辨識金額
+              可辨識金額 *
             </label>
 
             <input
@@ -697,13 +696,13 @@ export default function MonthlyRentalTypeRuleManager({
             <small
               className="muted"
             >
-              多個金額用逗號分開；空白＝不限金額。
+              多個金額用逗號分開。金額是主要判斷條件，至少要設定一個。
             </small>
           </div>
 
           <div className="field">
             <label>
-              辨識關鍵字
+              輔助關鍵字
             </label>
 
             <input
@@ -726,7 +725,7 @@ export default function MonthlyRentalTypeRuleManager({
             <small
               className="muted"
             >
-              會從原月票種類、備註、姓名等文字尋找。
+              可不填。只有同一金額同時符合多條規則時，才用關鍵字協助判斷。
             </small>
           </div>
 
@@ -949,7 +948,7 @@ export default function MonthlyRentalTypeRuleManager({
             fontSize: 13,
           }}
         >
-          規則會先依「優先順序」判斷。金額與關鍵字都有填時，兩個條件都必須符合才套用。
+          系統先依金額判斷。只有同一金額符合多條規則時，才使用關鍵字輔助；若關鍵字仍無法區分，就依「優先順序」選擇，數字越小越優先。
         </div>
 
         <div

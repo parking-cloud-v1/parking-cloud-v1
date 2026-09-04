@@ -415,8 +415,18 @@ function applyTypeRulesToRows(
             row
           )
 
-        const matchedRule =
-          sortedRules.find(
+        /*
+         * 新規則：
+         *
+         * 1. 金額是主要判斷條件。
+         * 2. 只有一條金額符合 → 直接套用。
+         * 3. 同一金額有多條規則 → 才用關鍵字協助挑選。
+         * 4. 關鍵字都沒有命中 → 依優先順序挑第一條。
+         *
+         * 因此關鍵字是「輔助條件」，不是必要條件。
+         */
+        const amountMatchedRules =
+          sortedRules.filter(
             (
               rule
             ) => {
@@ -425,81 +435,100 @@ function applyTypeRulesToRows(
                   rule.match_amounts
                 )
 
-              const keywords =
-                splitRuleValues(
-                  rule.keywords
-                )
-                  .map(
-                    (
-                      keyword
-                    ) =>
-                      keyword
-                        .toLowerCase()
-                  )
-
               /*
-               * 安全保護：
-               * 金額與關鍵字都沒設定的規則不會套用。
+               * 沒有設定金額的規則不自動套用，
+               * 避免單靠文字誤判整批月租資料。
                */
               if (
                 amounts.length ===
-                  0 &&
-                keywords.length ===
-                  0
+                0
               ) {
                 return false
               }
 
-              const amountMatched =
-                amounts.length ===
-                  0 ||
-                amounts.some(
-                  (
-                    amount
-                  ) =>
-                    Math.abs(
-                      Number(
-                        row.monthly_fee ||
-                          0
-                      ) -
-                        amount
-                    ) <
-                    0.001
-                )
-
-              if (
-                !amountMatched
-              ) {
-                return false
-              }
-
-              const keywordMatched =
-                keywords.length ===
-                  0 ||
+              return amounts.some(
                 (
-                  rule.keyword_mode ===
-                  'all'
-                    ? keywords.every(
-                        (
-                          keyword
-                        ) =>
-                          source.includes(
-                            keyword
-                          )
-                      )
-                    : keywords.some(
-                        (
-                          keyword
-                        ) =>
-                          source.includes(
-                            keyword
-                          )
-                      )
-                )
-
-              return keywordMatched
+                  amount
+                ) =>
+                  Math.abs(
+                    Number(
+                      row.monthly_fee ||
+                        0
+                    ) -
+                      amount
+                  ) <
+                  0.001
+              )
             }
           )
+
+        let matchedRule:
+          MonthlyRentalTypeRule |
+          undefined
+
+        if (
+          amountMatchedRules.length ===
+          1
+        ) {
+          matchedRule =
+            amountMatchedRules[0]
+        } else if (
+          amountMatchedRules.length >
+          1
+        ) {
+          const keywordMatchedRules =
+            amountMatchedRules.filter(
+              (
+                rule
+              ) => {
+                const keywords =
+                  splitRuleValues(
+                    rule.keywords
+                  )
+                    .map(
+                      (
+                        keyword
+                      ) =>
+                        keyword
+                          .toLowerCase()
+                    )
+
+                if (
+                  keywords.length ===
+                  0
+                ) {
+                  return false
+                }
+
+                return rule.keyword_mode ===
+                'all'
+                  ? keywords.every(
+                      (
+                        keyword
+                      ) =>
+                        source.includes(
+                          keyword
+                        )
+                    )
+                  : keywords.some(
+                      (
+                        keyword
+                      ) =>
+                        source.includes(
+                          keyword
+                        )
+                    )
+              }
+            )
+
+          /*
+           * keywordMatchedRules 本身已沿用
+           * sortedRules 的優先順序。
+           */
+          matchedRule =
+            keywordMatchedRules[0] ||
+            amountMatchedRules[0]
+        }
 
         if (
           !matchedRule
