@@ -16,6 +16,19 @@ type DetailRow = {
   monthly_cash: number
 }
 
+type PaymentMachineRow = {
+  machine_no: number
+  machine_name: string
+  invoice_start_no: string
+  invoice_end_no: string
+  amount_due: number
+  amount_paid: number
+  aps_monthly_count: number
+  aps_monthly_amount: number
+  electronic_payment_total: number
+  mobile_payment_total: number
+}
+
 type InitialReport = {
   id: string
   parking_lot_id: string
@@ -31,6 +44,7 @@ type InitialReport = {
   aps_monthly_amount: number
   electronic_payment_total: number
   mobile_payment_total: number
+  payment_machine_count?: number | null
   operator_name: string | null
   notes: string | null
   remittance_status?: 'accumulating' | 'remitted'
@@ -76,6 +90,24 @@ function datePartFromDateTimeLocal(
     )
 
   return match?.[1] || fallback
+}
+
+
+function emptyPaymentMachine(
+  index: number
+): PaymentMachineRow {
+  return {
+    machine_no: index + 1,
+    machine_name: `繳費機 ${index + 1}`,
+    invoice_start_no: '',
+    invoice_end_no: '',
+    amount_due: 0,
+    amount_paid: 0,
+    aps_monthly_count: 0,
+    aps_monthly_amount: 0,
+    electronic_payment_total: 0,
+    mobile_payment_total: 0,
+  }
 }
 
 export default function ShiftClosingForm({
@@ -221,6 +253,45 @@ export default function ShiftClosingForm({
   )
 
   const [
+    machines,
+    setMachines,
+  ] = useState<PaymentMachineRow[]>([
+    {
+      machine_no: 1,
+      machine_name: '繳費機 1',
+      invoice_start_no:
+        initialReport?.invoice_start_no ||
+        '',
+      invoice_end_no:
+        initialReport?.invoice_end_no ||
+        '',
+      amount_due:
+        num(initialReport?.amount_due),
+      amount_paid:
+        num(initialReport?.amount_paid),
+      aps_monthly_count:
+        num(initialReport?.aps_monthly_count),
+      aps_monthly_amount:
+        num(initialReport?.aps_monthly_amount),
+      electronic_payment_total:
+        num(
+          initialReport?.electronic_payment_total
+        ),
+      mobile_payment_total:
+        num(
+          initialReport?.mobile_payment_total
+        ),
+    },
+  ])
+
+  const [
+    machinesLoading,
+    setMachinesLoading,
+  ] = useState(
+    Boolean(initialReport?.id)
+  )
+
+  const [
     operatorName,
     setOperatorName,
   ] = useState(
@@ -260,6 +331,346 @@ export default function ShiftClosingForm({
             },
           ]
     )
+
+
+  useEffect(() => {
+    if (!initialReport?.id) {
+      return
+    }
+
+    let active = true
+
+    async function loadPaymentMachines() {
+      setMachinesLoading(true)
+
+      const {
+        data,
+        error,
+      } =
+        await supabase
+          .from(
+            'shift_closing_machines'
+          )
+          .select(`
+            machine_no,
+            machine_name,
+            invoice_start_no,
+            invoice_end_no,
+            amount_due,
+            amount_paid,
+            aps_monthly_count,
+            aps_monthly_amount,
+            electronic_payment_total,
+            mobile_payment_total
+          `)
+          .eq(
+            'report_id',
+            initialReport!.id
+          )
+          .order(
+            'machine_no',
+            {
+              ascending: true,
+            }
+          )
+
+      if (!active) {
+        return
+      }
+
+      if (error) {
+        setMessage(
+          `繳費機資料讀取失敗：${error.message}`
+        )
+        setMachinesLoading(false)
+        return
+      }
+
+      if (
+        data &&
+        data.length > 0
+      ) {
+        setMachines(
+          data.map(
+            (
+              item: any,
+              index: number
+            ) => ({
+              machine_no:
+                num(
+                  item.machine_no
+                ) ||
+                index + 1,
+              machine_name:
+                item.machine_name ||
+                `繳費機 ${index + 1}`,
+              invoice_start_no:
+                item.invoice_start_no ||
+                '',
+              invoice_end_no:
+                item.invoice_end_no ||
+                '',
+              amount_due:
+                num(
+                  item.amount_due
+                ),
+              amount_paid:
+                num(
+                  item.amount_paid
+                ),
+              aps_monthly_count:
+                num(
+                  item.aps_monthly_count
+                ),
+              aps_monthly_amount:
+                num(
+                  item.aps_monthly_amount
+                ),
+              electronic_payment_total:
+                num(
+                  item.electronic_payment_total
+                ),
+              mobile_payment_total:
+                num(
+                  item.mobile_payment_total
+                ),
+            })
+          )
+        )
+      }
+
+      setMachinesLoading(false)
+    }
+
+    void loadPaymentMachines()
+
+    return () => {
+      active = false
+    }
+  }, [
+    initialReport?.id,
+  ])
+
+  const machineTotals =
+    useMemo(() => {
+      return machines.reduce(
+        (
+          total,
+          item
+        ) => {
+          total.amount_due +=
+            num(
+              item.amount_due
+            )
+          total.amount_paid +=
+            num(
+              item.amount_paid
+            )
+          total.aps_monthly_count +=
+            num(
+              item.aps_monthly_count
+            )
+          total.aps_monthly_amount +=
+            num(
+              item.aps_monthly_amount
+            )
+          total.electronic_payment_total +=
+            num(
+              item.electronic_payment_total
+            )
+          total.mobile_payment_total +=
+            num(
+              item.mobile_payment_total
+            )
+
+          return total
+        },
+        {
+          amount_due: 0,
+          amount_paid: 0,
+          aps_monthly_count: 0,
+          aps_monthly_amount: 0,
+          electronic_payment_total: 0,
+          mobile_payment_total: 0,
+        }
+      )
+    }, [
+      machines,
+    ])
+
+  useEffect(() => {
+    setInvoiceStartNo(
+      machines[0]
+        ?.invoice_start_no ||
+        ''
+    )
+    setInvoiceEndNo(
+      machines[0]
+        ?.invoice_end_no ||
+        ''
+    )
+    setAmountDue(
+      machineTotals.amount_due
+    )
+    setAmountPaid(
+      machineTotals.amount_paid
+    )
+    setApsMonthlyCount(
+      machineTotals.aps_monthly_count
+    )
+    setApsMonthlyAmount(
+      machineTotals.aps_monthly_amount
+    )
+    setElectronicPaymentTotal(
+      machineTotals.electronic_payment_total
+    )
+    setMobilePaymentTotal(
+      machineTotals.mobile_payment_total
+    )
+  }, [
+    machines,
+    machineTotals,
+  ])
+
+  function updateMachine(
+    index: number,
+    patch: Partial<PaymentMachineRow>
+  ) {
+    setMachines(
+      (
+        current
+      ) =>
+        current.map(
+          (
+            item,
+            itemIndex
+          ) =>
+            itemIndex ===
+            index
+              ? {
+                  ...item,
+                  ...patch,
+                }
+              : item
+        )
+    )
+  }
+
+  function changeMachineCount(
+    nextCount: number
+  ) {
+    const count =
+      Math.min(
+        10,
+        Math.max(
+          1,
+          Math.floor(
+            num(
+              nextCount
+            )
+          )
+        )
+      )
+
+    setMachines(
+      (
+        current
+      ) => {
+        if (
+          count ===
+          current.length
+        ) {
+          return current
+        }
+
+        if (
+          count <
+          current.length
+        ) {
+          const removed =
+            current.slice(
+              count
+            )
+
+          const hasData =
+            removed.some(
+              (
+                item
+              ) =>
+                item.invoice_start_no ||
+                item.invoice_end_no ||
+                num(
+                  item.amount_due
+                ) !==
+                  0 ||
+                num(
+                  item.amount_paid
+                ) !==
+                  0 ||
+                num(
+                  item.aps_monthly_count
+                ) !==
+                  0 ||
+                num(
+                  item.aps_monthly_amount
+                ) !==
+                  0 ||
+                num(
+                  item.electronic_payment_total
+                ) !==
+                  0 ||
+                num(
+                  item.mobile_payment_total
+                ) !==
+                  0
+            )
+
+          if (
+            hasData &&
+            !window.confirm(
+              `將繳費機數量改為 ${count} 台，會移除後面已輸入的繳費機資料，確定繼續？`
+            )
+          ) {
+            return current
+          }
+
+          return current
+            .slice(
+              0,
+              count
+            )
+            .map(
+              (
+                item,
+                index
+              ) => ({
+                ...item,
+                machine_no:
+                  index + 1,
+              })
+            )
+        }
+
+        const next =
+          [
+            ...current,
+          ]
+
+        while (
+          next.length <
+          count
+        ) {
+          next.push(
+            emptyPaymentMachine(
+              next.length
+            )
+          )
+        }
+
+        return next
+      }
+    )
+  }
 
 
   /*
@@ -608,6 +1019,15 @@ export default function ShiftClosingForm({
       return
     }
 
+    if (
+      machines.length < 1
+    ) {
+      setMessage(
+        '請至少保留 1 台繳費機。'
+      )
+      return
+    }
+
     setSaving(true)
 
     try {
@@ -675,6 +1095,9 @@ export default function ShiftClosingForm({
           num(
             mobilePaymentTotal
           ),
+
+        payment_machine_count:
+          machines.length,
 
         cash_actual:
           num(
@@ -776,6 +1199,26 @@ export default function ShiftClosingForm({
         ) {
           throw deleteDetailError
         }
+
+        const {
+          error:
+            deleteMachineError,
+        } =
+          await supabase
+            .from(
+              'shift_closing_machines'
+            )
+            .delete()
+            .eq(
+              'report_id',
+              initialReport.id
+            )
+
+        if (
+          deleteMachineError
+        ) {
+          throw deleteMachineError
+        }
       } else {
         const {
           data,
@@ -799,6 +1242,82 @@ export default function ShiftClosingForm({
 
         reportId =
           data.id
+      }
+
+      const {
+        error:
+          machineError,
+      } =
+        await supabase
+          .from(
+            'shift_closing_machines'
+          )
+          .insert(
+            machines.map(
+              (
+                item,
+                index
+              ) => ({
+                report_id:
+                  reportId,
+                machine_no:
+                  index + 1,
+                machine_name:
+                  item.machine_name ||
+                  `繳費機 ${index + 1}`,
+                invoice_start_no:
+                  item.invoice_start_no ||
+                  null,
+                invoice_end_no:
+                  item.invoice_end_no ||
+                  null,
+                amount_due:
+                  num(
+                    item.amount_due
+                  ),
+                amount_paid:
+                  num(
+                    item.amount_paid
+                  ),
+                aps_monthly_count:
+                  num(
+                    item.aps_monthly_count
+                  ),
+                aps_monthly_amount:
+                  num(
+                    item.aps_monthly_amount
+                  ),
+                electronic_payment_total:
+                  num(
+                    item.electronic_payment_total
+                  ),
+                mobile_payment_total:
+                  num(
+                    item.mobile_payment_total
+                  ),
+                cash_actual:
+                  num(
+                    item.amount_paid
+                  ) -
+                  num(
+                    item.electronic_payment_total
+                  ) -
+                  num(
+                    item.mobile_payment_total
+                  ) -
+                  num(
+                    item.aps_monthly_amount
+                  ),
+                sort_order:
+                  index,
+              })
+            )
+          )
+
+      if (
+        machineError
+      ) {
+        throw machineError
       }
 
       const {
@@ -966,19 +1485,18 @@ export default function ShiftClosingForm({
             </label>
 
             <select
-  value={
-    parkingLotId
-  }
-  disabled
-  onChange={(
-    event
-  ) =>
-    setParkingLotId(
-      event.target
-        .value
-    )
-  }
->
+              value={
+                parkingLotId
+              }
+              onChange={(
+                event
+              ) =>
+                setParkingLotId(
+                  event.target
+                    .value
+                )
+              }
+            >
               <option value="">
                 請選擇停車場
               </option>
@@ -1120,208 +1638,593 @@ export default function ShiftClosingForm({
           marginTop: 18,
         }}
       >
-        <h2
+        <div
           style={{
-            marginTop: 0,
+            display: 'flex',
+            justifyContent:
+              'space-between',
+            alignItems:
+              'flex-end',
+            gap: 14,
+            flexWrap:
+              'wrap',
           }}
         >
-          結班金額資料
-        </h2>
+          <div>
+            <h2
+              style={{
+                marginTop: 0,
+                marginBottom: 6,
+              }}
+            >
+              繳費機結班資料
+            </h2>
 
-        <div className="closing-grid">
-          <div className="field">
-            <label>
-              繳費機發票起號
-            </label>
-
-            <input
-              value={
-                invoiceStartNo
-              }
-              onChange={(
-                event
-              ) =>
-                setInvoiceStartNo(
-                  event.target
-                    .value
-                )
-              }
-            />
+            <div
+              className="muted"
+              style={{
+                fontSize: 13,
+              }}
+            >
+              每台繳費機分開輸入，系統會自動加總到整份結班報表，避免不同機台帳務混在一起。
+            </div>
           </div>
 
-          <div className="field">
+          <div
+            className="field"
+            style={{
+              minWidth: 180,
+            }}
+          >
             <label>
-              繳費機發票訖號
+              本場繳費機台數
             </label>
 
-            <input
+            <select
               value={
-                invoiceEndNo
+                machines.length
+              }
+              disabled={
+                machinesLoading
               }
               onChange={(
                 event
               ) =>
-                setInvoiceEndNo(
-                  event.target
-                    .value
-                )
-              }
-            />
-          </div>
-
-          <div className="field">
-            <label>
-              應收總計
-            </label>
-
-            <input
-              type="number"
-              value={
-                amountDue
-              }
-              onChange={(
-                event
-              ) =>
-                setAmountDue(
+                changeMachineCount(
                   num(
                     event.target
                       .value
                   )
                 )
               }
-            />
-          </div>
-
-          <div className="field">
-            <label>
-              實收總計
-            </label>
-
-            <input
-              type="number"
-              value={
-                amountPaid
-              }
-              onChange={(
-                event
-              ) =>
-                setAmountPaid(
-                  num(
-                    event.target
-                      .value
-                  )
+            >
+              {Array.from(
+                {
+                  length: 10,
+                },
+                (
+                  _,
+                  index
+                ) => (
+                  <option
+                    key={
+                      index + 1
+                    }
+                    value={
+                      index + 1
+                    }
+                  >
+                    {index + 1} 台
+                  </option>
                 )
-              }
-            />
+              )}
+            </select>
           </div>
+        </div>
 
-          <div className="field">
-            <label>
-              APS 月租總筆數
-            </label>
+        {machinesLoading && (
+          <div
+            className="muted"
+            style={{
+              marginTop: 14,
+            }}
+          >
+            正在讀取繳費機資料…
+          </div>
+        )}
 
-            <input
-              type="number"
-              min={0}
-              value={
-                apsMonthlyCount
-              }
-              onChange={(
-                event
-              ) =>
-                setApsMonthlyCount(
-                  num(
-                    event.target
-                      .value
-                  )
+        <div
+          style={{
+            display: 'grid',
+            gap: 14,
+            marginTop: 16,
+          }}
+        >
+          {machines.map(
+            (
+              machine,
+              index
+            ) => {
+              const machineDigital =
+                num(
+                  machine.electronic_payment_total
+                ) +
+                num(
+                  machine.mobile_payment_total
                 )
-              }
-            />
-          </div>
 
-          <div className="field">
-            <label>
-              APS 本日月租金額
-            </label>
-
-            <input
-              type="number"
-              value={
-                apsMonthlyAmount
-              }
-              onChange={(
-                event
-              ) =>
-                setApsMonthlyAmount(
-                  num(
-                    event.target
-                      .value
-                  )
+              const machineCash =
+                num(
+                  machine.amount_paid
+                ) -
+                machineDigital -
+                num(
+                  machine.aps_monthly_amount
                 )
-              }
-            />
+
+              return (
+                <div
+                  key={
+                    machine.machine_no
+                  }
+                  style={{
+                    border:
+                      '1px solid #e5e7eb',
+                    borderRadius:
+                      12,
+                    padding: 14,
+                    background:
+                      '#f8fafc',
+                  }}
+                >
+                  <div
+                    style={{
+                      display:
+                        'flex',
+                      justifyContent:
+                        'space-between',
+                      alignItems:
+                        'center',
+                      gap: 10,
+                      marginBottom:
+                        12,
+                      flexWrap:
+                        'wrap',
+                    }}
+                  >
+                    <strong>
+                      第 {index + 1} 台繳費機
+                    </strong>
+
+                    <span
+                      className="muted"
+                      style={{
+                        fontSize:
+                          13,
+                      }}
+                    >
+                      臨停現金：$
+                      {machineCash.toLocaleString()}
+                    </span>
+                  </div>
+
+                  <div className="closing-grid">
+                    <div className="field">
+                      <label>
+                        機台名稱／編號
+                      </label>
+
+                      <input
+                        value={
+                          machine.machine_name
+                        }
+                        onChange={(
+                          event
+                        ) =>
+                          updateMachine(
+                            index,
+                            {
+                              machine_name:
+                                event
+                                  .target
+                                  .value,
+                            }
+                          )
+                        }
+                        placeholder={`繳費機 ${index + 1}`}
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>
+                        發票起號
+                      </label>
+
+                      <input
+                        value={
+                          machine.invoice_start_no
+                        }
+                        onChange={(
+                          event
+                        ) =>
+                          updateMachine(
+                            index,
+                            {
+                              invoice_start_no:
+                                event
+                                  .target
+                                  .value,
+                            }
+                          )
+                        }
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>
+                        發票訖號
+                      </label>
+
+                      <input
+                        value={
+                          machine.invoice_end_no
+                        }
+                        onChange={(
+                          event
+                        ) =>
+                          updateMachine(
+                            index,
+                            {
+                              invoice_end_no:
+                                event
+                                  .target
+                                  .value,
+                            }
+                          )
+                        }
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>
+                        應收總計
+                      </label>
+
+                      <input
+                        type="number"
+                        value={
+                          machine.amount_due
+                        }
+                        onChange={(
+                          event
+                        ) =>
+                          updateMachine(
+                            index,
+                            {
+                              amount_due:
+                                num(
+                                  event
+                                    .target
+                                    .value
+                                ),
+                            }
+                          )
+                        }
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>
+                        實收總計
+                      </label>
+
+                      <input
+                        type="number"
+                        value={
+                          machine.amount_paid
+                        }
+                        onChange={(
+                          event
+                        ) =>
+                          updateMachine(
+                            index,
+                            {
+                              amount_paid:
+                                num(
+                                  event
+                                    .target
+                                    .value
+                                ),
+                            }
+                          )
+                        }
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>
+                        APS 月租筆數
+                      </label>
+
+                      <input
+                        type="number"
+                        min={0}
+                        value={
+                          machine.aps_monthly_count
+                        }
+                        onChange={(
+                          event
+                        ) =>
+                          updateMachine(
+                            index,
+                            {
+                              aps_monthly_count:
+                                num(
+                                  event
+                                    .target
+                                    .value
+                                ),
+                            }
+                          )
+                        }
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>
+                        APS 月租金額
+                      </label>
+
+                      <input
+                        type="number"
+                        value={
+                          machine.aps_monthly_amount
+                        }
+                        onChange={(
+                          event
+                        ) =>
+                          updateMachine(
+                            index,
+                            {
+                              aps_monthly_amount:
+                                num(
+                                  event
+                                    .target
+                                    .value
+                                ),
+                            }
+                          )
+                        }
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>
+                        電子支付（悠遊卡、一卡通）
+                      </label>
+
+                      <input
+                        type="number"
+                        value={
+                          machine.electronic_payment_total
+                        }
+                        onChange={(
+                          event
+                        ) =>
+                          updateMachine(
+                            index,
+                            {
+                              electronic_payment_total:
+                                num(
+                                  event
+                                    .target
+                                    .value
+                                ),
+                            }
+                          )
+                        }
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>
+                        手機支付（LINE PAY、街口、悠遊付）
+                      </label>
+
+                      <input
+                        type="number"
+                        value={
+                          machine.mobile_payment_total
+                        }
+                        onChange={(
+                          event
+                        ) =>
+                          updateMachine(
+                            index,
+                            {
+                              mobile_payment_total:
+                                num(
+                                  event
+                                    .target
+                                    .value
+                                ),
+                            }
+                          )
+                        }
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>
+                        電子＋手機支付
+                      </label>
+
+                      <input
+                        type="number"
+                        value={
+                          machineDigital
+                        }
+                        readOnly
+                      />
+                    </div>
+
+                    <div className="field">
+                      <label>
+                        本機臨停現金
+                      </label>
+
+                      <input
+                        type="number"
+                        value={
+                          machineCash
+                        }
+                        readOnly
+                      />
+
+                      {machineCash < 0 && (
+                        <div
+                          style={{
+                            color:
+                              '#dc2626',
+                            fontSize:
+                              12,
+                            marginTop:
+                              4,
+                          }}
+                        >
+                          本機現金為負數，請確認實收、電子支付、手機支付及月租金額。
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )
+            }
+          )}
+        </div>
+
+        <div
+          style={{
+            marginTop: 18,
+            paddingTop: 16,
+            borderTop:
+              '1px solid #e5e7eb',
+          }}
+        >
+          <h3
+            style={{
+              marginTop: 0,
+              marginBottom: 12,
+            }}
+          >
+            全部繳費機自動加總
+          </h3>
+
+          <div className="closing-grid">
+            <div className="field">
+              <label>
+                應收總計
+              </label>
+              <input
+                type="number"
+                value={
+                  amountDue
+                }
+                readOnly
+              />
+            </div>
+
+            <div className="field">
+              <label>
+                實收總計
+              </label>
+              <input
+                type="number"
+                value={
+                  amountPaid
+                }
+                readOnly
+              />
+            </div>
+
+            <div className="field">
+              <label>
+                APS 月租總筆數
+              </label>
+              <input
+                type="number"
+                value={
+                  apsMonthlyCount
+                }
+                readOnly
+              />
+            </div>
+
+            <div className="field">
+              <label>
+                APS 本日月租金額
+              </label>
+              <input
+                type="number"
+                value={
+                  apsMonthlyAmount
+                }
+                readOnly
+              />
+            </div>
+
+            <div className="field">
+              <label>
+                電子支付總額
+              </label>
+              <input
+                type="number"
+                value={
+                  electronicPaymentTotal
+                }
+                readOnly
+              />
+            </div>
+
+            <div className="field">
+              <label>
+                手機支付總額
+              </label>
+              <input
+                type="number"
+                value={
+                  mobilePaymentTotal
+                }
+                readOnly
+              />
+            </div>
+
+            <div className="field">
+              <label>
+                電子支付＋手機支付總和
+              </label>
+              <input
+                type="number"
+                value={
+                  digitalPaymentTotal
+                }
+                readOnly
+              />
+            </div>
+
+            <div className="field">
+              <label>
+                全部繳費機臨停現金
+              </label>
+              <input
+                type="number"
+                value={
+                  temporaryCashActual
+                }
+                readOnly
+              />
+            </div>
           </div>
-
-          <div className="field">
-            <label>
-              電子支付本日總額（悠遊卡、一卡通）
-            </label>
-
-            <input
-              type="number"
-              value={
-                electronicPaymentTotal
-              }
-              onChange={(
-                event
-              ) =>
-                setElectronicPaymentTotal(
-                  num(
-                    event.target
-                      .value
-                  )
-                )
-              }
-            />
-          </div>
-
-          <div className="field">
-            <label>
-              手機支付本日總額（LINE PAY、街口、悠遊付）
-            </label>
-
-            <input
-              type="number"
-              value={
-                mobilePaymentTotal
-              }
-              onChange={(
-                event
-              ) =>
-                setMobilePaymentTotal(
-                  num(
-                    event.target
-                      .value
-                  )
-                )
-              }
-            />
-          </div>
-
-          <div className="field">
-            <label>
-              電子支付＋手機支付總和
-            </label>
-
-            <input
-              type="number"
-              value={
-                digitalPaymentTotal
-              }
-              readOnly
-            />
-          </div>
-
         </div>
       </div>
 

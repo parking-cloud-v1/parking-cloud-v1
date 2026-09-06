@@ -1,0 +1,309 @@
+.portal {
+  --pp-text: #0f172a;
+  --pp-muted: #64748b;
+  --pp-border: #e2e8f0;
+  --pp-blue: #2563eb;
+  --pp-blue-dark: #1d4ed8;
+  --pp-green: #166534;
+  width: 100% !important;
+  max-width: 860px !important;
+  margin: 0 auto !important;
+  padding: 34px 18px 64px !important;
+  box-sizing: border-box;
+  color: var(--pp-text) !important;
+  font-family: "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", Arial, sans-serif !important;
+}
+
+.portal::before {
+  content: "智驛科技有限公司";
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  margin-bottom: 8px;
+  padding: 5px 10px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+
+.portal h1 {
+  margin-top: 0 !important;
+  color: #0f172a !important;
+  font-size: clamp(30px, 5vw, 40px) !important;
+  line-height: 1.2 !important;
+  font-weight: 900 !important;
+  letter-spacing: -.03em;
+}
+
+.portal h2 {
+  color: #0f172a;
+  font-weight: 900;
+  letter-spacing: -.01em;
+}
+
+.portal p {
+  line-height: 1.8;
+}
+
+.portal form,
+.portal :global(.card) {
+  border: 1px solid var(--pp-border) !important;
+  border-radius: 18px !important;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, .055);
+}
+
+.portal form {
+  padding: 22px !important;
+}
+
+.portal label {
+  color: #1e293b;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.portal input:not([type="checkbox"]),
+.portal select,
+.portal textarea {
+  width: 100%;
+  min-height: 48px;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 11px !important;
+  background: #fff !important;
+  color: #0f172a !important;
+  padding: 10px 13px !important;
+  font: inherit;
+  font-size: 16px !important;
+  outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.portal input:not([type="checkbox"]):focus,
+.portal select:focus,
+.portal textarea:focus {
+  border-color: #60a5fa !important;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, .11);
+}
+
+.portal input[type="checkbox"] {
+  width: 19px;
+  height: 19px;
+  accent-color: #2563eb;
+}
+
+.portal button {
+  min-height: 46px;
+  border: 0 !important;
+  border-radius: 11px !important;
+  padding: 10px 16px !important;
+  background: #0f172a !important;
+  color: #fff !important;
+  font: inherit;
+  font-weight: 900 !important;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, .12);
+  transition: transform .12s ease, opacity .12s ease, box-shadow .12s ease;
+}
+
+.portal button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 9px 22px rgba(15, 23, 42, .17);
+}
+
+.portal button:disabled {
+  opacity: .48;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.portal a {
+  color: #1d4ed8;
+  font-weight: 800;
+  text-underline-offset: 3px;
+}
+
+.portal > div:first-child a,
+.navLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #fff;
+  text-decoration: none;
+}
+
+.pageLead {
+  color: #64748b !important;
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+.homeActions {
+  margin-top: 16px !important;
+  margin-bottom: 22px;
+}
+
+.homeActions a {
+  border-radius: 12px !important;
+  padding: 11px 15px !important;
+  box-shadow: 0 5px 16px rgba(15, 23, 42, .04);
+}
+
+.lotList {
+  gap: 14px !important;
+}
+
+.lotCard {
+  position: relative;
+  overflow: hidden;
+  padding: 22px !important;
+  border: 1px solid #dbeafe !important;
+  border-radius: 17px !important;
+  background: linear-gradient(135deg, #fff 0%, #f8fbff 100%) !important;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
+  transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+}
+
+.lotCard:hover {
+  transform: translateY(-2px);
+  border-color: #93c5fd !important;
+  box-shadow: 0 12px 30px rgba(37, 99, 235, .09);
+}
+
+.lotCard::after {
+  content: "申請 →";
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.lotCardName {
+  display: block;
+  max-width: calc(100% - 72px);
+  color: #0f172a;
+  font-size: clamp(21px, 4vw, 28px);
+  line-height: 1.35;
+  font-weight: 900 !important;
+  letter-spacing: -.02em;
+}
+
+.lotHero {
+  padding: 24px !important;
+  border: 1px solid #bfdbfe !important;
+  border-radius: 19px !important;
+  background: linear-gradient(135deg, #fff 0%, #eff6ff 100%) !important;
+  box-shadow: 0 10px 28px rgba(37, 99, 235, .07);
+}
+
+.lotHero::before {
+  content: "目前申請停車場";
+  display: block;
+  margin-bottom: 7px;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+
+.lotHero > div:first-child {
+  display: none;
+}
+
+.lotName {
+  display: block;
+  color: #0f172a !important;
+  font-size: clamp(26px, 5vw, 36px) !important;
+  line-height: 1.3;
+  font-weight: 900 !important;
+  letter-spacing: -.025em;
+}
+
+.applicationForm {
+  margin-top: 18px;
+  display: grid !important;
+  gap: 16px !important;
+}
+
+.applicationForm > label {
+  display: grid;
+  gap: 7px;
+}
+
+.applicationForm > label > div {
+  margin-top: 0 !important;
+}
+
+.resultCard {
+  padding: 26px !important;
+  border-radius: 18px !important;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, .06);
+}
+
+.portal section {
+  border-radius: 16px !important;
+}
+
+.portal [style*="background: rgb(248, 250, 252)"],
+.portal [style*="background:#f8fafc"] {
+  border-radius: 14px;
+}
+
+@media (max-width: 640px) {
+  .portal {
+    padding: 24px 14px 48px !important;
+  }
+
+  .portal h1 {
+    font-size: 30px !important;
+  }
+
+  .portal form {
+    padding: 17px !important;
+  }
+
+  .lotCard {
+    padding: 18px !important;
+  }
+
+  .lotCard::after {
+    position: static;
+    display: block;
+    margin-top: 12px;
+  }
+
+  .lotCardName {
+    max-width: 100%;
+  }
+}
+
+@media print {
+  .portal {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  .portal::before {
+    display: none !important;
+  }
+
+  .portal h1 {
+    font-size: 24px !important;
+  }
+
+  .portal button,
+  .portal a {
+    box-shadow: none !important;
+  }
+}

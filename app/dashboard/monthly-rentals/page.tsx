@@ -4,9 +4,11 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 
 import MonthlyRentalActions from '@/components/MonthlyRentalActions'
+import MonthlyRentalDeleteButton from '@/components/MonthlyRentalDeleteButton'
 import ExcelExportButton from '@/components/ExcelExportButton'
 import CsvImportButton from '@/components/CsvImportButton'
 import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
+import ui from '@/components/PlatformAdmin.module.css'
 
 function formatRentalPeriod(
   startDate?: string | null,
@@ -120,6 +122,70 @@ function cleanRentalType(
   }
 
   return source || '-'
+}
+
+
+function monthKey(value?: string | null) {
+  return value ? String(value).slice(0, 7) : ''
+}
+
+function formatPaidMonths(months: string[]) {
+  const unique = Array.from(new Set(months.map(monthKey).filter(Boolean))).sort()
+  if (unique.length === 0) return '-'
+
+  const groups: string[][] = []
+  for (const item of unique) {
+    const lastGroup = groups[groups.length - 1]
+    if (!lastGroup) {
+      groups.push([item])
+      continue
+    }
+    const last = lastGroup[lastGroup.length - 1]
+    const [ly, lm] = last.split('-').map(Number)
+    const [cy, cm] = item.split('-').map(Number)
+    const nextY = lm === 12 ? ly + 1 : ly
+    const nextM = lm === 12 ? 1 : lm + 1
+    if (cy === nextY && cm === nextM) lastGroup.push(item)
+    else groups.push([item])
+  }
+
+  return groups.map((group) => {
+    const first = group[0].replace('-', '/')
+    if (group.length === 1) return first
+    const last = group[group.length - 1]
+    const firstYear = group[0].slice(0, 4)
+    const lastText = last.startsWith(firstYear + '-') ? last.slice(5) : last.replace('-', '/')
+    return `${first}～${lastText}`
+  }).join('、')
+}
+
+function latestPaymentMonth(months: string[]) {
+  const unique = Array.from(new Set(months.map(monthKey).filter(Boolean))).sort()
+  const latest = unique[unique.length - 1] || ''
+  return latest ? latest.replace('-', '/') : '-'
+}
+
+
+function findNextPaymentMonth(
+  startDate?: string | null,
+  endDate?: string | null,
+  paidMonths: string[] = [],
+  legacyPaidWithoutMonths = false
+) {
+  if (!startDate || !endDate) return '-'
+  if (legacyPaidWithoutMonths && paidMonths.length === 0) return '待補繳費月份'
+
+  const paid = new Set(paidMonths.map(monthKey))
+  let [year, month] = monthKey(startDate).split('-').map(Number)
+  const [endYear, endMonth] = monthKey(endDate).split('-').map(Number)
+
+  while (year < endYear || (year === endYear && month <= endMonth)) {
+    const key = `${year}-${String(month).padStart(2, '0')}`
+    if (!paid.has(key)) return key.replace('-', '/')
+    month += 1
+    if (month > 12) { month = 1; year += 1 }
+  }
+  return '本租期已繳清'
 }
 
 
@@ -274,6 +340,10 @@ export default async function MonthlyRentalsPage({
 
         start_date,
         end_date,
+        rental_term_id,
+        data_source,
+        rental_term_locked,
+        last_paid_month,
 
         monthly_fee,
 
@@ -358,6 +428,15 @@ export default async function MonthlyRentalsPage({
     lot ||
     '00000000-0000-0000-0000-000000000000'
 
+  const { data: activeRentalTerm } = lot
+    ? await supabase
+        .from('parking_lot_rental_terms')
+        .select('id,term_name,start_date,end_date')
+        .eq('parking_lot_id', lot)
+        .eq('is_active', true)
+        .maybeSingle()
+    : { data: null as any }
+
   query =
     query.eq(
       'parking_lot_id',
@@ -386,33 +465,74 @@ export default async function MonthlyRentalsPage({
   } =
     await query
 
+  const rentalIds = (rentals || []).map((item: any) => item.id)
+  let paymentMonths: any[] = []
+
+  if (rentalIds.length > 0) {
+    const { data: monthRows, error: monthError } = await supabase
+      .from('monthly_rental_payment_months')
+      .select('monthly_rental_id,coverage_month,payment_date,invoice_number,amount,source')
+      .in('monthly_rental_id', rentalIds)
+      .order('coverage_month', { ascending: true })
+
+    if (!monthError) paymentMonths = monthRows || []
+  }
+
+  const paymentMonthMap = new Map<string, string[]>()
+  for (const row of paymentMonths) {
+    const list = paymentMonthMap.get(row.monthly_rental_id) || []
+    list.push(row.coverage_month)
+    paymentMonthMap.set(row.monthly_rental_id, list)
+  }
+
+  /*
+   * Supabase 回傳資料具有推導型別，不能直接在原物件上動態新增
+   * _paid_months 等顯示用欄位，否則 Next.js build 會出現：
+   * Property '_paid_months' does not exist ...
+   *
+   * 因此改成建立新的畫面資料，不修改 Supabase 原始結果。
+   */
+  const enrichedRentals: any[] = (rentals || []).map((item: any) => {
+    const paidMonths = paymentMonthMap.get(item.id) || []
+
+    return {
+      ...item,
+      _paid_months: paidMonths,
+      _paid_months_text: formatPaidMonths(paidMonths),
+      _payment_month: latestPaymentMonth(paidMonths),
+      _next_payment_month: findNextPaymentMonth(
+        item.start_date,
+        item.end_date,
+        paidMonths,
+        item.payment_status === 'paid'
+      ),
+    }
+  })
+
   const totalCount =
-    rentals?.length ||
-    0
+    enrichedRentals.length
 
   const paidCount =
-    rentals?.filter(
+    enrichedRentals.filter(
       (item: any) =>
-        item.payment_status ===
-        'paid'
-    ).length || 0
+        (item._paid_months?.length || 0) > 0 || item.payment_status === 'paid'
+    ).length
 
   const unpaidCount =
-    rentals?.filter(
+    enrichedRentals.filter(
       (item: any) =>
-        item.payment_status ===
-        'unpaid'
-    ).length || 0
+        item._next_payment_month !== '本租期已繳清'
+    ).length
 
   const activeCount =
-    rentals?.filter(
+    enrichedRentals.filter(
       (item: any) =>
         item.rental_status ===
         'active'
-    ).length || 0
+    ).length
 
   const exportRows =
-    rentals?.map(
+    enrichedRentals.map(
       (item: any) => ({
         customer_code:
           item.customer_code ||
@@ -440,11 +560,19 @@ export default async function MonthlyRentalsPage({
           ),
 
         start_date:
-          item.start_date ||
+          activeRentalTerm?.start_date ||
           '',
 
         end_date:
-          item.end_date ||
+          activeRentalTerm?.end_date ||
+          '',
+
+        payment_month:
+          item._payment_month ||
+          '-',
+
+        data_source:
+          item.data_source ||
           '',
 
         monthly_fee:
@@ -476,7 +604,7 @@ export default async function MonthlyRentalsPage({
     ) || []
 
   return (
-    <div>
+    <div className={ui.monthlyPage}>
       {/* 標題 */}
 
       <div
@@ -508,7 +636,7 @@ export default async function MonthlyRentalsPage({
                 0,
             }}
           >
-            管理各停車場月租戶、繳費、續租、退租與總表同步。已退租與到期超過 4 個月的資料不顯示於總表。
+            管理各停車場月租戶。名單中的正式租期直接依主管目前租期設定顯示，繳費只顯示最近一個繳費月份；完整繳費歷史仍保留在「繳費紀錄」。已退租與到期超過 4 個月的資料不顯示於總表。
           </p>
         </div>
 
@@ -548,29 +676,21 @@ export default async function MonthlyRentalsPage({
             匯入舊系統總表
           </Link>
 
-          {profile.role ===
-            'supervisor' && (
-            <Link
-              href="/dashboard/settings/monthly-rental-types"
-              style={{
-                padding:
-                  '9px 14px',
-                border:
-                  '1px solid #cbd5e1',
-                borderRadius:
-                  8,
-                background:
-                  '#fff',
-                color:
-                  '#334155',
-                textDecoration:
-                  'none',
-                fontWeight:
-                  600,
-              }}
-            >
-              月租類型設定
-            </Link>
+          {profile.role === 'supervisor' && (
+            <>
+              <Link
+                href="/dashboard/monthly-rentals/rental-terms"
+                style={{ padding: '9px 14px', border: '1px solid #cbd5e1', borderRadius: 8, background: '#fff', color: '#334155', textDecoration: 'none', fontWeight: 600 }}
+              >
+                租期設定
+              </Link>
+              <Link
+                href="/dashboard/monthly-rentals/legacy-new"
+                style={{ padding: '9px 14px', border: '1px solid #cbd5e1', borderRadius: 8, background: '#fff', color: '#334155', textDecoration: 'none', fontWeight: 600 }}
+              >
+                ＋新增舊資料
+              </Link>
+            </>
           )}
 
           <CsvImportButton
@@ -695,6 +815,14 @@ export default async function MonthlyRentalsPage({
             '尚未選擇工作停車場'}
         </strong>
 
+        {lot && (
+          <div style={{ marginTop: 8, fontSize: 13, color: activeRentalTerm ? '#166534' : '#b45309' }}>
+            {activeRentalTerm
+              ? `目前正式租期：${activeRentalTerm.term_name}｜${activeRentalTerm.start_date} ～ ${activeRentalTerm.end_date}`
+              : '尚未設定目前正式租期；主管可到「租期設定」建立抽籤／年度期別。'}
+          </div>
+        )}
+
         {!lot && (
           <div
             style={{
@@ -748,7 +876,7 @@ export default async function MonthlyRentalsPage({
                 700,
             }}
           >
-            已繳
+            有繳費紀錄
           </div>
 
           <h2
@@ -770,7 +898,7 @@ export default async function MonthlyRentalsPage({
                 700,
             }}
           >
-            未繳
+            尚有應繳月份
           </div>
 
           <h2
@@ -823,7 +951,7 @@ export default async function MonthlyRentalsPage({
 
           <div className="field">
             <label>
-              付款
+              最近收款
             </label>
 
             <select
@@ -976,8 +1104,8 @@ export default async function MonthlyRentalsPage({
         </div>
 
         {!error &&
-        (!rentals ||
-          rentals.length ===
+        (!enrichedRentals ||
+          enrichedRentals.length ===
             0) && (
           <div
             style={{
@@ -993,8 +1121,8 @@ export default async function MonthlyRentalsPage({
         )}
 
         {!error &&
-        rentals &&
-        rentals.length >
+        enrichedRentals &&
+        enrichedRentals.length >
           0 && (
           <div
             style={{
@@ -1009,7 +1137,7 @@ export default async function MonthlyRentalsPage({
                 width:
                   '100%',
                 minWidth:
-                  1380,
+                  1320,
                 borderCollapse:
                   'collapse',
 
@@ -1034,17 +1162,15 @@ export default async function MonthlyRentalsPage({
                   }}
                 />
 
-                {/* 姓名：加寬並允許換行，避免壓到電話 */}
                 <col
                   style={{
-                    width: 150,
+                    width: 85,
                   }}
                 />
 
-                {/* 電話：保留固定寬度且不換行 */}
                 <col
                   style={{
-                    width: 130,
+                    width: 110,
                   }}
                 />
 
@@ -1067,12 +1193,10 @@ export default async function MonthlyRentalsPage({
                   }}
                 />
 
-                {/* 租用期間 */}
-                <col
-                  style={{
-                    width: 210,
-                  }}
-                />
+                {/* 正式租期 */}
+                <col style={{ width: 210 }} />
+                {/* 繳費月份 */}
+                <col style={{ width: 110 }} />
 
                 <col
                   style={{
@@ -1169,14 +1293,11 @@ export default async function MonthlyRentalsPage({
                     類型
                   </th>
 
-                  <th
-                    style={{
-                      padding:
-                        8,
-                    }}
-                  >
-                    租用期間
+                  <th style={{ padding: 8 }}>
+                    正式租期
                   </th>
+
+                  <th style={{ padding: 8 }}>繳費月份</th>
 
                   <th
                     style={{
@@ -1217,7 +1338,7 @@ export default async function MonthlyRentalsPage({
               </thead>
 
               <tbody>
-                {rentals.map(
+                {enrichedRentals.map(
                   (item: any) => {
                     const rentalType =
                       cleanRentalType(
@@ -1272,28 +1393,9 @@ export default async function MonthlyRentalsPage({
                           style={{
                             padding:
                               8,
-
-                            /*
-                             * 姓名可換行，不再用 nowrap。
-                             * 長姓名／公司名稱只會在自己的欄位內換行，
-                             * 不會蓋到右側電話。
-                             */
                             whiteSpace:
-                              'normal',
-
-                            overflowWrap:
-                              'anywhere',
-
-                            wordBreak:
-                              'break-word',
-
-                            lineHeight:
-                              1.35,
+                              'nowrap',
                           }}
-                          title={
-                            item.customer_name ||
-                            ''
-                          }
                         >
                           {item.customer_name ||
                             '-'}
@@ -1303,15 +1405,8 @@ export default async function MonthlyRentalsPage({
                           style={{
                             padding:
                               8,
-
-                            /*
-                             * 電話固定一行，避免被姓名擠壓或重疊。
-                             */
                             whiteSpace:
                               'nowrap',
-
-                            minWidth:
-                              130,
                           }}
                         >
                           {item.phone ||
@@ -1373,7 +1468,7 @@ export default async function MonthlyRentalsPage({
                           }
                         </td>
 
-                        {/* 租用期間 */}
+                        {/* 正式租期：直接依主管目前租期設定顯示 */}
 
                         <td
                           style={{
@@ -1384,11 +1479,23 @@ export default async function MonthlyRentalsPage({
                             fontSize:
                               13,
                           }}
+                          title={activeRentalTerm?.term_name || ''}
                         >
-                          {formatRentalPeriod(
-                            item.start_date,
-                            item.end_date
-                          )}
+                          {activeRentalTerm
+                            ? formatRentalPeriod(
+                                activeRentalTerm.start_date,
+                                activeRentalTerm.end_date
+                              )
+                            : '未設定'}
+                        </td>
+
+                        {/* 月租名單只顯示最近一個繳費月份；完整歷史留在繳費紀錄 */}
+                        <td style={{ padding: 8, fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                          {item._payment_month !== '-'
+                            ? item._payment_month
+                            : item.payment_status === 'paid'
+                              ? '未指定'
+                              : '-'}
                         </td>
 
                         {/* 金額 */}
@@ -1492,9 +1599,12 @@ export default async function MonthlyRentalsPage({
                           }}
                         >
                           <MonthlyRentalActions
-                            rental={
-                              item
-                            }
+                            rental={item}
+                            canManageTerm={profile.role === 'supervisor'}
+                          />
+
+                          <MonthlyRentalDeleteButton
+                            rental={item}
                           />
                         </td>
                       </tr>

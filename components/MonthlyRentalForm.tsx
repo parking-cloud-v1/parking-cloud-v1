@@ -13,6 +13,13 @@ type ParkingLot = {
   status: string
 }
 
+type ActiveRentalTerm = {
+  id: string
+  term_name: string
+  start_date: string
+  end_date: string
+}
+
 type InitialData = {
   waitingId?: string
   parkingLotId?: string
@@ -27,12 +34,23 @@ type InitialData = {
   notes?: string
 }
 
+
+function effectiveMonthMin(dateText?: string) {
+  return dateText ? dateText.slice(0, 7) : undefined
+}
+
+function effectiveMonthMax(dateText?: string) {
+  return dateText ? dateText.slice(0, 7) : undefined
+}
+
 export default function MonthlyRentalForm({
   parkingLots,
   initialData,
+  activeTerm,
 }: {
   parkingLots: ParkingLot[]
   initialData?: InitialData
+  activeTerm?: ActiveRentalTerm | null
 }) {
   const defaultLotId =
     initialData?.parkingLotId &&
@@ -79,10 +97,10 @@ export default function MonthlyRentalForm({
     useState('')
 
   const [startDate, setStartDate] =
-    useState('')
+    useState(activeTerm?.start_date || '')
 
   const [endDate, setEndDate] =
-    useState('')
+    useState(activeTerm?.end_date || '')
 
   const [monthlyFee, setMonthlyFee] =
     useState('')
@@ -92,6 +110,9 @@ export default function MonthlyRentalForm({
 
   const [paymentDate, setPaymentDate] =
     useState('')
+
+  const [coverageMonth, setCoverageMonth] =
+    useState(activeTerm?.start_date?.slice(0, 7) || '')
 
   const [invoiceNumber, setInvoiceNumber] =
     useState('')
@@ -169,14 +190,17 @@ export default function MonthlyRentalForm({
         return
       }
 
-      if (!startDate) {
+      const effectiveStartDate = activeTerm?.start_date || startDate
+      const effectiveEndDate = activeTerm?.end_date || endDate
+
+      if (!effectiveStartDate) {
         setMessage(
           '請選擇起租日'
         )
         return
       }
 
-      if (!endDate) {
+      if (!effectiveEndDate) {
         setMessage(
           '請選擇到期日'
         )
@@ -184,8 +208,8 @@ export default function MonthlyRentalForm({
       }
 
       if (
-        endDate <
-        startDate
+        effectiveEndDate <
+        effectiveStartDate
       ) {
         setMessage(
           '到期日不可早於起租日'
@@ -193,14 +217,13 @@ export default function MonthlyRentalForm({
         return
       }
 
-      if (
-        paymentStatus ===
-          'paid' &&
-        !paymentDate
-      ) {
-        setMessage(
-          '已選擇「已繳」，請填寫收款日期'
-        )
+      if (paymentStatus === 'paid' && !coverageMonth) {
+        setMessage('已選擇「已繳」，請指定本次繳費月份')
+        return
+      }
+
+      if (paymentStatus === 'paid' && !paymentDate) {
+        setMessage('已選擇「已繳」，請填寫收款日期')
         return
       }
 
@@ -336,33 +359,34 @@ export default function MonthlyRentalForm({
               null,
 
             start_date:
-              startDate,
+              effectiveStartDate,
 
             end_date:
-              endDate,
+              effectiveEndDate,
+
+            rental_term_id:
+              activeTerm?.id || null,
+
+            rental_term_locked:
+              Boolean(activeTerm),
+
+            data_source:
+              initialData?.waitingId ? 'waiting_list' : 'manual',
 
             monthly_fee:
               fee,
 
             payment_status:
-              paymentStatus,
+              'unpaid',
 
             rental_status:
               'active',
 
             payment_date:
-              paymentStatus ===
-              'paid'
-                ? paymentDate ||
-                  null
-                : null,
+              null,
 
             invoice_number:
-              paymentStatus ===
-              'paid'
-                ? invoiceNumber.trim() ||
-                  null
-                : null,
+              null,
 
             notes:
               notes.trim() ||
@@ -388,6 +412,29 @@ export default function MonthlyRentalForm({
             insertError.message
         )
         return
+      }
+
+      let paymentWarning = ''
+
+      if (paymentStatus === 'paid' && createdRental?.id) {
+        const { error: paymentError } = await supabase.rpc(
+          'record_monthly_rental_payment_month',
+          {
+            p_monthly_rental_id: createdRental.id,
+            p_coverage_month: `${coverageMonth}-01`,
+            p_month_count: 1,
+            p_amount: fee,
+            p_payment_date: paymentDate,
+            p_invoice_number: invoiceNumber.trim() || null,
+            p_source: 'manual',
+            p_source_reference: null,
+            p_notes: '新增月租時登記繳費月份',
+          }
+        )
+
+        if (paymentError) {
+          paymentWarning = `；但繳費月份登記失敗：${paymentError.message}，請到月租總表按「收款」補登`
+        }
       }
 
       /*
@@ -452,9 +499,9 @@ export default function MonthlyRentalForm({
       setSuccess(true)
 
       setMessage(
-        initialData?.waitingId
+        (initialData?.waitingId
           ? '已成功轉為正式月租'
-          : '月租資料新增成功'
+          : '月租資料新增成功') + paymentWarning
       )
 
       setTimeout(
@@ -536,6 +583,22 @@ export default function MonthlyRentalForm({
           </p>
         )}
       </div>
+
+
+        {activeTerm && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: '#ecfdf5',
+              color: '#166534',
+              fontWeight: 600,
+            }}
+          >
+            本場目前租期：{activeTerm.term_name}（{activeTerm.start_date} ～ {activeTerm.end_date}）。新增資料會自動套用並鎖定此租期。
+          </div>
+        )}
 
       <div
         style={{
@@ -768,14 +831,8 @@ export default function MonthlyRentalForm({
             value={
               startDate
             }
-            onChange={(
-              e
-            ) =>
-              setStartDate(
-                e.target
-                  .value
-              )
-            }
+            onChange={(e) => setStartDate(e.target.value)}
+            disabled={Boolean(activeTerm)}
             required
           />
         </div>
@@ -796,14 +853,8 @@ export default function MonthlyRentalForm({
               startDate ||
               undefined
             }
-            onChange={(
-              e
-            ) =>
-              setEndDate(
-                e.target
-                  .value
-              )
-            }
+            onChange={(e) => setEndDate(e.target.value)}
+            disabled={Boolean(activeTerm)}
             required
           />
         </div>
@@ -870,6 +921,18 @@ export default function MonthlyRentalForm({
         {paymentStatus ===
           'paid' && (
           <>
+            <div className="field">
+              <label>繳費月份 *</label>
+              <input
+                type="month"
+                value={coverageMonth}
+                onChange={(e) => setCoverageMonth(e.target.value)}
+                min={effectiveMonthMin(activeTerm?.start_date || startDate)}
+                max={effectiveMonthMax(activeTerm?.end_date || endDate)}
+                required
+              />
+            </div>
+
             <div
               className="field"
             >

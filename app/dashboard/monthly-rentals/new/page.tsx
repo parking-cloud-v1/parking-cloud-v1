@@ -1,152 +1,101 @@
 import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
-import MonthlyRentalForm from '@/components/MonthlyRentalForm'
+import Link from 'next/link'
 
-type SearchParams = {
-  waiting_id?: string
-  parking_lot_id?: string
-  customer_name?: string
-  phone?: string
-  vehicle_plate?: string
-  vehicle_type?: string
-  notes?: string
-}
+import { createClient } from '@/lib/supabase/server'
+import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
+import MonthlyRentalForm from '@/components/MonthlyRentalForm'
 
 export default async function NewMonthlyRentalPage({
   searchParams,
 }: {
-  searchParams: Promise<SearchParams>
+  searchParams?: Promise<{ waiting_id?: string; parking_lot_id?: string }>
 }) {
-  const supabase =
-    await createClient()
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
 
-  const {
-    data: {
-      user,
-    },
-  } =
-    await supabase
-      .auth
-      .getUser()
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('id, role, is_active')
+    .eq('id', user.id)
+    .maybeSingle()
 
-  if (!user) {
-    redirect(
-      '/login'
+  if (!profile?.is_active || !['supervisor', 'manager'].includes(profile.role)) {
+    redirect('/dashboard/monthly-rentals')
+  }
+
+  const params = searchParams ? await searchParams : {}
+  const currentLotId = await getCurrentWorkParkingLotId()
+  const lotId = currentLotId || params.parking_lot_id || ''
+
+  if (!lotId) {
+    return (
+      <div className="card">
+        <h1>新增月租</h1>
+        <p>請先從左側選擇目前工作停車場。</p>
+        <Link href="/dashboard/monthly-rentals">返回月租管理</Link>
+      </div>
     )
   }
 
-  const params =
-    await searchParams
+  const { data: lot } = await supabase
+    .from('parking_lots')
+    .select('id, name, status')
+    .eq('id', lotId)
+    .maybeSingle()
 
-  const {
-    data:
-      parkingLots,
-    error,
-  } =
-    await supabase
-      .from(
-        'parking_lots'
-      )
-      .select(
-        'id, name, status'
-      )
-      .eq(
-        'status',
-        'active'
-      )
-      .order(
-        'name'
-      )
+  if (!lot) redirect('/dashboard/monthly-rentals')
 
-  const rawVehicleType =
-    params.vehicle_type
+  const { data: activeTerm } = await supabase
+    .from('parking_lot_rental_terms')
+    .select('id, term_name, start_date, end_date')
+    .eq('parking_lot_id', lotId)
+    .eq('is_active', true)
+    .maybeSingle()
 
-  const vehicleType:
-    | 'car'
-    | 'motorcycle'
-    | 'heavy_motorcycle' =
-      rawVehicleType ===
-        'motorcycle' ||
-      rawVehicleType ===
-        'heavy_motorcycle'
-        ? rawVehicleType
-        : 'car'
+  let initialData: any = { parkingLotId: lotId }
 
-  const initialData = {
-    waitingId:
-      params.waiting_id ||
-      undefined,
+  if (params.waiting_id) {
+    const { data: waiting } = await supabase
+      .from('monthly_waiting_list')
+      .select('id, parking_lot_id, customer_name, phone, vehicle_plate, vehicle_type, notes, status')
+      .eq('id', params.waiting_id)
+      .eq('parking_lot_id', lotId)
+      .eq('status', 'waiting')
+      .maybeSingle()
 
-    parkingLotId:
-      params.parking_lot_id ||
-      undefined,
-
-    customerName:
-      params.customer_name ||
-      undefined,
-
-    phone:
-      params.phone ||
-      undefined,
-
-    vehiclePlate:
-      params.vehicle_plate ||
-      undefined,
-
-    vehicleType,
-
-    notes:
-      params.notes ||
-      undefined,
+    if (waiting) {
+      initialData = {
+        waitingId: waiting.id,
+        parkingLotId: waiting.parking_lot_id,
+        customerName: waiting.customer_name || '',
+        phone: waiting.phone || '',
+        vehiclePlate: waiting.vehicle_plate || '',
+        vehicleType: waiting.vehicle_type || 'car',
+        notes: waiting.notes || '',
+      }
+    }
   }
 
   return (
     <div>
-      <h1>
-        {initialData.waitingId
-          ? '候補轉正式月租'
-          : '新增月租'}
-      </h1>
-
-      <p
-        className="muted"
-      >
-        {initialData.waitingId
-          ? '確認候補資料並補上月租條件後，即可轉為正式月租。'
-          : '建立新的月租車輛與付款資料'}
-      </p>
-
-      {error && (
-        <div
-          style={{
-            marginTop:
-              20,
-            color:
-              '#b91c1c',
-          }}
-        >
-          停車場讀取失敗：
-          {
-            error.message
-          }
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ marginBottom: 6 }}>新增月租</h1>
+          <p className="muted" style={{ marginTop: 0 }}>
+            {activeTerm
+              ? `本場已啟用「${activeTerm.term_name}」，正式租期會自動同步，避免不同資料來源把租期弄亂。`
+              : '本場尚未設定啟用中的抽籤租期；主管可先到「租期設定」建立。'}
+          </p>
         </div>
-      )}
+        <Link href="/dashboard/monthly-rentals" style={{ textDecoration: 'none' }}>返回月租總表</Link>
+      </div>
 
-      <div
-        className="card"
-        style={{
-          marginTop:
-            24,
-        }}
-      >
+      <div className="card" style={{ marginTop: 18 }}>
         <MonthlyRentalForm
-          parkingLots={
-            parkingLots ||
-            []
-          }
-          initialData={
-            initialData
-          }
+          parkingLots={[lot]}
+          initialData={initialData}
+          activeTerm={activeTerm}
         />
       </div>
     </div>

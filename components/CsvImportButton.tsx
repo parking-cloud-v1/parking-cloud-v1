@@ -89,6 +89,12 @@ function toDate(value: string) {
   )}-${match[3].padStart(2, '0')}`
 }
 
+function normalizeMonth(value: string) {
+  const match = text(value).match(/(\d{4})[\/\-](\d{1,2})/)
+  if (!match) return ''
+  return `${match[1]}-${match[2].padStart(2, '0')}`
+}
+
 /*
  * 正確處理 CSV：
  *
@@ -1476,6 +1482,10 @@ export default function CsvImportButton({
   ] =
     useState('')
 
+  // 第 23 階段：繳費月份與正式租期分開。
+  // 若報表本身有「資料月份」會自動帶入，也可以人工覆寫。
+  const [coverageMonth, setCoverageMonth] = useState('')
+
   async function scanPaymentFolder(
     handle: any,
     allowPermissionPrompt:
@@ -2405,12 +2415,12 @@ export default function CsvImportButton({
     event:
       React.ChangeEvent<HTMLInputElement>
   ) {
-    const files =
+    const files: File[] =
       Array.from(
         event.target
           .files ||
           []
-      )
+      ) as File[]
 
     if (
       files.length === 0
@@ -2440,7 +2450,23 @@ export default function CsvImportButton({
    * =====================================================
    */
 
+  const detectedCoverageMonths: string[] = Array.from(
+    new Set<string>(
+      rows
+        .map((row) => normalizeMonth(row.dataMonth))
+        .filter((value): value is string => Boolean(value))
+    )
+  )
+  const detectedCoverageMonth: string =
+    detectedCoverageMonths.length === 1 ? detectedCoverageMonths[0] : ''
+  const effectiveCoverageMonth: string = coverageMonth || detectedCoverageMonth
+
   async function confirmSync() {
+    if (!effectiveCoverageMonth) {
+      setMessage('請先確認「本次繳費月份」。報表無法唯一判斷月份時，必須人工選擇。')
+      return
+    }
+
     const syncRows =
       rows.filter(
         (row) =>
@@ -2463,8 +2489,9 @@ export default function CsvImportButton({
     const confirmed =
       window.confirm(
         `確定同步 ${syncRows.length} 筆繳費資料？\n\n` +
+        `本次繳費月份：${effectiveCoverageMonth.replace('-', '/')}\n\n` +
         `系統會：\n` +
-        `1. 將符合的月租資料更新為「已繳」\n` +
+        `1. 將符合的月租資料記錄到「已繳月份」，不修改正式租期\n` +
         `2. 同時永久保存一筆繳費歷史\n` +
         `3. 繳費報表實收 0 元會歸類為「找零不足（但已繳費）」\n\n` +
         `未匹配及重複交易不會寫入。`
@@ -2511,51 +2538,30 @@ export default function CsvImportButton({
       ) {
         /*
          * ===============================================
-         * A. 更新月租主表
+         * A. 記錄「繳費月份」
          * ===============================================
+         * 第 23 階段不再用繳費匯入改動 start_date / end_date。
          */
+        const sourceReference =
+          row.sourceReference || buildSourceReference(row)
 
-        const {
-          data,
-          error,
-        } =
-          await supabase
-            .from(
-              'monthly_rentals'
-            )
-            .update({
-              payment_status:
-                'paid',
+        const { error } = await supabase.rpc(
+          'record_monthly_rental_payment_month',
+          {
+            p_monthly_rental_id: row.rentalId!,
+            p_payment_date: row.paymentDate || toDate(row.exitTime),
+            p_amount: row.amountPaid,
+            p_invoice_number: row.invoiceNumber || null,
+            p_source: 'payment_csv',
+            p_source_reference: sourceReference,
+            p_coverage_month: `${effectiveCoverageMonth}-01`,
+            p_month_count: 1,
+            p_notes: row.fileName ? `匯入檔案：${row.fileName}` : null,
+          }
+        )
 
-              payment_date:
-                row.paymentDate ||
-                null,
-
-              invoice_number:
-                row.invoiceNumber ||
-                null,
-
-              updated_at:
-                new Date()
-                  .toISOString(),
-            })
-            .eq(
-              'id',
-              row.rentalId!
-            )
-            .select('id')
-
-        if (
-          error ||
-          !data ||
-          data.length === 0
-        ) {
-          console.error(
-            '月租付款狀態更新失敗',
-            row.vehiclePlate,
-            error
-          )
-
+        if (error) {
+          console.error('月租繳費月份更新失敗', row.vehiclePlate, error)
           failed++
           continue
         }
@@ -2567,12 +2573,6 @@ export default function CsvImportButton({
          * B. 建立繳費歷史
          * ===============================================
          */
-
-        const sourceReference =
-          row.sourceReference ||
-          buildSourceReference(
-            row
-          )
 
         /*
          * 再檢查一次是否已存在，
@@ -2814,6 +2814,7 @@ export default function CsvImportButton({
     setRows([])
     setFileNames([])
     setMessage('')
+    setCoverageMonth('')
     setPendingFolderSignatures(
       []
     )
@@ -3092,7 +3093,7 @@ export default function CsvImportButton({
                       '#64748b',
                   }}
                 >
-                  可一次選擇多個交易明細 CSV，支援原本繳費機格式與一般「序號、票號、車號、實收金額」標準表頭格式。系統不限制交易名稱；有停車場名稱時使用「停車場＋車牌」比對，沒有停車場名稱時會用車牌自動尋找唯一所屬場站。只有成功匹配的月租車牌才可同步，並同時保存繳費歷史。
+                  可一次選擇多個交易明細 CSV，支援原本繳費機格式與一般「序號、票號、車號、實收金額」標準表頭格式。系統不限制交易名稱；有停車場名稱時使用「停車場＋車牌」比對，沒有停車場名稱時會用車牌自動尋找唯一所屬場站。只有成功匹配的月租車牌才可同步，並同時保存「繳費月份」與原始繳費歷史；不會改動正式租期。
                 </p>
 
                 <p
@@ -3130,6 +3131,27 @@ export default function CsvImportButton({
             </div>
 
             <div
+              className="card"
+              style={{ marginTop: 14, marginBottom: 14, background: '#eff6ff' }}
+            >
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,320px) 1fr', gap: 14, alignItems: 'end' }}>
+                <div className="field">
+                  <label>本次繳費月份 *</label>
+                  <input
+                    type="month"
+                    value={effectiveCoverageMonth}
+                    onChange={(event) => setCoverageMonth(event.target.value)}
+                  />
+                </div>
+                <div style={{ color: '#475569', fontSize: 13, lineHeight: 1.6 }}>
+                  {detectedCoverageMonth
+                    ? `已從報表「資料月份」自動辨識 ${detectedCoverageMonth.replace('-', '/')}；如實際繳費月份不同可手動修改。`
+                    : '報表月份無法唯一辨識，請人工選擇。這個月份只記錄付款，不會改動正式租期。'}
+                </div>
+              </div>
+            </div>
+
+            <div
               style={{
                 display: 'flex',
                 gap: 8,
@@ -3160,7 +3182,8 @@ export default function CsvImportButton({
                   className="btn"
                   disabled={
                     syncing ||
-                    syncCount === 0
+                    syncCount === 0 ||
+                    !effectiveCoverageMonth
                   }
                   onClick={
                     confirmSync

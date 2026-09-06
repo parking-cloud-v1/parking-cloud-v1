@@ -22,6 +22,14 @@ type ParkingLot = {
 type WaitingRow = {
   id: string
 
+  source_application_id?: string | null
+  rental_type?: string | null
+  source?: string | null
+  offer_status?: 'none' | 'offered' | 'accepted' | 'expired' | null
+  offer_expires_at?: string | null
+  offer_notified_at?: string | null
+  offer_count?: number | null
+
   parking_lot_id: string
 
   wait_no: number
@@ -274,6 +282,13 @@ export default function WaitingListPage() {
           )
           .select(`
             id,
+            source_application_id,
+            rental_type,
+            source,
+            offer_status,
+            offer_expires_at,
+            offer_notified_at,
+            offer_count,
             parking_lot_id,
             wait_no,
             customer_name,
@@ -843,6 +858,17 @@ export default function WaitingListPage() {
   function convertToRental(
     row: WaitingRow
   ) {
+    /*
+     * 第十一階段：若候補資料來自線上申請，
+     * 不直接建立月租，而是回到原申請案件完成正式審核／電子契約。
+     * 手動建立的候補資料仍維持原本「轉正式月租」流程。
+     */
+    if (row.source_application_id) {
+      window.location.href =
+        `/dashboard/online/applications/${row.source_application_id}`
+      return
+    }
+
     const params =
       new URLSearchParams()
 
@@ -1231,6 +1257,10 @@ export default function WaitingListPage() {
                 </th>
 
                 <th>
+                  遞補狀態
+                </th>
+
+                <th>
                   備註
                 </th>
 
@@ -1249,7 +1279,7 @@ export default function WaitingListPage() {
                 <tr>
                   <td
                     colSpan={
-                      9
+                      10
                     }
                     style={{
                       padding:
@@ -1264,7 +1294,7 @@ export default function WaitingListPage() {
                 <tr>
                   <td
                     colSpan={
-                      9
+                      10
                     }
                     style={{
                       padding:
@@ -1363,6 +1393,31 @@ export default function WaitingListPage() {
                         {
                           row.registered_date
                         }
+                      </td>
+
+                      <td
+                        style={{
+                          padding: 10,
+                          minWidth: 150,
+                        }}
+                      >
+                        {row.offer_status === 'offered' ? (
+                          <div style={{ color: '#92400e', lineHeight: 1.5 }}>
+                            <strong>等待回覆</strong>
+                            <br />
+                            至 {row.offer_expires_at ? new Date(row.offer_expires_at).toLocaleString('zh-TW') : '-'}
+                          </div>
+                        ) : row.offer_status === 'accepted' ? (
+                          <div style={{ color: '#166534', lineHeight: 1.5 }}>
+                            <strong>已接受遞補</strong>
+                            <br />
+                            保留至 {row.offer_expires_at ? new Date(row.offer_expires_at).toLocaleString('zh-TW') : '-'}
+                          </div>
+                        ) : row.offer_status === 'expired' ? (
+                          <span style={{ color: '#64748b' }}>上次通知已失效</span>
+                        ) : (
+                          <span style={{ color: '#64748b' }}>尚未通知</span>
+                        )}
                       </td>
 
                       <td
@@ -1529,6 +1584,7 @@ export default function WaitingListPage() {
                         <button
                           type="button"
                           className="btn"
+                          disabled={row.offer_status === 'offered'}
                           onClick={() =>
                             convertToRental(
                               row
@@ -1539,7 +1595,13 @@ export default function WaitingListPage() {
                               8,
                           }}
                         >
-                          轉正式月租
+                          {row.source_application_id
+                            ? row.offer_status === 'offered'
+                              ? '等待民眾回覆'
+                              : row.offer_status === 'accepted'
+                                ? '前往最終審核'
+                                : '線上案件轉正式'
+                            : '轉正式月租'}
                         </button>
 
                         <button

@@ -1,230 +1,63 @@
-import {
-  notFound,
-  redirect,
-} from 'next/navigation'
+import { redirect } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import ShiftClosingForm from '@/components/ShiftClosingForm'
 
 export default async function EditShiftClosingPage({
   params,
 }: {
-  params: Promise<{
-    id: string
-  }>
+  params: Promise<{ id: string }>
 }) {
-  const { id } =
-    await params
+  const { id } = await params
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
 
-  const supabase =
-    await createClient()
+  const [{ data: report, error }, { data: details }, { data: parkingLots }] =
+    await Promise.all([
+      supabase
+        .from('shift_closing_reports')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle(),
+      supabase
+        .from('shift_closing_details')
+        .select('*')
+        .eq('report_id', id)
+        .order('sort_order'),
+      supabase
+        .from('parking_lots')
+        .select('id,name')
+        .eq('status', 'active')
+        .order('name'),
+    ])
 
-  const {
-    data: { user },
-  } =
-    await supabase.auth.getUser()
-
-  if (!user) {
-    redirect('/login')
-  }
-
-  const {
-    data: profile,
-  } =
-    await supabase
-      .from('profiles')
-      .select(
-        'id, is_active'
-      )
-      .eq('id', user.id)
-      .maybeSingle()
-
-  if (
-    !profile ||
-    !profile.is_active
-  ) {
-    redirect('/login')
-  }
-
-  const {
-    data: parkingLots,
-  } =
-    await supabase
-      .from(
-        'parking_lots'
-      )
-      .select(
-        'id, name'
-      )
-      .eq(
-        'status',
-        'active'
-      )
-      .order('name')
-
-  const {
-    data: report,
-    error,
-  } =
-    await supabase
-      .from(
-        'shift_closing_reports'
-      )
-      .select(`
-        id,
-        parking_lot_id,
-        closing_date,
-        shift_start_at,
-        shift_end_at,
-        closing_status,
-        invoice_start_no,
-        invoice_end_no,
-        amount_due,
-        amount_paid,
-        aps_monthly_count,
-        aps_monthly_amount,
-        electronic_payment_total,
-        mobile_payment_total,
-        operator_name,
-        notes,
-        remittance_status,
-        remitted_at
-      `)
-      .eq('id', id)
-      .maybeSingle()
-
-  if (
-    error ||
-    !report
-  ) {
-    notFound()
-  }
-
-  const {
-    data: details,
-  } =
-    await supabase
-      .from(
-        'shift_closing_details'
-      )
-      .select(`
-        detail_start_date,
-        detail_end_date,
-        temporary_cash,
-        monthly_cash,
-        sort_order
-      `)
-      .eq(
-        'report_id',
-        id
-      )
-      .order('sort_order')
-
-  const normalizedReport =
-    {
-      ...report,
-      amount_due:
-        Number(
-          report.amount_due ||
-            0
-        ),
-      amount_paid:
-        Number(
-          report.amount_paid ||
-            0
-        ),
-      aps_monthly_count:
-        Number(
-          report.aps_monthly_count ||
-            0
-        ),
-      aps_monthly_amount:
-        Number(
-          report.aps_monthly_amount ||
-            0
-        ),
-      electronic_payment_total:
-        Number(
-          report.electronic_payment_total ||
-            0
-        ),
-      mobile_payment_total:
-        Number(
-          report.mobile_payment_total ||
-            0
-        ),
-    }
-
-  const normalizedDetails =
-    (
-      details ||
-      []
-    ).map(
-      (item: any) => ({
-        detail_start_date:
-          item.detail_start_date,
-        detail_end_date:
-          item.detail_end_date,
-        temporary_cash:
-          Number(
-            item.temporary_cash ||
-              0
-          ),
-        monthly_cash:
-          Number(
-            item.monthly_cash ||
-              0
-          ),
-      })
+  if (error || !report) {
+    return (
+      <div className="card">
+        <h1>找不到結班報表</h1>
+        <p>{error?.message || '這筆資料不存在或您沒有權限。'}</p>
+        <Link href="/dashboard/shift-closing">返回結班報表</Link>
+      </div>
     )
-
-  const options =
-    (
-      parkingLots ||
-      []
-    ).map(
-      (item: any) => ({
-        id: item.id,
-        name: item.name,
-      })
-    )
+  }
 
   return (
     <div>
-      <h1
-        style={{
-          marginBottom: 6,
-        }}
-      >
-        編輯當日結班
-      </h1>
-
-      <p
-        className="muted"
-        style={{
-          marginTop: 0,
-        }}
-      >
-        {report.remittance_status ===
-        'remitted'
-          ? '這一輪已完成匯款，資料保留為歷史紀錄。'
-          : '修改已儲存的結班資料。'}
-      </p>
-
-      <div
-        style={{
-          marginTop: 20,
-        }}
-      >
+      <div style={{display:'flex',justifyContent:'space-between',gap:12,flexWrap:'wrap',alignItems:'flex-start'}}>
+        <div>
+          <h1 style={{marginBottom:6}}>修改當日結班報表</h1>
+          <p className="muted" style={{marginTop:0}}>
+            已儲存的結班資料可再次修改並儲存；支出欄位僅紀錄，不影響既有計算。
+          </p>
+        </div>
+        <Link href="/dashboard/shift-closing" style={{textDecoration:'none',fontWeight:700}}>返回列表</Link>
+      </div>
+      <div style={{marginTop:20}}>
         <ShiftClosingForm
-          parkingLots={
-            options
-          }
-          initialReport={
-            normalizedReport as any
-          }
-          initialDetails={
-            normalizedDetails
-          }
+          parkingLots={(parkingLots || []).map((x:any)=>({id:x.id,name:x.name}))}
+          initialReport={report as any}
+          initialDetails={(details || []) as any}
         />
       </div>
     </div>
