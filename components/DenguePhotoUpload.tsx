@@ -8,10 +8,20 @@ function today() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-function safe(value: string) {
-  return value
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, '_')
+function storageWorkType(value: WorkType) {
+  return value === '委外消毒' ? 'outsourced-disinfection' : 'self-check'
+}
+
+function safeExtension(file: File) {
+  const name = file.name || ''
+  const raw = name.includes('.') ? name.split('.').pop() || '' : ''
+  const ext = raw.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+  if (ext) return ext.slice(0, 10)
+  if (file.type === 'image/png') return 'png'
+  if (file.type === 'image/webp') return 'webp'
+  if (file.type === 'application/pdf') return 'pdf'
+  return 'jpg'
 }
 
 type WorkType = '自主檢查' | '委外消毒'
@@ -109,7 +119,10 @@ export default function DenguePhotoUpload({
     userId: string,
     index = 0
   ) {
-    const path = `${parkingLotId}/${workType}/${workDate}/${fileKind}/${Date.now()}_${index}_${safe(file.name)}`
+    // Supabase Storage object key uses ASCII-only path segments.
+    // Keep the user's original filename in dengue_prevention_photos.file_name
+    // so downloads still use the original Chinese filename.
+    const path = `${parkingLotId}/${storageWorkType(workType)}/${workDate}/${fileKind}/${Date.now()}_${index}.${safeExtension(file)}`
 
     const { error: uploadError } = await supabase.storage
       .from('dengue-prevention')
