@@ -101,7 +101,7 @@ export default async function DashboardShell({ children }: { children: React.Rea
               <div className={ui.navGroup}><div className={ui.navTitle}>報表</div><Nav href="/dashboard/reports" icon="報">報表中心</Nav></div>
             )}
             <div className={ui.navGroup}><div className={ui.navTitle}>基本管理</div><Nav href="/dashboard/parking-lots" icon="場">停車場管理</Nav></div>
-            {profile?.role === 'supervisor' && <div className={ui.navGroup}><div className={ui.navTitle}>系統管理</div><Nav href="/dashboard/settings" icon="設">系統設定</Nav><Nav href="/dashboard/online/audit" icon="稽">操作紀錄</Nav><Nav href="/dashboard/online/health" icon="安">上線安全檢查</Nav></div>}
+            {profile?.role === 'supervisor' && <div className={ui.navGroup}><div className={ui.navTitle}>系統管理</div><Nav href="/dashboard/settings" icon="設">系統設定</Nav><Nav href="/dashboard/data-maintenance" icon="清">資料維護</Nav><Nav href="/dashboard/online/audit" icon="稽">操作紀錄</Nav><Nav href="/dashboard/online/health" icon="安">上線安全檢查</Nav></div>}
           </>
         )}
       </aside>
