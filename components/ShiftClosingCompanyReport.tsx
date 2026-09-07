@@ -186,7 +186,7 @@ export default function ShiftClosingCompanyReport({
 
         <div className="sectionTitle">本班現金實收</div>
         <table className="cashTable">
-          <thead><tr><th>匯款金額開始日</th><th>匯款金額結束日</th><th>臨停現金</th><th>月租現金</th><th>當日現金總計</th></tr></thead>
+          <thead><tr><th>結班金額開始日</th><th>結班金額結束日</th><th>臨停現金</th><th>月租現金</th><th>當日現金總計</th></tr></thead>
           <tbody>
             {(selectedMachine ? [{...firstDetail, temporary_cash: temporaryCash, monthly_cash: monthlyCash, daily_cash_total: dailyCash}] : details).map((d:any, i:number) => (
               <tr key={i}><td>{d?.detail_start_date || dateText(report.shift_start_at)}</td><td>{d?.detail_end_date || dateText(report.shift_end_at)}</td><td>{money(d?.temporary_cash)}</td><td>{money(d?.monthly_cash)}</td><td>{money(d?.daily_cash_total)}</td></tr>

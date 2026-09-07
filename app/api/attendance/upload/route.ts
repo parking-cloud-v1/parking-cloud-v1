@@ -53,10 +53,26 @@ export async function POST(request: Request) {
     }
 
     if (profile.role === 'manager') {
-      const { data: access } = await supabase
-        .from('user_parking_lots').select('parking_lot_id')
-        .eq('user_id', user.id).eq('parking_lot_id', parkingLotId).maybeSingle()
-      if (!access) return NextResponse.json({ error: '沒有此停車場的操作權限。' }, { status: 403 })
+      const { data: access, error: accessError } = await supabase
+        .from('user_parking_lots')
+        .select('parking_lot_id')
+        .eq('user_id', user.id)
+        .eq('parking_lot_id', parkingLotId)
+        .maybeSingle()
+
+      if (accessError) {
+        return NextResponse.json(
+          { error: `停車場權限確認失敗：${accessError.message}` },
+          { status: 500 }
+        )
+      }
+
+      if (!access) {
+        return NextResponse.json(
+          { error: '沒有此停車場的操作權限。' },
+          { status: 403 }
+        )
+      }
     }
 
     const db = admin()

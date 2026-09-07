@@ -18,6 +18,7 @@ export default async function DashboardShell({ children }: { children: React.Rea
   let workParkingLots: { id: string; name: string }[] = []
   let onlineOperationsOpen = profile?.role === 'supervisor'
   let currentWorkLotId = ''
+  let pendingViolationCount = 0
 
   if (user && profile?.is_active) {
     currentWorkLotId = await getCurrentWorkParkingLotId()
@@ -25,6 +26,11 @@ export default async function DashboardShell({ children }: { children: React.Rea
     if (profile.role === 'supervisor') {
       const { data } = await supabase.from('parking_lots').select('id, name').eq('status', 'active').order('name')
       workParkingLots = (data || []).map((x: any) => ({ id: x.id, name: x.name }))
+      const { count } = await supabase
+        .from('violation_parking_cases')
+        .select('id', { count: 'exact', head: true })
+        .in('supervisor_status', ['pending','seen'])
+      pendingViolationCount = count || 0
     } else if (profile.role === 'manager') {
       const { data } = await supabase.from('user_parking_lots').select(`parking_lots (id,name,status)`).eq('user_id', user.id)
       workParkingLots = (data || []).map((x: any) => {
@@ -95,6 +101,8 @@ export default async function DashboardShell({ children }: { children: React.Rea
               <Nav href="/dashboard/disaster-inspections" icon="防">防災檢查</Nav>
               <Nav href="/dashboard/attendance-upload" icon="簽">簽到表上傳</Nav>
               <Nav href="/dashboard/dengue-photos" icon="登">登革熱消毒</Nav>
+              <Nav href="/dashboard/violation-parking" icon="違">違規停車照片</Nav>
+              {profile?.role === 'supervisor' && <Nav href="/dashboard/violation-alerts" icon="告">違規即時通知{pendingViolationCount > 0 ? ` (${pendingViolationCount})` : ''}</Nav>}
               <Nav href="/dashboard/shift-closing" icon="結">當日結班報表</Nav>
             </div>
             {profile?.role === 'supervisor' && (

@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
 
 type Batch = {
   id: string
@@ -40,325 +39,46 @@ export default function ImportBatchManager({
   async function rollbackBatch(
     batch: Batch
   ) {
-    if (
-      batch.status !== 'completed'
-    ) {
-      alert(
-        '這一筆匯入目前不能撤銷。'
-      )
-
+    if (batch.status !== 'completed') {
+      alert('這一筆匯入目前不能撤銷。')
       return
     }
 
-    const confirmed =
-      window.confirm(
-        `確定撤銷這一次總表匯入嗎？\n\n` +
-          `停車場：${batch.parking_lots?.name || '-'}\n` +
-          `檔案：${batch.file_name || '-'}\n\n` +
-          `新增：${batch.inserted_rows} 筆\n` +
-          `資料異動：${batch.updated_rows} 筆\n` +
-          `退租：${batch.cancelled_rows} 筆\n\n` +
-          `撤銷後：\n` +
-          `・本次新增的月租資料會刪除\n` +
-          `・本次修改的資料會恢復\n` +
-          `・本次被判定退租的資料會恢復為原狀\n\n` +
-          `確定要繼續嗎？`
-      )
-
-    if (!confirmed) {
-      return
-    }
-
-    setWorkingId(
-      batch.id
+    const confirmed = window.confirm(
+      `確定撤銷這一次總表匯入嗎？\n\n` +
+      `停車場：${batch.parking_lots?.name || '-'}\n` +
+      `檔案：${batch.file_name || '-'}\n\n` +
+      `新增：${batch.inserted_rows} 筆\n` +
+      `資料異動：${batch.updated_rows} 筆\n` +
+      `退租：${batch.cancelled_rows} 筆\n\n` +
+      `撤銷後會由伺服器讀取原始匯入快照進行還原。\n\n` +
+      `確定要繼續嗎？`
     )
 
+    if (!confirmed) return
+
+    setWorkingId(batch.id)
+
     try {
-      const supabase =
-        createClient()
+      const response = await fetch(
+        `/api/monthly-rentals/import-batches/${encodeURIComponent(batch.id)}/rollback`,
+        { method: 'POST' }
+      )
 
-      /*
-       * 1.
-       * 取得這一批的所有快照
-       *
-       * created_at DESC：
-       * 如果同一資料有多筆操作，
-       * 由後往前還原會比較安全。
-       */
-      const {
-        data: snapshots,
-        error: snapshotError,
-      } =
-        await supabase
-          .from(
-            'monthly_import_snapshots'
-          )
-          .select(`
-            id,
-            batch_id,
-            parking_lot_id,
-            monthly_rental_id,
-            action_type,
-            customer_code,
-            customer_name,
-            phone,
-            vehicle_plate,
-            vehicle_type,
-            rental_type,
-            start_date,
-            end_date,
-            monthly_fee,
-            payment_status,
-            rental_status,
-            payment_date,
-            invoice_number,
-            notes,
-            created_at
-          `)
-          .eq(
-            'batch_id',
-            batch.id
-          )
-          .order(
-            'created_at',
-            {
-              ascending: false,
-            }
-          )
+      const json = await response.json()
 
-      if (snapshotError) {
-        alert(
-          `讀取匯入快照失敗：${snapshotError.message}`
-        )
-
-        return
-      }
-
-      /*
-       * 2.
-       * 先還原 update / cancel
-       */
-      for (
-        const snapshot of
-        snapshots || []
-      ) {
-        if (
-          snapshot.action_type ===
-          'insert'
-        ) {
-          continue
-        }
-
-        if (
-          !snapshot.monthly_rental_id
-        ) {
-          continue
-        }
-
-        const {
-          error: restoreError,
-        } =
-          await supabase
-            .from(
-              'monthly_rentals'
-            )
-            .update({
-              customer_code:
-                snapshot.customer_code,
-
-              customer_name:
-                snapshot.customer_name,
-
-              phone:
-                snapshot.phone,
-
-              vehicle_plate:
-                snapshot.vehicle_plate,
-
-              vehicle_type:
-                snapshot.vehicle_type,
-
-              rental_type:
-                snapshot.rental_type,
-
-              start_date:
-                snapshot.start_date,
-
-              end_date:
-                snapshot.end_date,
-
-              monthly_fee:
-                snapshot.monthly_fee,
-
-              payment_status:
-                snapshot.payment_status,
-
-              rental_status:
-                snapshot.rental_status,
-
-              payment_date:
-                snapshot.payment_date,
-
-              invoice_number:
-                snapshot.invoice_number,
-
-              notes:
-                snapshot.notes,
-
-              last_import_batch_id:
-                null,
-
-              updated_at:
-                new Date()
-                  .toISOString(),
-            })
-            .eq(
-              'id',
-              snapshot.monthly_rental_id
-            )
-
-        if (restoreError) {
-          alert(
-            `恢復月租資料失敗：${restoreError.message}`
-          )
-
-          return
-        }
-      }
-
-      /*
-       * 3.
-       * 找出本次「新增」的資料
-       */
-      const insertedSnapshots =
-        (
-          snapshots ||
-          []
-        ).filter(
-          (snapshot) =>
-            snapshot.action_type ===
-            'insert'
-        )
-
-      /*
-       * 4.
-       * 刪除這次新增的月租資料
-       */
-      for (
-        const snapshot of
-        insertedSnapshots
-      ) {
-        if (
-          !snapshot.monthly_rental_id
-        ) {
-          continue
-        }
-
-        const {
-          error: deleteError,
-        } =
-          await supabase
-            .from(
-              'monthly_rentals'
-            )
-            .delete()
-            .eq(
-              'id',
-              snapshot.monthly_rental_id
-            )
-
-        if (deleteError) {
-          alert(
-            `刪除本次新增資料失敗：${deleteError.message}`
-          )
-
-          return
-        }
-      }
-
-      /*
-       * 5.
-       * 刪除這一批產生的
-       * 簽約異動紀錄
-       *
-       * 這樣撤銷之後，
-       * 會計異動頁也不會留下
-       * 已經取消的錯誤紀錄。
-       */
-      const {
-        error:
-          deleteChangeError,
-      } =
-        await supabase
-          .from(
-            'monthly_rental_changes'
-          )
-          .delete()
-          .eq(
-            'import_batch_id',
-            batch.id
-          )
-
-      if (
-        deleteChangeError
-      ) {
-        alert(
-          `移除簽約異動失敗：${deleteChangeError.message}`
-        )
-
-        return
-      }
-
-      /*
-       * 6.
-       * 將批次改成已撤銷
-       */
-      const {
-        error: batchError,
-      } =
-        await supabase
-          .from(
-            'monthly_import_batches'
-          )
-          .update({
-            status:
-              'rolled_back',
-
-            rolled_back_at:
-              new Date()
-                .toISOString(),
-          })
-          .eq(
-            'id',
-            batch.id
-          )
-
-      if (batchError) {
-        alert(
-          `更新匯入紀錄失敗：${batchError.message}`
-        )
-
-        return
+      if (!response.ok) {
+        throw new Error(json?.error || '資料回復失敗')
       }
 
       alert(
-        '本次匯入已成功撤銷。'
+        `資料回復完成。\n\n恢復 ${json.restored || 0} 筆，移除本次新增 ${json.deleted || 0} 筆。`
       )
 
       window.location.reload()
-    } catch (
-      error: any
-    ) {
-      console.error(
-        error
-      )
-
-      alert(
-        `撤銷失敗：${
-          error?.message ||
-          '未知錯誤'
-        }`
-      )
+    } catch (error: any) {
+      console.error(error)
+      alert(`資料回復失敗：${error?.message || '未知錯誤'}`)
     } finally {
       setWorkingId('')
     }

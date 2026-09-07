@@ -8,6 +8,7 @@ type Category =
   | 'changes'
   | 'taxi'
   | 'shift'
+  | 'disaster'
   | 'dengue'
   | 'violation'
 
@@ -34,12 +35,17 @@ const CATEGORIES: {
   {
     key: 'taxi',
     label: '計程車折扣',
-    note: '下載指定月份計程車折扣紀錄。',
+    note: '取消報表內統計月份；一鍵下載各停車場 Excel，ZIP 內依停車場分資料夾。',
   },
   {
     key: 'shift',
     label: '結班報表',
     note: '下載指定月份結班報表資料。',
+  },
+  {
+    key: 'disaster',
+    label: '防災檢查',
+    note: '一鍵下載各停車場正式 PDF，ZIP 內依停車場分資料夾。',
   },
   {
     key: 'dengue',
@@ -68,6 +74,7 @@ export default function ManualCloudExportPanel({
     changes: '',
     taxi: '',
     shift: '',
+    disaster: '',
     dengue: '',
     violation: '',
   })
@@ -169,7 +176,11 @@ export default function ManualCloudExportPanel({
                 className="btn"
                 onClick={() => download(item.key)}
               >
-                分別下載
+                {item.key === 'disaster'
+                  ? '各停車場 PDF ZIP'
+                  : item.key === 'taxi'
+                    ? '各停車場 Excel ZIP'
+                    : '分別下載'}
               </button>
 
               <button

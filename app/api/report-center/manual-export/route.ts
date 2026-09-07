@@ -1,8 +1,19 @@
 import { NextResponse } from 'next/server'
+import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import JSZip from 'jszip'
 
-type Category = 'attendance' | 'rentals' | 'changes' | 'taxi' | 'shift' | 'dengue' | 'violation'
+
+function admin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) throw new Error('伺服器環境變數未設定完整')
+  return createAdminClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
+}
+
+type Category = 'attendance' | 'rentals' | 'changes' | 'taxi' | 'shift' | 'disaster' | 'dengue' | 'violation'
 
 function monthStart(month: string) {
   return `${month}-01`
@@ -74,14 +85,15 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: '月份格式錯誤。' }, { status: 400 })
   }
 
-  if (!['attendance', 'rentals', 'changes', 'taxi', 'shift', 'dengue', 'violation'].includes(category)) {
+  if (!['attendance', 'rentals', 'changes', 'taxi', 'shift', 'disaster', 'dengue', 'violation'].includes(category)) {
     return NextResponse.json({ error: '下載類型錯誤。' }, { status: 400 })
   }
 
   const start = monthStart(month)
   const next = nextMonthStart(month)
+  const db = admin()
 
-  const { data: lotRows } = await supabase
+  const { data: lotRows } = await db
     .from('parking_lots')
     .select('id, name')
 
@@ -94,7 +106,7 @@ export async function GET(request: Request) {
   }[] = []
 
   if (category === 'attendance') {
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('monthly_attendance_sheets')
       .select('id, parking_lot_id, attendance_month, storage_path, file_name, uploaded_at')
       .eq('attendance_month', start)
@@ -115,8 +127,40 @@ export async function GET(request: Request) {
     }
   }
 
+  if (category === 'disaster') {
+    const { data, error } = await db
+      .from('disaster_inspections')
+      .select(`
+        id,
+        parking_lot_id,
+        inspection_date,
+        pdf_path,
+        pdf_file_name,
+        pdf_generated_at
+      `)
+      .not('pdf_path', 'is', null)
+      .order('parking_lot_id')
+      .order('inspection_date')
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 })
+    }
+
+    for (const row of (data || []) as any[]) {
+      if (!row.pdf_path) continue
+
+      const lot = safeName(lotMap.get(row.parking_lot_id) || '未知停車場')
+
+      items.push({
+        bucket: 'disaster-inspection-pdfs',
+        path: row.pdf_path,
+        fileName: `${lot}/${safeName(row.pdf_file_name || `${lot}_${row.inspection_date}_防災自主檢查表.pdf`)}`,
+      })
+    }
+  }
+
   if (category === 'dengue') {
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('dengue_prevention_photos')
       .select('id, parking_lot_id, work_date, storage_path, file_name')
       .eq('work_type', '自主檢查')
@@ -141,7 +185,7 @@ export async function GET(request: Request) {
   }
 
   if (category === 'violation') {
-    const { data: photoRows, error: photoError } = await supabase
+    const { data: photoRows, error: photoError } = await db
       .from('violation_parking_photos')
       .select('id, case_id, parking_lot_id, photo_type, photo_date, storage_path, file_name')
       .gte('photo_date', start)
@@ -202,7 +246,7 @@ export async function GET(request: Request) {
   }[] = []
 
   if (category === 'rentals') {
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('monthly_rentals')
       .select(`
         parking_lot_id,
@@ -258,7 +302,7 @@ export async function GET(request: Request) {
   }
 
   if (category === 'changes') {
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('monthly_rental_changes')
       .select(`
         parking_lot_id,
@@ -307,11 +351,10 @@ export async function GET(request: Request) {
   }
 
   if (category === 'taxi') {
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('taxi_discount_records')
       .select(`
         parking_lot_id,
-        discount_date,
         vehicle_plate,
         entry_time,
         exit_time,
@@ -319,36 +362,91 @@ export async function GET(request: Request) {
         is_holiday,
         created_at
       `)
-      .gte('discount_date', start)
-      .lt('discount_date', next)
-      .order('discount_date')
+      .order('parking_lot_id')
+      .order('entry_time')
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 })
     }
 
-    const rows = (data || []).map((row: any) => ({
-      停車場: lotMap.get(row.parking_lot_id) || '',
-      日期: row.discount_date || '',
-      車牌: row.vehicle_plate || '',
-      進場時間: row.entry_time || '',
-      離場時間: row.exit_time || '',
-      優惠金額: row.discount_amount ?? '',
-      是否假日: row.is_holiday ? '是' : '否',
-      建立時間: row.created_at || '',
-    }))
+    const grouped = new Map<string, any[]>()
 
-    generatedFiles.push({
-      fileName: `${month}_計程車折扣.csv`,
-      content: rowsToCsv(
-        ['停車場','日期','車牌','進場時間','離場時間','優惠金額','是否假日','建立時間'],
-        rows
-      ),
-    })
+    for (const row of (data || []) as any[]) {
+      const key = String(row.parking_lot_id || '')
+      if (!grouped.has(key)) grouped.set(key, [])
+      grouped.get(key)!.push(row)
+    }
+
+    for (const [lotId, rows] of grouped.entries()) {
+      const lot = safeName(lotMap.get(lotId) || '未知停車場')
+
+      const dailyCounter: Record<string, number> = {}
+
+      const bodyRows = rows.map((row: any) => {
+        const entry = row.entry_time ? new Date(row.entry_time) : null
+        const exit = row.exit_time ? new Date(row.exit_time) : null
+        const date = entry
+          ? new Intl.DateTimeFormat('zh-TW', {
+              timeZone: 'Asia/Taipei',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+            }).format(entry)
+          : ''
+
+        dailyCounter[date] = (dailyCounter[date] || 0) + 1
+
+        const timeText = (value: Date | null) =>
+          value
+            ? new Intl.DateTimeFormat('zh-TW', {
+                timeZone: 'Asia/Taipei',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+              }).format(value)
+            : ''
+
+        return `<tr>
+<td>${dailyCounter[date]}</td>
+<td>${date}</td>
+<td>${String(row.vehicle_plate || '')}</td>
+<td>${timeText(entry)}</td>
+<td>${timeText(exit)}</td>
+<td>${Number(row.discount_amount || 0)}</td>
+<td>${row.is_holiday ? '是' : '否'}</td>
+</tr>`
+      }).join('')
+
+      const html = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+table{border-collapse:collapse;width:100%;font-family:Arial,"Microsoft JhengHei",sans-serif}
+th,td{border:1px solid #000;text-align:center;padding:6px}
+.title{font-size:20px;font-weight:700}
+</style>
+</head>
+<body>
+<table>
+<tr><th class="title" colspan="7">新北市政府交通局計程車免費停車統計表（${lot}）</th></tr>
+<tr>
+<th>每日項次</th><th>日期</th><th>車牌</th><th>進場時間</th><th>離場時間</th><th>銷單金額</th><th>是否假日</th>
+</tr>
+${bodyRows}
+</table>
+</body>
+</html>`
+
+      generatedFiles.push({
+        fileName: `${lot}/${lot}_計程車免費停車統計表.xls`,
+        content: '\uFEFF' + html,
+      })
+    }
   }
 
   if (category === 'shift') {
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from('shift_closing_reports')
       .select(`
         parking_lot_id,
@@ -411,7 +509,7 @@ export async function GET(request: Request) {
   }
 
   for (const item of items) {
-    const { data: blob, error } = await supabase.storage
+    const { data: blob, error } = await db.storage
       .from(item.bucket)
       .download(item.path)
 
@@ -432,6 +530,7 @@ export async function GET(request: Request) {
     changes: '月租異動',
     taxi: '計程車折扣',
     shift: '結班報表',
+    disaster: '防災檢查PDF',
     dengue: '登革熱自主檢查報表',
     violation: '違規停車照片',
   }

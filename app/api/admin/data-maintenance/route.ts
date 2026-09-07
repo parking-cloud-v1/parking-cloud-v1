@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 const MODULES:any={
  attendance:{table:'monthly_attendance_sheets',bucket:'monthly-attendance',date:'attendance_month',label:'簽到表'},
  dengue:{table:'dengue_prevention_photos',bucket:'dengue-prevention',date:'work_date',label:'登革熱照片/報表'},
+ violation:{table:'violation_parking_photos',bucket:'violation-parking',date:'photo_date',label:'違規停車照片'},
  disaster:{table:'disaster_inspection_photos',bucket:'disaster-inspections',date:null,label:'防災照片'},
  shift:{table:'shift_closing_reports',bucket:null,date:'closing_date',label:'結班報表'},
  taxi:{table:'taxi_discount_records',bucket:null,date:'discount_date',label:'計程車折扣'},
@@ -18,6 +19,7 @@ export async function GET(request:Request){
  const db=admin(); let fields='id,parking_lot_id';
  if(key==='attendance') fields+=',attendance_month,file_name,file_size,storage_path,uploaded_at';
  if(key==='dengue') fields+=',work_date,work_type,file_kind,file_name,file_size,storage_path,uploaded_at';
+ if(key==='violation') fields+=',photo_date,photo_type,file_name,file_size,storage_path,uploaded_at';
  if(key==='disaster') fields='id,inspection_id,file_name,storage_path,sort_order';
  if(key==='shift') fields+=',closing_date,operator_name,amount_paid,created_at';
  if(key==='taxi') fields+=',discount_date,vehicle_plate,discount_amount,created_at';

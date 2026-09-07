@@ -4,10 +4,8 @@ import {
   ChangeEvent,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from 'react'
-import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
 type Inspection = {
@@ -98,11 +96,6 @@ export default function DisasterInspectionEditor({
   const supabase =
     createClient()
 
-  const searchParams = useSearchParams()
-  const autoDownloadRequested =
-    searchParams.get('download') === '1'
-  const autoDownloadStarted = useRef(false)
-
   const [
     inspection,
     setInspection,
@@ -167,31 +160,6 @@ export default function DisasterInspectionEditor({
     loadAll()
   }, [
     inspectionId,
-  ])
-
-  useEffect(() => {
-    if (
-      !autoDownloadRequested ||
-      loading ||
-      !inspection ||
-      autoDownloadStarted.current
-    ) {
-      return
-    }
-
-    autoDownloadStarted.current = true
-    setPreview(true)
-
-    const timer = window.setTimeout(() => {
-      exportPdf()
-    }, 900)
-
-    return () =>
-      window.clearTimeout(timer)
-  }, [
-    autoDownloadRequested,
-    loading,
-    inspection,
   ])
 
   async function loadAll() {
@@ -357,28 +325,12 @@ export default function DisasterInspectionEditor({
         })
       }
 
-      /*
-       * Supabase 對關聯欄位 parking_lots 的型別推導，
-       * 可能回傳單一物件，也可能推導成陣列。
-       * 先正規化後再放進 Inspection，避免 build 時
-       * 出現 { name: ... }[] 無法轉成 { name: string } 的型別錯誤。
-       */
-      const rawInspection: any =
-        inspectionData
-
-      const normalizedInspection: Inspection = {
-        ...rawInspection,
-        parking_lots:
-          Array.isArray(
-            rawInspection?.parking_lots
-          )
-            ? rawInspection
-                .parking_lots[0] ||
-              null
-            : rawInspection
-                ?.parking_lots ||
-              null,
-      }
+      const normalizedInspection = {
+        ...inspectionData,
+        parking_lots: Array.isArray((inspectionData as any).parking_lots)
+          ? ((inspectionData as any).parking_lots[0] || null)
+          : ((inspectionData as any).parking_lots || null),
+      } as Inspection
 
       setInspection(
         normalizedInspection
@@ -956,9 +908,51 @@ export default function DisasterInspectionEditor({
         inspection?.inspection_date ||
         '未填日期'
 
-      pdf.save(
+      const fileName =
         `${lotName}_${dateText}_防災自主檢查表.pdf`
+
+      const pdfBlob =
+        pdf.output('blob')
+
+      const archiveForm =
+        new FormData()
+
+      archiveForm.set(
+        'file',
+        new File(
+          [pdfBlob],
+          fileName,
+          {
+            type: 'application/pdf',
+          }
+        )
       )
+
+      archiveForm.set(
+        'fileName',
+        fileName
+      )
+
+      const archiveResponse =
+        await fetch(
+          `/api/disaster-inspections/${inspectionId}/archive-pdf`,
+          {
+            method: 'POST',
+            body: archiveForm,
+          }
+        )
+
+      const archiveJson =
+        await archiveResponse.json()
+
+      if (!archiveResponse.ok) {
+        throw new Error(
+          archiveJson?.error ||
+            '防災 PDF 封存失敗'
+        )
+      }
+
+      pdf.save(fileName)
     } catch (error: any) {
       console.error(error)
       alert(

@@ -1014,7 +1014,7 @@ export default function ShiftClosingForm({
       )
     ) {
       setMessage(
-        '請確認當日結班開始日／當日結班結束日。'
+        '請確認結班金額開始日／結班金額結束日。'
       )
       return
     }
@@ -2294,10 +2294,10 @@ export default function ShiftClosingForm({
             <thead>
               <tr>
                 <th>
-                  當日結班開始日
+                  結班金額開始日
                 </th>
                 <th>
-                  當日結班結束日
+                  結班金額結束日
                 </th>
                 <th>
                   臨停現金
