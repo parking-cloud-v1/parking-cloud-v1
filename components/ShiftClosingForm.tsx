@@ -2655,6 +2655,30 @@ export default function ShiftClosingForm({
           flexWrap: 'wrap',
         }}
       >
+        {initialReport?.id && (
+          <button
+            type="button"
+            onClick={() =>
+              window.open(
+                `/shift-closing-report/${initialReport.id}`,
+                '_blank',
+                'noopener,noreferrer'
+              )
+            }
+            style={{
+              border: 0,
+              borderRadius: 10,
+              padding: '11px 16px',
+              cursor: 'pointer',
+              background: '#0f172a',
+              color: '#fff',
+              fontWeight: 800,
+            }}
+          >
+            公司回報畫面
+          </button>
+        )}
+
         <button
           type="button"
           className="btn"

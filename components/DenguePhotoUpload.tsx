@@ -196,6 +196,11 @@ export default function DenguePhotoUpload({
   }
 
   async function uploadReport() {
+    if (workType !== '自主檢查') {
+      setMessage('委外消毒不需要上傳報表。')
+      return
+    }
+
     if (!reportFile) {
       setMessage('請先選擇要上傳的報表。')
       return
@@ -371,38 +376,47 @@ export default function DenguePhotoUpload({
           </button>
         </div>
 
-        <div className="card" style={{ padding: 20 }}>
-          <h2 style={{ marginTop: 0 }}>報表上傳</h2>
-          <p className="muted">
-            完成後的自主檢查或委外消毒報表可直接上傳，主管可在報表中心依類型一鍵下載。
-          </p>
+        {workType === '自主檢查' ? (
+          <div className="card" style={{ padding: 20 }}>
+            <h2 style={{ marginTop: 0 }}>報表上傳</h2>
+            <p className="muted">
+              自主檢查完成後可上傳報表；委外消毒不需要報表上傳。
+            </p>
 
-          <div className="field">
-            <label>報表檔案</label>
-            <input
-              id="dengue-report-file"
-              type="file"
-              accept=".pdf,.xlsx,.xls,.doc,.docx,.jpg,.jpeg,.png"
-              onChange={(event) => setReportFile(event.target.files?.[0] || null)}
-            />
-          </div>
-
-          {reportFile && (
-            <div className="muted" style={{ marginTop: 8 }}>
-              {reportFile.name}｜{formatBytes(reportFile.size)}
+            <div className="field">
+              <label>報表檔案</label>
+              <input
+                id="dengue-report-file"
+                type="file"
+                accept=".pdf,.xlsx,.xls,.doc,.docx,.jpg,.jpeg,.png"
+                onChange={(event) => setReportFile(event.target.files?.[0] || null)}
+              />
             </div>
-          )}
 
-          <button
-            type="button"
-            className="btn"
-            disabled={savingReport || !reportFile}
-            onClick={uploadReport}
-            style={{ marginTop: 14 }}
-          >
-            {savingReport ? '上傳中…' : '上傳報表'}
-          </button>
-        </div>
+            {reportFile && (
+              <div className="muted" style={{ marginTop: 8 }}>
+                {reportFile.name}｜{formatBytes(reportFile.size)}
+              </div>
+            )}
+
+            <button
+              type="button"
+              className="btn"
+              disabled={savingReport || !reportFile}
+              onClick={uploadReport}
+              style={{ marginTop: 14 }}
+            >
+              {savingReport ? '上傳中…' : '上傳報表'}
+            </button>
+          </div>
+        ) : (
+          <div className="card" style={{ padding: 20 }}>
+            <h2 style={{ marginTop: 0 }}>委外消毒</h2>
+            <p className="muted" style={{ marginBottom: 0 }}>
+              委外消毒只需要上傳作業照片，不需要另外上傳報表。
+            </p>
+          </div>
+        )}
       </div>
 
       {message && (
