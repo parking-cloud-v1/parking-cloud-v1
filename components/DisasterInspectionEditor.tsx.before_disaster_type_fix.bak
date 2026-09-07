@@ -1,4 +1,3 @@
-// PHASE35_DISASTER_TYPE_FIX_V1
 'use client'
 
 import {
@@ -326,15 +325,8 @@ export default function DisasterInspectionEditor({
         })
       }
 
-      const normalizedInspection = {
-        ...inspectionData,
-        parking_lots: Array.isArray((inspectionData as any).parking_lots)
-          ? ((inspectionData as any).parking_lots[0] || null)
-          : ((inspectionData as any).parking_lots || null),
-      } as Inspection
-
       setInspection(
-        normalizedInspection
+        inspectionData as Inspection
       )
 
       setItems(

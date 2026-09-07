@@ -200,7 +200,7 @@ export async function GET(request: Request) {
     let caseMap = new Map<string, any>()
 
     if (caseIds.length) {
-      const { data: caseRows } = await supabase
+      const { data: caseRows } = await db
         .from('violation_parking_cases')
         .select('id, case_type, reserved_type, vehicle_plate')
         .in('id', caseIds)
@@ -362,6 +362,8 @@ export async function GET(request: Request) {
         is_holiday,
         created_at
       `)
+      .gte('entry_time', `${start}T00:00:00+08:00`)
+      .lt('entry_time', `${next}T00:00:00+08:00`)
       .order('parking_lot_id')
       .order('entry_time')
 
