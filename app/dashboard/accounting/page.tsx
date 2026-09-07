@@ -7,6 +7,7 @@ import {
 } from 'react'
 
 import { createClient } from '@/lib/supabase/client'
+import ManualCloudExportPanel from '@/components/ManualCloudExportPanel'
 
 type UserRole =
   | 'supervisor'
@@ -2631,7 +2632,7 @@ export default function AccountingReportCenterPage() {
               0,
           }}
         >
-          統一處理每月簽到表、最新月租名單、簽約異動及主管計程車折扣月報。
+          統一處理每月簽到表、月租名單、簽約異動、計程車月報、登革熱與違規停車照片，並可整理下載後自行上傳至 Google Drive。
         </p>
       </div>
 
@@ -2670,6 +2671,10 @@ export default function AccountingReportCenterPage() {
           />
         </div>
       </div>
+
+      <ManualCloudExportPanel
+        month={month}
+      />
 
       <div
         style={{
