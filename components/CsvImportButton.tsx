@@ -89,12 +89,6 @@ function toDate(value: string) {
   )}-${match[3].padStart(2, '0')}`
 }
 
-function normalizeMonth(value: string) {
-  const match = text(value).match(/(\d{4})[\/\-](\d{1,2})/)
-  if (!match) return ''
-  return `${match[1]}-${match[2].padStart(2, '0')}`
-}
-
 /*
  * 正確處理 CSV：
  *
@@ -1482,10 +1476,6 @@ export default function CsvImportButton({
   ] =
     useState('')
 
-  // 第 23 階段：繳費月份與正式租期分開。
-  // 若報表本身有「資料月份」會自動帶入，也可以人工覆寫。
-  const [coverageMonth, setCoverageMonth] = useState('')
-
   async function scanPaymentFolder(
     handle: any,
     allowPermissionPrompt:
@@ -2415,12 +2405,12 @@ export default function CsvImportButton({
     event:
       React.ChangeEvent<HTMLInputElement>
   ) {
-    const files: File[] =
+    const files =
       Array.from(
         event.target
           .files ||
           []
-      ) as File[]
+      )
 
     if (
       files.length === 0
@@ -2450,361 +2440,98 @@ export default function CsvImportButton({
    * =====================================================
    */
 
-  const detectedCoverageMonths: string[] = Array.from(
-    new Set<string>(
-      rows
-        .map((row) => normalizeMonth(row.dataMonth))
-        .filter((value): value is string => Boolean(value))
-    )
-  )
-  const detectedCoverageMonth: string =
-    detectedCoverageMonths.length === 1 ? detectedCoverageMonths[0] : ''
-  const effectiveCoverageMonth: string = coverageMonth || detectedCoverageMonth
-
   async function confirmSync() {
-    if (!effectiveCoverageMonth) {
-      setMessage('請先確認「本次繳費月份」。報表無法唯一判斷月份時，必須人工選擇。')
+    const syncRows = rows.filter(
+      (row) => row.matched && row.rentalId && row.parkingLotId && !row.duplicate
+    )
+
+    if (syncRows.length === 0) {
+      alert('目前沒有可以同步的資料')
       return
     }
 
-    const syncRows =
-      rows.filter(
-        (row) =>
-          row.matched &&
-          row.rentalId &&
-          row.parkingLotId &&
-          !row.duplicate
-      )
+    const confirmed = window.confirm(
+      `確定同步 ${syncRows.length} 筆繳費資料？\n\n` +
+      `系統會：\n` +
+      `1. 將符合的月租資料更新為「已繳」\n` +
+      `2. 同時永久保存一筆繳費歷史\n` +
+      `3. 繳費報表實收 0 元仍可辨識為已繳費\n\n` +
+      `未匹配及重複交易不會寫入。`
+    )
 
-    if (
-      syncRows.length === 0
-    ) {
-      alert(
-        '目前沒有可以同步的資料'
-      )
-
-      return
-    }
-
-    const confirmed =
-      window.confirm(
-        `確定同步 ${syncRows.length} 筆繳費資料？\n\n` +
-        `本次繳費月份：${effectiveCoverageMonth.replace('-', '/')}\n\n` +
-        `系統會：\n` +
-        `1. 將符合的月租資料記錄到「已繳月份」，不修改正式租期\n` +
-        `2. 同時永久保存一筆繳費歷史\n` +
-        `3. 繳費報表實收 0 元會歸類為「找零不足（但已繳費）」\n\n` +
-        `未匹配及重複交易不會寫入。`
-      )
-
-    if (!confirmed) {
-      return
-    }
+    if (!confirmed) return
 
     setSyncing(true)
-    setMessage('')
-
-    const supabase =
-      createClient()
-
-    let success = 0
-    let failed = 0
-
-    let historySuccess = 0
-    let historyDuplicate = 0
-    let historyFailed = 0
+    setMessage('正在更新月租繳費資料…')
 
     try {
-      /*
-       * 取得目前登入人員
-       */
-      const {
-        data: {
-          user,
-        },
-      } =
-        await supabase.auth.getUser()
+      const payloadRows = syncRows.map((row) => ({
+        rentalId: row.rentalId!,
+        parkingLotId: row.parkingLotId!,
+        customerCode: row.customerCode || null,
+        customerName: row.customerName || null,
+        phone: row.phone || null,
+        vehiclePlate: row.vehiclePlate,
+        paymentDate: row.paymentDate || toDate(row.exitTime),
+        amountPaid: row.amountPaid,
+        paymentMethod:
+          row.amountPaid <= 0
+            ? '找零不足（但已繳費）'
+            : row.paymentMethod || null,
+        invoiceNumber: row.invoiceNumber || null,
+        rentalStartDate: row.rentalStartDate || null,
+        rentalEndDate: row.rentalEndDate || null,
+        sourceReference: row.sourceReference || buildSourceReference(row),
+        notes: [
+          row.amountPaid <= 0 ? '找零不足（但已繳費）' : '',
+          row.fileName ? `匯入檔案：${row.fileName}` : '',
+          row.ticketNo ? `票號：${row.ticketNo}` : '',
+          row.workstation ? `工作站：${row.workstation}` : '',
+          row.dataMonth ? `報表月份：${row.dataMonth}` : '',
+        ].filter(Boolean).join('；'),
+      }))
 
-      if (!user) {
-        setMessage(
-          '登入狀態失效，請重新登入。'
-        )
+      const response = await fetch('/api/monthly-rentals/payment-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows: payloadRows }),
+      })
 
+      const result = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        setMessage(`同步失敗：${result?.error || '伺服器更新失敗'}`)
         return
       }
 
-      for (
-        const row of syncRows
-      ) {
-        /*
-         * ===============================================
-         * A. 記錄「繳費月份」
-         * ===============================================
-         * 第 23 階段不再用繳費匯入改動 start_date / end_date。
-         */
-        const sourceReference =
-          row.sourceReference || buildSourceReference(row)
+      const success = Number(result?.success || 0)
+      const failed = Number(result?.failed || 0)
+      const historySuccess = Number(result?.historySuccess || 0)
+      const historyDuplicate = Number(result?.historyDuplicate || 0)
+      const historyFailed = Number(result?.historyFailed || 0)
 
-        const { error } = await supabase.rpc(
-          'record_monthly_rental_payment_month',
-          {
-            p_monthly_rental_id: row.rentalId!,
-            p_payment_date: row.paymentDate || toDate(row.exitTime),
-            p_amount: row.amountPaid,
-            p_invoice_number: row.invoiceNumber || null,
-            p_source: 'payment_csv',
-            p_source_reference: sourceReference,
-            p_coverage_month: `${effectiveCoverageMonth}-01`,
-            p_month_count: 1,
-            p_notes: row.fileName ? `匯入檔案：${row.fileName}` : null,
-          }
-        )
-
-        if (error) {
-          console.error('月租繳費月份更新失敗', row.vehiclePlate, error)
-          failed++
-          continue
-        }
-
-        success++
-
-        /*
-         * ===============================================
-         * B. 建立繳費歷史
-         * ===============================================
-         */
-
-        /*
-         * 再檢查一次是否已存在，
-         * 避免使用者同時開兩個視窗或重複按。
-         */
-        const {
-          data:
-            existingPayment,
-
-          error:
-            existingError,
-        } =
-          await supabase
-            .from(
-              'monthly_payments'
-            )
-            .select('id')
-            .eq(
-              'source_reference',
-              sourceReference
-            )
-            .limit(1)
-            .maybeSingle()
-
-        if (existingError) {
-          console.error(
-            '檢查繳費歷史失敗',
-            row.vehiclePlate,
-            existingError
-          )
-
-          historyFailed++
-          continue
-        }
-
-        if (
-          existingPayment?.id
-        ) {
-          historyDuplicate++
-          continue
-        }
-
-        /*
-         * monthly_payments.payment_date
-         * 是必填欄位。
-         */
-        const historyPaymentDate =
-          row.paymentDate ||
-          toDate(
-            row.exitTime
-          )
-
-        if (
-          !historyPaymentDate
-        ) {
-          console.error(
-            '無法取得繳費日期',
-            row
-          )
-
-          historyFailed++
-          continue
-        }
-
-        const {
-          error:
-            historyInsertError,
-        } =
-          await supabase
-            .from(
-              'monthly_payments'
-            )
-            .insert({
-              parking_lot_id:
-                row.parkingLotId!,
-
-              monthly_rental_id:
-                row.rentalId!,
-
-              customer_code:
-                row.customerCode ||
-                null,
-
-              customer_name:
-                row.customerName ||
-                null,
-
-              phone:
-                row.phone ||
-                null,
-
-              vehicle_plate:
-                row.vehiclePlate,
-
-              payment_date:
-                historyPaymentDate,
-
-              amount:
-                row.amountPaid,
-
-              payment_method:
-                row.amountPaid <= 0
-                  ? '找零不足（但已繳費）'
-                  : row.paymentMethod ||
-                    null,
-
-              invoice_number:
-                row.invoiceNumber ||
-                null,
-
-              rental_start_date:
-                row.rentalStartDate ||
-                null,
-
-              rental_end_date:
-                row.rentalEndDate ||
-                null,
-
-              source:
-                'payment_csv',
-
-              source_reference:
-                sourceReference,
-
-              notes: [
-                row.amountPaid <= 0
-                  ? '找零不足（但已繳費）'
-                  : '',
-
-                row.fileName
-                  ? `匯入檔案：${row.fileName}`
-                  : '',
-
-                row.ticketNo
-                  ? `票號：${row.ticketNo}`
-                  : '',
-
-                row.workstation
-                  ? `工作站：${row.workstation}`
-                  : '',
-
-                row.dataMonth
-                  ? `報表月份：${row.dataMonth}`
-                  : '',
-              ]
-                .filter(Boolean)
-                .join('；') ||
-                null,
-
-              created_by:
-                user.id,
-            })
-
-        if (
-          historyInsertError
-        ) {
-          console.error(
-            '繳費歷史新增失敗',
-            row.vehiclePlate,
-            historyInsertError
-          )
-
-          historyFailed++
-        } else {
-          historySuccess++
-        }
+      if (success > 0 && pendingFolderSignatures.length > 0) {
+        markFolderFilesProcessed(pendingFolderSignatures)
+        setPendingFolderSignatures([])
       }
 
-      /*
-       * 若這批資料來自指定資料夾，而且至少成功同步 1 筆，
-       * 將檔案記錄成已處理。
-       * 下次開啟系統時就不會重複詢問同一份報表。
-       */
-      if (
-        success > 0 &&
-        pendingFolderSignatures.length >
-          0
-      ) {
-        markFolderFilesProcessed(
-          pendingFolderSignatures
-        )
-
-        setPendingFolderSignatures(
-          []
-        )
-      }
-
-      /*
-       * ===============================================
-       * 完成結果
-       * ===============================================
-       */
-
-      if (
-        failed === 0 &&
-        historyFailed === 0 &&
-        success > 0
-      ) {
+      if (failed === 0 && success > 0) {
         setMessage(
           `同步完成：月租成功 ${success} 筆，繳費歷史新增 ${historySuccess} 筆，已存在 ${historyDuplicate} 筆，即將返回月租管理…`
         )
-
-        setTimeout(
-          () => {
-            window.location.href =
-              '/dashboard/monthly-rentals'
-          },
-          1000
-        )
-
+        setTimeout(() => {
+          window.location.href = '/dashboard/monthly-rentals'
+        }, 1000)
         return
       }
 
       setMessage(
-        `同步完成：
-月租成功 ${success} 筆、
-月租失敗 ${failed} 筆、
-繳費歷史新增 ${historySuccess} 筆、
-繳費歷史已存在 ${historyDuplicate} 筆、
-繳費歷史失敗 ${historyFailed} 筆`
+        `同步完成：月租成功 ${success} 筆、月租失敗 ${failed} 筆、繳費歷史新增 ${historySuccess} 筆、繳費歷史已存在 ${historyDuplicate} 筆、繳費歷史失敗 ${historyFailed} 筆` +
+        (result?.errors?.length ? `；${result.errors.join('；')}` : '')
       )
-    } catch (
-      error: any
-    ) {
+    } catch (error: any) {
       console.error(error)
-
-      setMessage(
-        `同步失敗：${
-          error?.message ||
-          '未知錯誤'
-        }`
-      )
+      setMessage(`同步失敗：${error?.message || '網路連線異常'}`)
     } finally {
       setSyncing(false)
     }
@@ -2814,7 +2541,6 @@ export default function CsvImportButton({
     setRows([])
     setFileNames([])
     setMessage('')
-    setCoverageMonth('')
     setPendingFolderSignatures(
       []
     )
@@ -3093,7 +2819,7 @@ export default function CsvImportButton({
                       '#64748b',
                   }}
                 >
-                  可一次選擇多個交易明細 CSV，支援原本繳費機格式與一般「序號、票號、車號、實收金額」標準表頭格式。系統不限制交易名稱；有停車場名稱時使用「停車場＋車牌」比對，沒有停車場名稱時會用車牌自動尋找唯一所屬場站。只有成功匹配的月租車牌才可同步，並同時保存「繳費月份」與原始繳費歷史；不會改動正式租期。
+                  可一次選擇多個交易明細 CSV，支援原本繳費機格式與一般「序號、票號、車號、實收金額」標準表頭格式。系統不限制交易名稱；有停車場名稱時使用「停車場＋車牌」比對，沒有停車場名稱時會用車牌自動尋找唯一所屬場站。只有成功匹配的月租車牌才可同步，並同時保存繳費歷史。
                 </p>
 
                 <p
@@ -3131,27 +2857,6 @@ export default function CsvImportButton({
             </div>
 
             <div
-              className="card"
-              style={{ marginTop: 14, marginBottom: 14, background: '#eff6ff' }}
-            >
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px,320px) 1fr', gap: 14, alignItems: 'end' }}>
-                <div className="field">
-                  <label>本次繳費月份 *</label>
-                  <input
-                    type="month"
-                    value={effectiveCoverageMonth}
-                    onChange={(event) => setCoverageMonth(event.target.value)}
-                  />
-                </div>
-                <div style={{ color: '#475569', fontSize: 13, lineHeight: 1.6 }}>
-                  {detectedCoverageMonth
-                    ? `已從報表「資料月份」自動辨識 ${detectedCoverageMonth.replace('-', '/')}；如實際繳費月份不同可手動修改。`
-                    : '報表月份無法唯一辨識，請人工選擇。這個月份只記錄付款，不會改動正式租期。'}
-                </div>
-              </div>
-            </div>
-
-            <div
               style={{
                 display: 'flex',
                 gap: 8,
@@ -3182,8 +2887,7 @@ export default function CsvImportButton({
                   className="btn"
                   disabled={
                     syncing ||
-                    syncCount === 0 ||
-                    !effectiveCoverageMonth
+                    syncCount === 0
                   }
                   onClick={
                     confirmSync
