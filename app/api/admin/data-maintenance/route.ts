@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 
+export const dynamic = 'force-dynamic'
+
 const MODULES:any={
  attendance:{table:'monthly_attendance_sheets',bucket:'monthly-attendance',date:'attendance_month',label:'簽到表'},
  dengue:{table:'dengue_prevention_photos',bucket:'dengue-prevention',date:'work_date',label:'登革熱照片/報表'},
@@ -10,7 +12,7 @@ const MODULES:any={
  shift:{table:'shift_closing_reports',bucket:null,date:'closing_date',label:'結班報表'},
  taxi:{table:'taxi_discount_records',bucket:null,date:'discount_date',label:'計程車折扣'},
 }
-function admin(){const u=process.env.NEXT_PUBLIC_SUPABASE_URL,k=process.env.SUPABASE_SERVICE_ROLE_KEY;if(!u||!k)throw new Error('伺服器環境變數未設定完整');return createAdminClient(u,k,{auth:{persistSession:false,autoRefreshToken:false}})}
+function admin(){const u=process.env.NEXT_PUBLIC_SUPABASE_URL,k=process.env.SUPABASE_SERVICE_ROLE_KEY;if(!u||!k)throw new Error('資料維護 Server API 缺少 SUPABASE_SERVICE_ROLE_KEY');return createAdminClient(u,k,{auth:{persistSession:false,autoRefreshToken:false}})}
 async function supervisor(){const s=await createClient();const {data:{user}}=await s.auth.getUser();if(!user)return null;const {data:p}=await s.from('profiles').select('id,role,is_active').eq('id',user.id).maybeSingle();return p?.is_active&&p.role==='supervisor'?user:null}
 
 export async function GET(request:Request){

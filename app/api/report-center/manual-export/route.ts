@@ -377,8 +377,13 @@ export async function GET(request: Request) {
       grouped.get(key)!.push(row)
     }
 
-    for (const [lotId, rows] of grouped.entries()) {
-      const lot = safeName(lotMap.get(lotId) || '未知停車場')
+    // 計程車月報即使當月完全沒有資料，也必須能下載。
+    // 以停車場主檔為基準，每個停車場都建立一份 Excel；
+    // 沒有紀錄的場站就只有表頭、沒有明細。
+    for (const lotRow of (lotRows || []) as any[]) {
+      const lotId = String(lotRow.id || '')
+      const rows = grouped.get(lotId) || []
+      const lot = safeName(lotRow.name || lotMap.get(lotId) || '未知停車場')
 
       const dailyCounter: Record<string, number> = {}
 
