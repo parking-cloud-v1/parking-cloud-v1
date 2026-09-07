@@ -61,10 +61,10 @@ export async function POST(request: Request) {
 
     const db = admin()
     const monthDate = `${attendanceMonth}-01`
-    const { data: previous } = await db.from('monthly_attendance_sheets')
-      .select('id, storage_path').eq('parking_lot_id', parkingLotId).eq('attendance_month', monthDate).maybeSingle()
 
-    const path = `${parkingLotId}/${attendanceMonth.replace('-', '')}/${Date.now()}.${safeExt(file.name)}`
+    // 同一停車場同月份可能由多位管理員分別上傳簽到表。
+    // 每次上傳都建立新紀錄，不覆蓋、不刪除既有檔案。
+    const path = `${parkingLotId}/${attendanceMonth.replace('-', '')}/${user.id}/${Date.now()}.${safeExt(file.name)}`
     const buffer = Buffer.from(await file.arrayBuffer())
     const { error: uploadError } = await db.storage.from('monthly-attendance').upload(path, buffer, {
       contentType: file.type || 'application/octet-stream', upsert: false,
@@ -83,17 +83,14 @@ export async function POST(request: Request) {
       updated_at: new Date().toISOString(),
     }
 
-    const result = previous?.id
-      ? await db.from('monthly_attendance_sheets').update(payload).eq('id', previous.id).select('id,file_name,uploaded_at').single()
-      : await db.from('monthly_attendance_sheets').insert(payload).select('id,file_name,uploaded_at').single()
+    const result = await db.from('monthly_attendance_sheets')
+      .insert(payload)
+      .select('id,file_name,uploaded_at')
+      .single()
 
     if (result.error) {
       await db.storage.from('monthly-attendance').remove([path])
       return NextResponse.json({ error: `簽到表紀錄寫入失敗：${result.error.message}` }, { status: 500 })
-    }
-
-    if (previous?.storage_path && previous.storage_path !== path) {
-      await db.storage.from('monthly-attendance').remove([previous.storage_path])
     }
 
     return NextResponse.json({ ok: true, row: result.data })
