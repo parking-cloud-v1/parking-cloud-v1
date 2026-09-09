@@ -542,14 +542,25 @@ export async function GET(request: Request) {
     const folderUrls = {} as Record<DriveCategory, string>
     const counts = {} as Record<DriveCategory, number>
     const archiveCounts = {} as Record<DriveCategory, number>
+    const categoryErrors = {} as Partial<Record<DriveCategory, string>>
 
+    // 每一個報表類別分開讀取。
+    // 某一張資料表權限或欄位異常時，不再讓整個報表中心一起失敗。
     for (const category of CATEGORIES) {
       const root = configuredDriveFolder(category)
       configured[category] = Boolean(root)
       folderUrls[category] = driveFolderUrl(root)
-      const items = await collectItems(db, category, month, lots)
-      counts[category] = items.length
-      archiveCounts[category] = await archiveCount(db, category, month, lots)
+      counts[category] = 0
+      archiveCounts[category] = 0
+
+      try {
+        const items = await collectItems(db, category, month, lots)
+        counts[category] = items.length
+        archiveCounts[category] = await archiveCount(db, category, month, lots)
+      } catch (categoryError: any) {
+        categoryErrors[category] =
+          categoryError?.message || `${DRIVE_CATEGORY_LABELS[category]}資料讀取失敗`
+      }
     }
 
     return NextResponse.json({
@@ -557,6 +568,7 @@ export async function GET(request: Request) {
       folderUrls,
       counts,
       archiveCounts,
+      categoryErrors,
       role: profile.role,
       lotCount: lots.length,
     })

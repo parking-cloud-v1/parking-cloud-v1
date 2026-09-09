@@ -17,6 +17,7 @@ type StatusData = {
   folderUrls: Record<Category, string>
   counts: Record<Category, number>
   archiveCounts: Record<Category, number>
+  categoryErrors?: Partial<Record<Category, string>>
   role: 'supervisor' | 'manager'
   lotCount: number
 }
@@ -140,6 +141,7 @@ export default function GoogleDriveReportPanel({ month }: { month: string }) {
           const configured = status?.configured?.[item.key] || false
           const count = status?.counts?.[item.key] || 0
           const archived = status?.archiveCounts?.[item.key] || 0
+          const categoryError = status?.categoryErrors?.[item.key] || ''
 
           return (
             <div
@@ -169,11 +171,27 @@ export default function GoogleDriveReportPanel({ month }: { month: string }) {
                 {configured ? 'Google Drive 已設定' : '尚未設定 Drive Folder ID'}
               </div>
 
+              {categoryError && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: 10,
+                    border: '1px solid #fecaca',
+                    borderRadius: 8,
+                    background: '#fef2f2',
+                    fontSize: 13,
+                    whiteSpace: 'pre-wrap',
+                  }}
+                >
+                  此類資料讀取失敗：{categoryError}
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                 <button
                   type="button"
                   className="btn"
-                  disabled={!configured || count === 0 || Boolean(uploading) || loading}
+                  disabled={!configured || count === 0 || Boolean(uploading) || loading || Boolean(categoryError)}
                   onClick={() => void upload(item.key)}
                 >
                   {uploading === item.key ? '歸檔中…' : '一鍵歸檔'}
