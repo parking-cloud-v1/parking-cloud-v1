@@ -13,6 +13,27 @@ type CookieToSet = {
   options?: any
 }
 
+function isPublicPath(path: string) {
+  return (
+    path === '/login' ||
+    path.startsWith('/login/') ||
+    path === '/apply' ||
+    path.startsWith('/apply/') ||
+    path === '/renew' ||
+    path.startsWith('/renew/') ||
+    path === '/status' ||
+    path.startsWith('/status/') ||
+    path === '/sign' ||
+    path.startsWith('/sign/') ||
+    path === '/supplement' ||
+    path.startsWith('/supplement/') ||
+    path === '/waitlist-offer' ||
+    path.startsWith('/waitlist-offer/') ||
+    path.startsWith('/api/public/') ||
+    path === '/robots.txt'
+  )
+}
+
 export async function middleware(
   request: NextRequest
 ) {
@@ -92,14 +113,12 @@ export async function middleware(
   const path =
     request.nextUrl.pathname
 
-  const isPublic =
-    path.startsWith(
-      '/login'
-    )
+  const publicPath =
+    isPublicPath(path)
 
   if (
     !user &&
-    !isPublic
+    !publicPath
   ) {
     const loginUrl =
       request.nextUrl.clone()
@@ -114,8 +133,9 @@ export async function middleware(
 
   if (
     user &&
-    path.startsWith(
-      '/login'
+    (
+      path === '/login' ||
+      path.startsWith('/login/')
     )
   ) {
     const dashboardUrl =

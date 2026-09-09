@@ -3,7 +3,6 @@ import { createClient } from '@/lib/supabase/server'
 import LogoutButton from '@/components/LogoutButton'
 import WorkParkingLotSelector from '@/components/WorkParkingLotSelector'
 import ui from '@/components/PlatformAdmin.module.css'
-import AccountantReportOnlyGuard from '@/components/AccountantReportOnlyGuard'
 import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
 import { isOnlineOperationAccessOpen } from '@/lib/online-operations/access'
 
@@ -14,7 +13,7 @@ export default async function DashboardShell({ children }: { children: React.Rea
     ? await supabase.from('profiles').select('id, display_name, role, is_active').eq('id', user.id).maybeSingle()
     : { data: null, error: null }
 
-  const roleText = profile?.role === 'supervisor' ? '主管' : profile?.role === 'manager' ? '場站管理員' : profile?.role === 'accountant' ? '會計' : '使用者'
+  const roleText = profile?.role === 'supervisor' ? '主管' : profile?.role === 'manager' ? '場站管理員' : '使用者'
   let workParkingLots: { id: string; name: string }[] = []
   let onlineOperationsOpen = profile?.role === 'supervisor'
   let currentWorkLotId = ''
@@ -74,13 +73,7 @@ export default async function DashboardShell({ children }: { children: React.Rea
 
     <div className={ui.layout}>
       <aside className={ui.sidebar}>
-        {profile?.role === 'accountant' ? (
-          <div className={ui.navGroup}>
-            <div className={ui.navTitle}>會計專區</div>
-            <Nav href="/dashboard/reports" icon="報">報表中心</Nav>
-          </div>
-        ) : (
-          <>
+        <>
             <WorkParkingLotSelector parkingLots={workParkingLots} />
             <div className={ui.navGroup}><div className={ui.navTitle}>總覽</div><Nav href="/dashboard" icon="首">營運首頁</Nav></div>
             {onlineOperationsOpen && (
@@ -111,9 +104,8 @@ export default async function DashboardShell({ children }: { children: React.Rea
             <div className={ui.navGroup}><div className={ui.navTitle}>基本管理</div><Nav href="/dashboard/parking-lots" icon="場">停車場管理</Nav></div>
             {profile?.role === 'supervisor' && <div className={ui.navGroup}><div className={ui.navTitle}>系統管理</div><Nav href="/dashboard/settings" icon="設">系統設定</Nav><Nav href="/dashboard/data-maintenance" icon="清">資料維護</Nav><Nav href="/dashboard/online/audit" icon="稽">操作紀錄</Nav><Nav href="/dashboard/online/health" icon="安">上線安全檢查</Nav></div>}
           </>
-        )}
       </aside>
-      <main className={ui.main}><AccountantReportOnlyGuard enabled={profile?.role === 'accountant'}>{children}</AccountantReportOnlyGuard></main>
+      <main className={ui.main}>{children}</main>
     </div>
   </div>
 }

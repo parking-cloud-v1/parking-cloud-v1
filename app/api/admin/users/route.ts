@@ -5,15 +5,13 @@ import { createClient } from '@/lib/supabase/server'
 type AppRole =
   | 'supervisor'
   | 'manager'
-  | 'accountant'
 
 function isValidRole(
   value: unknown
 ): value is AppRole {
   return (
     value === 'supervisor' ||
-    value === 'manager' ||
-    value === 'accountant'
+    value === 'manager'
   )
 }
 
@@ -548,14 +546,7 @@ export async function POST(
         },
       })
 
-    const roleText =
-      role ===
-      'supervisor'
-        ? '主管'
-        : role ===
-            'accountant'
-          ? '會計'
-          : '場站管理員'
+    const roleText = role === 'supervisor' ? '主管' : '場站管理員'
 
     return NextResponse.json(
       {

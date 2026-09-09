@@ -3,7 +3,7 @@
 import { useState } from 'react'
 
 type ParkingLot = { id: string; name: string; status: string }
-type AppRole = 'supervisor' | 'manager' | 'accountant'
+type AppRole = 'supervisor' | 'manager'
 
 export default function CreateUserForm({ parkingLots }: { parkingLots: ParkingLot[] }) {
   const [username, setUsername] = useState('')
@@ -73,16 +73,10 @@ export default function CreateUserForm({ parkingLots }: { parkingLots: ParkingLo
           <select value={role} onChange={(e) => setRole(e.target.value as AppRole)}>
             <option value="manager">場站管理員</option>
             <option value="supervisor">主管</option>
-            <option value="accountant">會計（僅報表中心）</option>
           </select>
         </div>
       </div>
 
-      {role === 'accountant' && (
-        <div style={{ padding: 12, borderRadius: 10, background: '#eff6ff', color: '#1d4ed8', fontSize: 14 }}>
-          會計帳號不分配工作停車場，登入後只會進入「報表中心」，不會看到月租管理、計程車、防災或其他現場操作頁。
-        </div>
-      )}
 
       {role === 'manager' && (
         <div>

@@ -5,7 +5,6 @@ import ViolationSupervisorAlerts from '@/components/ViolationSupervisorAlerts'
 export default async function ViolationAlertsPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-
   if (!user) redirect('/login')
 
   const { data: profile } = await supabase

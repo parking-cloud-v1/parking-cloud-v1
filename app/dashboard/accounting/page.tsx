@@ -9,9 +9,7 @@ import {
 import { createClient } from '@/lib/supabase/client'
 import ManualCloudExportPanel from '@/components/ManualCloudExportPanel'
 
-type UserRole =
-  | 'supervisor'
-  | 'accountant'
+type UserRole = 'supervisor'
 
 type ParkingLot = {
   id: string
@@ -1165,12 +1163,7 @@ export default function AccountingReportCenterPage() {
       if (
         !profile ||
         !profile.is_active ||
-        (
-          profile.role !==
-            'supervisor' &&
-          profile.role !==
-            'accountant'
-        )
+        profile.role !== 'supervisor'
       ) {
         setAccessDenied(
           true

@@ -41,7 +41,7 @@ export default async function DisasterInspectionBatchPage({
     redirect('/login')
   }
 
-  if (!['supervisor','accountant'].includes(profile.role)) {
+  if (profile.role !== 'supervisor') {
     redirect('/dashboard/disaster-inspections')
   }
 
@@ -89,7 +89,7 @@ export default async function DisasterInspectionBatchPage({
         </div>
 
         <Link
-          href={profile.role === 'accountant' ? '/dashboard/reports' : '/dashboard/disaster-inspections'}
+          href="/dashboard/disaster-inspections"
           style={{
             textDecoration: 'none',
             padding: '9px 13px',
@@ -100,7 +100,7 @@ export default async function DisasterInspectionBatchPage({
             fontWeight: 700,
           }}
         >
-          {profile.role === 'accountant' ? '返回報表中心' : '返回防災檢查'}
+          返回防災檢查
         </Link>
       </div>
 

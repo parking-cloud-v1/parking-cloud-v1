@@ -49,6 +49,9 @@ type InitialReport = {
   notes: string | null
   remittance_status?: 'accumulating' | 'remitted'
   remitted_at?: string | null
+  remittance_batch_id?: string | null
+  remittance_batch_total?: number | null
+  remittance_batch_report_count?: number | null
 }
 
 function num(value: any) {
@@ -115,11 +118,15 @@ export default function ShiftClosingForm({
   initialReport,
   initialDetails = [],
   defaultParkingLotId = '',
+  priorAccumulatedAmount = 0,
+  priorAccumulatedCount = 0,
 }: {
   parkingLots: ParkingLotOption[]
   initialReport?: InitialReport | null
   initialDetails?: DetailRow[]
   defaultParkingLotId?: string
+  priorAccumulatedAmount?: number
+  priorAccumulatedCount?: number
 }) {
   const router = useRouter()
   const supabase = createClient()
@@ -785,6 +792,49 @@ export default function ShiftClosingForm({
       [details]
     )
 
+
+  /*
+   * 跨班未匯款累積：
+   * - remittanceTotal 只代表「本班」金額
+   * - priorAccumulatedAmount 由 server page 讀取同場其他未匯款班別
+   * - 匯款完成後，SQL RPC 會一次把同場所有累積中班別整批結清
+   */
+  const pendingRemittanceTotal =
+    useMemo(
+      () =>
+        initialReport?.remittance_status ===
+        'remitted'
+          ? num(
+              initialReport.remittance_batch_total
+            ) || remittanceTotal
+          : num(priorAccumulatedAmount) +
+            remittanceTotal,
+      [
+        initialReport?.remittance_status,
+        initialReport?.remittance_batch_total,
+        priorAccumulatedAmount,
+        remittanceTotal,
+      ]
+    )
+
+  const pendingRemittanceCount =
+    useMemo(
+      () =>
+        initialReport?.remittance_status ===
+        'remitted'
+          ? num(
+              initialReport.remittance_batch_report_count
+            ) || 1
+          : num(priorAccumulatedCount) +
+            (initialReport?.id ? 1 : 0),
+      [
+        initialReport?.remittance_status,
+        initialReport?.remittance_batch_report_count,
+        priorAccumulatedCount,
+        initialReport?.id,
+      ]
+    )
+
   function updateDetail(
     index: number,
     patch: Partial<DetailRow>
@@ -855,35 +905,39 @@ export default function ShiftClosingForm({
       'remitted'
     ) {
       setMessage(
-        '這一輪匯款已經完成。'
+        '這一批匯款已經完成。'
       )
       return
     }
 
+    const settlementLotId =
+      initialReport.parking_lot_id ||
+      parkingLotId
+
     const confirmed =
       window.confirm(
         `確定本次匯款已完成？\n\n` +
-        `本次匯款總金額：$${remittanceTotal.toLocaleString()}\n\n` +
+        `本班匯款金額：$${remittanceTotal.toLocaleString()}\n` +
+        `前班未匯款累積：$${num(priorAccumulatedAmount).toLocaleString()}\n` +
+        `本次實際結清總額：$${pendingRemittanceTotal.toLocaleString()}\n` +
+        `本次共結清：${pendingRemittanceCount} 班\n\n` +
         `確認後：\n` +
-        `1. 目前這份結班報表會保留為「已匯款」歷史\n` +
-        `2. 不會刪除任何舊資料\n` +
-        `3. 系統會開啟新的結班報表，開始下一輪`
+        `1. 同一停車場所有「累積中」結班會一次標記為已匯款\n` +
+        `2. 每一班原始結班資料都會保留\n` +
+        `3. 系統會開啟新的結班報表，下一班重新從 0 開始累積`
       )
 
     if (!confirmed) {
       return
     }
 
-    setCompletingRemittance(
-      true
-    )
+    setCompletingRemittance(true)
     setMessage('')
 
     try {
       const {
         data: { user },
-      } =
-        await supabase.auth.getUser()
+      } = await supabase.auth.getUser()
 
       if (!user) {
         throw new Error(
@@ -892,69 +946,72 @@ export default function ShiftClosingForm({
       }
 
       const {
+        data,
         error,
-      } =
-        await supabase
-          .from(
-            'shift_closing_reports'
-          )
-          .update({
-            remittance_status:
-              'remitted',
-            remitted_at:
-              new Date()
-                .toISOString(),
-            remitted_by:
-              user.id,
-            updated_by:
-              user.id,
-            updated_at:
-              new Date()
-                .toISOString(),
-          })
-          .eq(
-            'id',
-            initialReport.id
-          )
+      } = await supabase.rpc(
+        'complete_shift_closing_remittance',
+        {
+          p_parking_lot_id:
+            settlementLotId,
+        }
+      )
 
       if (error) {
         throw error
       }
 
-      await supabase
-        .from(
-          'system_logs'
+      const result =
+        (data || {}) as any
+
+      const settledTotal =
+        num(
+          result.batch_total ??
+            result.total ??
+            pendingRemittanceTotal
         )
-        .insert({
-          user_id:
-            user.id,
-          parking_lot_id:
-            parkingLotId ||
-            null,
-          action:
-            'SHIFT_CLOSING_REMITTANCE_COMPLETED',
-          entity_type:
-            'shift_closing_report',
-          entity_id:
-            initialReport.id,
-          detail: {
-            remittance_total:
-              remittanceTotal,
-            closing_date:
-              closingDate,
-          },
-        })
+
+      const settledCount =
+        num(
+          result.report_count ??
+            pendingRemittanceCount
+        )
+
+      // 紀錄失敗不影響已完成的匯款結清
+      try {
+        await supabase
+          .from('system_logs')
+          .insert({
+            user_id: user.id,
+            parking_lot_id:
+              settlementLotId || null,
+            action:
+              'SHIFT_CLOSING_REMITTANCE_BATCH_COMPLETED',
+            entity_type:
+              'shift_closing_report',
+            entity_id:
+              initialReport.id,
+            detail: {
+              batch_id:
+                result.batch_id || null,
+              report_count:
+                settledCount,
+              remittance_total:
+                settledTotal,
+              closing_date:
+                closingDate,
+            },
+          })
+      } catch (logError) {
+        console.warn(
+          '匯款已完成，但 system_logs 寫入失敗：',
+          logError
+        )
+      }
 
       window.location.href =
-        `/dashboard/shift-closing/new?lot=${encodeURIComponent(
-          parkingLotId
-        )}&reset=1`
-    } catch (
-      error: any
-    ) {
-      console.error(
-        error
-      )
+        `/dashboard/shift-closing/new?reset=1`
+    } catch (error: any) {
+      console.error(error)
 
       setMessage(
         `匯款結清失敗：${
@@ -963,9 +1020,7 @@ export default function ShiftClosingForm({
         }`
       )
     } finally {
-      setCompletingRemittance(
-        false
-      )
+      setCompletingRemittance(false)
     }
   }
 
@@ -1141,6 +1196,10 @@ export default function ShiftClosingForm({
           num(
             remittanceTotal
           ),
+
+        remittance_status:
+          initialReport?.remittance_status ||
+          'accumulating',
 
         operator_name:
           operatorName ||
@@ -2501,15 +2560,71 @@ export default function ShiftClosingForm({
 
         <div
           style={{
-            textAlign:
-              'right',
             marginTop: 16,
-            fontSize: 18,
-            fontWeight: 800,
+            display: 'grid',
+            gap: 8,
+            justifyContent: 'end',
+            textAlign: 'right',
           }}
         >
-          匯款總金額：$
-          {remittanceTotal.toLocaleString()}
+          <div
+            style={{
+              fontSize: 15,
+              fontWeight: 700,
+            }}
+          >
+            本班匯款金額：$
+            {remittanceTotal.toLocaleString()}
+          </div>
+
+          {initialReport?.remittance_status !==
+            'remitted' && (
+            <>
+              <div
+                className="muted"
+                style={{
+                  fontSize: 14,
+                }}
+              >
+                前班未匯款累積：$
+                {num(
+                  priorAccumulatedAmount
+                ).toLocaleString()}
+                {' / '}
+                {num(
+                  priorAccumulatedCount
+                )}{' '}
+                班
+              </div>
+
+              <div
+                style={{
+                  fontSize: 20,
+                  fontWeight: 900,
+                  color: '#b45309',
+                }}
+              >
+                目前待匯款累積：$
+                {pendingRemittanceTotal.toLocaleString()}
+              </div>
+            </>
+          )}
+
+          {initialReport?.remittance_status ===
+            'remitted' && (
+            <div
+              style={{
+                fontSize: 20,
+                fontWeight: 900,
+                color: '#15803d',
+              }}
+            >
+              本次匯款批次總額：$
+              {pendingRemittanceTotal.toLocaleString()}
+              {' / '}
+              {pendingRemittanceCount} 班
+            </div>
+          )}
         </div>
       </div>
 
@@ -2590,8 +2705,8 @@ export default function ShiftClosingForm({
             >
               {initialReport.remittance_status ===
               'remitted'
-                ? '已匯款'
-                : '累積中'}
+                ? `已匯款（本批 ${pendingRemittanceCount} 班 / $${pendingRemittanceTotal.toLocaleString()}）`
+                : `累積中（目前待匯 $${pendingRemittanceTotal.toLocaleString()}）`}
             </strong>
 
             {initialReport.remitted_at && (
@@ -2641,7 +2756,7 @@ export default function ShiftClosingForm({
             >
               {completingRemittance
                 ? '處理中…'
-                : '匯款完成，開始新一輪'}
+                : `匯款完成（結清 ${pendingRemittanceCount} 班）`}
             </button>
           )}
         </div>

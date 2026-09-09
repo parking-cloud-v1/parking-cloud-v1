@@ -1,403 +1,200 @@
 'use client'
 
-import {
-  useEffect,
-  useState,
-} from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 type Category =
   | 'attendance'
+  | 'rentals'
+  | 'changes'
+  | 'taxi'
+  | 'shift'
+  | 'disaster'
   | 'dengue'
   | 'violation'
 
 type StatusData = {
-  configured: Record<
-    Category,
-    boolean
-  >
-  folderUrls: Record<
-    Category,
-    string
-  >
-  counts: Record<
-    Category,
-    number
-  >
+  configured: Record<Category, boolean>
+  folderUrls: Record<Category, string>
+  counts: Record<Category, number>
+  archiveCounts: Record<Category, number>
+  role: 'supervisor' | 'manager'
+  lotCount: number
 }
 
-const LABELS: Record<
-  Category,
-  string
-> = {
-  attendance:
-    '每月簽到表',
-  dengue:
-    '登革熱自主檢查報表',
-  violation:
-    '違規停車照片',
-}
+const CATEGORIES: { key: Category; label: string; note: string }[] = [
+  { key: 'attendance', label: '每月簽到表', note: '同場同月可保留多位管理員上傳的不同簽到表。' },
+  { key: 'rentals', label: '月租總表', note: '依各停車場建立本月月租總表快照。' },
+  { key: 'changes', label: '月租異動', note: '歸檔指定月份新增、退租等異動資料。' },
+  { key: 'taxi', label: '計程車折扣', note: '各停車場各一份 Excel；當月無紀錄仍保留空白表。' },
+  { key: 'shift', label: '結班報表', note: '包含結班金額與跨班匯款狀態。' },
+  { key: 'disaster', label: '防災檢查', note: '只歸檔所選月份已產生的正式 PDF。' },
+  { key: 'dengue', label: '登革熱自主檢查報表', note: '只包含自主檢查報表；委外消毒不包含報表。' },
+  { key: 'violation', label: '違規停車照片', note: '包含身障／婦幼違規、久停 10 天與無牌車照片。' },
+]
 
-export default function GoogleDriveReportPanel({
-  month,
-}: {
-  month: string
-}) {
-  const [
-    status,
-    setStatus,
-  ] =
-    useState<
-      StatusData | null
-    >(null)
-
-  const [
-    loading,
-    setLoading,
-  ] =
-    useState(false)
-
-  const [
-    uploading,
-    setUploading,
-  ] =
-    useState<
-      Category | ''
-    >('')
-
-  const [
-    message,
-    setMessage,
-  ] =
-    useState('')
+export default function GoogleDriveReportPanel({ month }: { month: string }) {
+  const [status, setStatus] = useState<StatusData | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [uploading, setUploading] = useState<Category | ''>('')
+  const [message, setMessage] = useState('')
 
   async function load() {
     if (!month) return
-
     setLoading(true)
+    setMessage('')
 
     try {
-      const response =
-        await fetch(
-          `/api/report-center/google-drive?month=${encodeURIComponent(
-            month
-          )}`,
-          {
-            cache:
-              'no-store',
-          }
-        )
-
-      const json =
-        await response.json()
-
-      if (!response.ok) {
-        throw new Error(
-          json?.error ||
-            'Google Drive 狀態讀取失敗'
-        )
-      }
-
-      setStatus(
-        json
+      const response = await fetch(
+        `/api/report-center/google-drive?month=${encodeURIComponent(month)}`,
+        { cache: 'no-store' }
       )
-    } catch (
-      error: any
-    ) {
-      setMessage(
-        error?.message ||
-          'Google Drive 狀態讀取失敗'
-      )
+      const json = await response.json()
+      if (!response.ok) throw new Error(json?.error || 'Google Drive 狀態讀取失敗')
+      setStatus(json)
+    } catch (error: any) {
+      setStatus(null)
+      setMessage(error?.message || 'Google Drive 狀態讀取失敗')
     } finally {
       setLoading(false)
     }
   }
 
-  useEffect(
-    () => {
-      void load()
-    },
-    [
-      month,
-    ]
+  useEffect(() => {
+    void load()
+  }, [month])
+
+  const configuredCount = useMemo(
+    () => CATEGORIES.filter((item) => status?.configured?.[item.key]).length,
+    [status]
   )
 
-  async function upload(
-    category:
-      Category
-  ) {
-    if (
-      uploading
-    ) {
-      return
-    }
+  async function upload(category: Category) {
+    if (uploading) return
+    const item = CATEGORIES.find((row) => row.key === category)!
 
-    if (
-      !window.confirm(
-        `確定把 ${month}「${LABELS[category]}」上傳到指定 Google Drive 資料夾？\n\n原本 Supabase 檔案不會刪除。`
-      )
-    ) {
-      return
-    }
+    if (!window.confirm(
+      `確定將 ${month}「${item.label}」歸檔到公司 Google Drive？\n\n` +
+      '完全相同的檔案會自動略過，不會重複上傳；Supabase 原始檔不會刪除。'
+    )) return
 
-    setUploading(
-      category
-    )
-
-    setMessage(
-      `${LABELS[category]} 正在上傳 Google Drive…`
-    )
+    setUploading(category)
+    setMessage(`${item.label} 正在歸檔…`)
 
     try {
-      const response =
-        await fetch(
-          '/api/report-center/google-drive',
-          {
-            method:
-              'POST',
-
-            headers: {
-              'Content-Type':
-                'application/json',
-            },
-
-            body:
-              JSON.stringify({
-                category,
-                month,
-              }),
-          }
-        )
-
-      const json =
-        await response.json()
-
-      if (!response.ok) {
-        throw new Error(
-          json?.error ||
-            'Google Drive 上傳失敗'
-        )
-      }
+      const response = await fetch('/api/report-center/google-drive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, month }),
+      })
+      const json = await response.json()
+      if (!response.ok) throw new Error(json?.error || 'Google Drive 歸檔失敗')
 
       setMessage(
-        `${LABELS[category]} 上傳完成：成功 ${json.uploaded || 0} 份、失敗 ${json.failed || 0} 份。` +
-          (
-            json.failures
-              ?.length
-              ? `\n${json.failures.join(
-                  '\n'
-                )}`
-              : ''
-          )
+        `${item.label} 歸檔完成：新上傳 ${json.uploaded || 0} 份、重複略過 ${json.skipped || 0} 份、失敗 ${json.failed || 0} 份。` +
+        (json.failures?.length ? `\n${json.failures.join('\n')}` : '')
       )
-
       await load()
-    } catch (
-      error: any
-    ) {
-      setMessage(
-        error?.message ||
-          'Google Drive 上傳失敗'
-      )
+    } catch (error: any) {
+      setMessage(error?.message || 'Google Drive 歸檔失敗')
     } finally {
       setUploading('')
     }
   }
 
   return (
-    <div
-      className="card"
-      style={{
-        marginTop:
-          18,
-      }}
-    >
-      <h2
-        style={{
-          marginTop:
-            0,
-        }}
-      >
-        Google Drive 一鍵歸檔
-      </h2>
-
-      <div
-        className="muted"
-        style={{
-          marginBottom:
-            14,
-        }}
-      >
-        不再需要先下載 ZIP 再人工搬檔；直接把本月份檔案送到公司指定的 Google Drive 資料夾。
+    <div className="card" style={{ marginTop: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <h2 style={{ margin: 0 }}>Google Drive 正式歸檔</h2>
+          <div className="muted" style={{ marginTop: 6 }}>
+            正式資料夾結構：月份 → 停車場 → 類別。完全相同內容會自動略過；內容有更新才建立新版。
+          </div>
+        </div>
+        <button type="button" onClick={() => void load()} disabled={loading || Boolean(uploading)}>
+          {loading ? '更新中…' : '重新整理'}
+        </button>
       </div>
 
-      {loading && (
-        <div className="muted">
-          Google Drive 狀態讀取中…
+      {status && (
+        <div className="muted" style={{ marginTop: 10 }}>
+          權限：{status.role === 'supervisor' ? '主管－全部停車場' : '管理員－僅指派停車場'} ｜
+          可查看 {status.lotCount} 個停車場 ｜ 已設定 Drive 類別 {configuredCount} / {CATEGORIES.length}
         </div>
       )}
 
-      <div
-        style={{
-          display:
-            'grid',
-
-          gridTemplateColumns:
-            'repeat(auto-fit,minmax(240px,1fr))',
-
-          gap:
-            12,
-        }}
-      >
-        {(
-          [
-            'attendance',
-            'dengue',
-            'violation',
-          ] as Category[]
-        ).map(
-          (
-            category
-          ) => {
-            const configured =
-              status
-                ?.configured[
-                category
-              ] ||
-              false
-
-            const count =
-              status
-                ?.counts[
-                category
-              ] ||
-              0
-
-            return (
-              <div
-                key={
-                  category
-                }
-                style={{
-                  border:
-                    '1px solid #dbe3ec',
-                  borderRadius:
-                    10,
-                  padding:
-                    14,
-                  background:
-                    '#fff',
-                }}
-              >
-                <strong>
-                  {
-                    LABELS[
-                      category
-                    ]
-                  }
-                </strong>
-
-                <div
-                  style={{
-                    fontSize:
-                      28,
-                    fontWeight:
-                      800,
-                    marginTop:
-                      8,
-                  }}
-                >
-                  {count}{' '}
-                  份
-                </div>
-
-                <div
-                  className="muted"
-                  style={{
-                    marginTop:
-                      4,
-                  }}
-                >
-                  {configured
-                    ? 'Google Drive 已設定'
-                    : '尚未設定 Folder ID'}
-                </div>
-
-                <div
-                  style={{
-                    display:
-                      'flex',
-                    gap:
-                      8,
-                    flexWrap:
-                      'wrap',
-                    marginTop:
-                      12,
-                  }}
-                >
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={
-                      !configured ||
-                      count ===
-                        0 ||
-                      Boolean(
-                        uploading
-                      )
-                    }
-                    onClick={() =>
-                      upload(
-                        category
-                      )
-                    }
-                  >
-                    {uploading ===
-                    category
-                      ? '上傳中…'
-                      : '一鍵上傳'}
-                  </button>
-
-                  {status
-                    ?.folderUrls[
-                    category
-                  ] && (
-                    <a
-                      href={
-                        status
-                          .folderUrls[
-                          category
-                        ]
-                      }
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn"
-                      style={{
-                        textDecoration:
-                          'none',
-                      }}
-                    >
-                      開啟資料夾
-                    </a>
-                  )}
-                </div>
-              </div>
-            )
-          }
-        )}
-      </div>
-
       {message && (
-        <div
-          style={{
-            marginTop:
-              14,
-            whiteSpace:
-              'pre-wrap',
-          }}
-        >
+        <div className="card" style={{ marginTop: 14, whiteSpace: 'pre-wrap' }}>
           {message}
         </div>
       )}
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))',
+          gap: 12,
+          marginTop: 16,
+        }}
+      >
+        {CATEGORIES.map((item) => {
+          const configured = status?.configured?.[item.key] || false
+          const count = status?.counts?.[item.key] || 0
+          const archived = status?.archiveCounts?.[item.key] || 0
+
+          return (
+            <div
+              key={item.key}
+              style={{
+                border: '1px solid #dbe3ec',
+                borderRadius: 12,
+                padding: 14,
+                background: '#fff',
+              }}
+            >
+              <strong style={{ fontSize: 18 }}>{item.label}</strong>
+              <div className="muted" style={{ marginTop: 6, minHeight: 42 }}>{item.note}</div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
+                <div>
+                  <div className="muted">本月可歸檔</div>
+                  <div style={{ fontSize: 26, fontWeight: 800 }}>{count}</div>
+                </div>
+                <div>
+                  <div className="muted">本月歸檔紀錄</div>
+                  <div style={{ fontSize: 26, fontWeight: 800 }}>{archived}</div>
+                </div>
+              </div>
+
+              <div className="muted" style={{ marginTop: 8 }}>
+                {configured ? 'Google Drive 已設定' : '尚未設定 Drive Folder ID'}
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!configured || count === 0 || Boolean(uploading) || loading}
+                  onClick={() => void upload(item.key)}
+                >
+                  {uploading === item.key ? '歸檔中…' : '一鍵歸檔'}
+                </button>
+
+                {status?.folderUrls?.[item.key] && (
+                  <a
+                    href={status.folderUrls[item.key]}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn"
+                    style={{ textDecoration: 'none' }}
+                  >
+                    開啟 Drive
+                  </a>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

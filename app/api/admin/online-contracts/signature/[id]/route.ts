@@ -41,7 +41,7 @@ export async function GET(
       return NextResponse.json({ error: '帳號未啟用。' }, { status: 403 })
     }
 
-    if (!['supervisor', 'manager', 'accountant'].includes(profile.role)) {
+    if (!['supervisor', 'manager'].includes(profile.role)) {
       return NextResponse.json({ error: '沒有查看契約簽名的權限。' }, { status: 403 })
     }
 

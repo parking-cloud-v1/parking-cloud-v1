@@ -12,7 +12,7 @@ type ParkingLot = {
 type UserRow = {
   id: string
   display_name: string | null
-  role: 'supervisor' | 'manager' | 'accountant'
+  role: 'supervisor' | 'manager'
   is_active: boolean
   assigned_lot_ids: string[]
 }
@@ -268,7 +268,7 @@ export default function UserPermissionEditor({
             value={role}
             onChange={(e) =>
               setRole(
-                e.target.value as 'supervisor' | 'manager' | 'accountant'
+                e.target.value as 'supervisor' | 'manager'
               )
             }
             disabled={isCurrentUser}
@@ -280,7 +280,6 @@ export default function UserPermissionEditor({
           >
             <option value="supervisor">主管</option>
             <option value="manager">場站管理員</option>
-            <option value="accountant">會計（僅報表中心）</option>
           </select>
 
           {isCurrentUser && (

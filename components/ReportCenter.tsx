@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import GoogleDriveReportPanel from '@/components/GoogleDriveReportPanel'
 import ManualCloudExportPanel from '@/components/ManualCloudExportPanel'
 
 function currentMonth() {
@@ -15,7 +16,7 @@ export default function ReportCenter() {
     <div style={{ paddingBottom: 40 }}>
       <h1 style={{ marginBottom: 6 }}>報表中心</h1>
       <p className="muted" style={{ marginTop: 0 }}>
-        各類資料分開整理、分開下載，並可各自設定不同的 Google Drive 資料夾連結。
+        Google Drive 為正式歸檔，本機 ZIP 為備援下載；主管可查看全部停車場，管理員僅能處理自己被指派的停車場。
       </p>
 
       <div className="card" style={{ marginTop: 18, maxWidth: 520 }}>
@@ -29,6 +30,7 @@ export default function ReportCenter() {
         </div>
       </div>
 
+      <GoogleDriveReportPanel month={month} />
       <ManualCloudExportPanel month={month} />
     </div>
   )

@@ -72,7 +72,7 @@ export async function GET(request: Request) {
   if (
     !user ||
     !profile?.is_active ||
-    (profile.role !== 'supervisor' && profile.role !== 'accountant')
+    (profile.role !== 'supervisor' && profile.role !== 'manager')
   ) {
     return NextResponse.json({ error: '沒有報表中心權限。' }, { status: 403 })
   }
@@ -93,10 +93,39 @@ export async function GET(request: Request) {
   const next = nextMonthStart(month)
   const db = admin()
 
-  const { data: lotRows } = await db
+  let lotQuery = db
     .from('parking_lots')
     .select('id, name')
+    .order('name')
 
+  if (profile.role === 'manager') {
+    const { data: assignments, error: assignmentError } = await db
+      .from('user_parking_lots')
+      .select('parking_lot_id')
+      .eq('user_id', user.id)
+
+    if (assignmentError) {
+      return NextResponse.json({ error: `停車場權限讀取失敗：${assignmentError.message}` }, { status: 500 })
+    }
+
+    const assignedIds = Array.from(
+      new Set((assignments || []).map((row: any) => String(row.parking_lot_id || '')).filter(Boolean))
+    )
+
+    if (!assignedIds.length) {
+      return NextResponse.json({ error: '目前沒有指派可匯出的停車場。' }, { status: 403 })
+    }
+
+    lotQuery = lotQuery.in('id', assignedIds)
+  }
+
+  const { data: lotRows, error: lotError } = await lotQuery
+
+  if (lotError) {
+    return NextResponse.json({ error: `停車場讀取失敗：${lotError.message}` }, { status: 500 })
+  }
+
+  const allowedLotIds = new Set((lotRows || []).map((lot: any) => String(lot.id)))
   const lotMap = new Map((lotRows || []).map((lot: any) => [lot.id, lot.name]))
 
   const items: {
@@ -118,6 +147,7 @@ export async function GET(request: Request) {
 
     for (let i = 0; i < (data || []).length; i++) {
       const row: any = (data || [])[i]
+      if (!allowedLotIds.has(String(row.parking_lot_id || ''))) continue
       const lot = safeName(lotMap.get(row.parking_lot_id) || '未知停車場')
       items.push({
         bucket: 'monthly-attendance',
@@ -139,6 +169,8 @@ export async function GET(request: Request) {
         pdf_generated_at
       `)
       .not('pdf_path', 'is', null)
+      .gte('inspection_date', start)
+      .lt('inspection_date', next)
       .order('parking_lot_id')
       .order('inspection_date')
 
@@ -148,6 +180,7 @@ export async function GET(request: Request) {
 
     for (const row of (data || []) as any[]) {
       if (!row.pdf_path) continue
+      if (!allowedLotIds.has(String(row.parking_lot_id || ''))) continue
 
       const lot = safeName(lotMap.get(row.parking_lot_id) || '未知停車場')
 
@@ -175,6 +208,7 @@ export async function GET(request: Request) {
 
     for (let i = 0; i < (data || []).length; i++) {
       const row: any = (data || [])[i]
+      if (!allowedLotIds.has(String(row.parking_lot_id || ''))) continue
       const lot = safeName(lotMap.get(row.parking_lot_id) || '未知停車場')
       items.push({
         bucket: 'dengue-prevention',
@@ -227,6 +261,7 @@ export async function GET(request: Request) {
 
     for (let i = 0; i < (photoRows || []).length; i++) {
       const row: any = (photoRows || [])[i]
+      if (!allowedLotIds.has(String(row.parking_lot_id || ''))) continue
       const c = caseMap.get(row.case_id)
       const lot = safeName(lotMap.get(row.parking_lot_id) || '未知停車場')
       const plate = safeName(c?.vehicle_plate || '無牌')
@@ -273,7 +308,9 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: error.message }, { status: 400 })
     }
 
-    const rows = (data || []).map((row: any) => ({
+    const rows = (data || [])
+      .filter((row: any) => allowedLotIds.has(String(row.parking_lot_id || '')))
+      .map((row: any) => ({
       停車場: lotMap.get(row.parking_lot_id) || '',
       客戶編號: row.customer_code || '',
       姓名: row.customer_name || '',
@@ -326,7 +363,9 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: error.message }, { status: 400 })
     }
 
-    const rows = (data || []).map((row: any) => ({
+    const rows = (data || [])
+      .filter((row: any) => allowedLotIds.has(String(row.parking_lot_id || '')))
+      .map((row: any) => ({
       停車場: lotMap.get(row.parking_lot_id) || '',
       客戶編號: row.customer_code || '',
       姓名: row.customer_name || '',
@@ -479,7 +518,9 @@ ${bodyRows}
       return NextResponse.json({ error: error.message }, { status: 400 })
     }
 
-    const rows = (data || []).map((row: any) => ({
+    const rows = (data || [])
+      .filter((row: any) => allowedLotIds.has(String(row.parking_lot_id || '')))
+      .map((row: any) => ({
       停車場: lotMap.get(row.parking_lot_id) || '',
       結班日期: row.closing_date || '',
       結班人員: row.operator_name || '',

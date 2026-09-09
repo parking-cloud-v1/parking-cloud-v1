@@ -9,7 +9,6 @@ export default async function DashboardPage(){
   if (!user) redirect('/login')
   const { data: profile } = await supabase.from('profiles').select('role,is_active').eq('id', user.id).maybeSingle()
   if (!profile?.is_active) redirect('/login')
-  if (profile.role === 'accountant') redirect('/dashboard/reports')
 
   const cards = [
     ['/dashboard/online','線','線上作業中心','申請、補件、候補、契約、提醒與報表集中處理。'],

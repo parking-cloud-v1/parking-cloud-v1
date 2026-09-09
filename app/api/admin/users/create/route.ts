@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 
-type AppRole = 'supervisor' | 'manager' | 'accountant'
+type AppRole = 'supervisor' | 'manager'
 
 export async function POST(request: Request) {
   try {
@@ -53,12 +53,7 @@ export async function POST(request: Request) {
 
     const password = String(body?.password || '')
 
-    const role: AppRole =
-      body?.role === 'supervisor'
-        ? 'supervisor'
-        : body?.role === 'accountant'
-          ? 'accountant'
-          : 'manager'
+    const role: AppRole = body?.role === 'supervisor' ? 'supervisor' : 'manager'
 
     const parkingLotIds: string[] =
       Array.isArray(body?.parkingLotIds)
