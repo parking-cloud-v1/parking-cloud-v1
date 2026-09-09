@@ -24,17 +24,17 @@
   width: 38px; height: 38px; border-radius: 12px;
   display: grid; place-items: center;
   background: linear-gradient(135deg,#0f172a,#2563eb);
-  color: #fff; font-size: 15px; font-weight: 900;
+  color: #fff; font-size: 17px; font-weight: 900;
   box-shadow: 0 7px 16px rgba(37,99,235,.18);
   flex: 0 0 38px;
 }
-.brandTitle { font-size: 17px; font-weight: 900; line-height: 1.2; letter-spacing: -.2px; }
-.brandSub { margin-top: 2px; color: #94a3b8; font-size: 11px; font-weight: 700; letter-spacing: .5px; }
+.brandTitle { font-size: 19px; font-weight: 900; line-height: 1.2; letter-spacing: -.2px; }
+.brandSub { margin-top: 2px; color: #94a3b8; font-size: 13px; font-weight: 700; letter-spacing: .5px; }
 
 .userWrap { display:flex; align-items:center; justify-content:flex-end; gap:12px; min-width:0; }
 .userMeta { text-align:right; min-width:0; }
-.userName { font-size:14px; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:260px; }
-.userRole { margin-top:2px; color:#64748b; font-size:12px; font-weight:700; }
+.userName { font-size:16px; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:260px; }
+.userRole { margin-top:2px; color:#64748b; font-size:14px; font-weight:700; }
 
 .warning {
   margin: 14px 20px 0;
@@ -43,7 +43,7 @@
   border-radius: 12px;
   background: #fff7ed;
   color: #9a3412;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.65;
 }
 
@@ -66,34 +66,34 @@
   border-radius: 14px;
   background: linear-gradient(135deg,#f8fbff,#eff6ff);
 }
-.lotLabel { font-size:11px; font-weight:900; letter-spacing:.55px; color:#2563eb; margin-bottom:6px; }
-.lotName { font-size:14px; line-height:1.45; font-weight:900; color:#0f172a; }
-.lotHint { margin-top:6px; color:#64748b; font-size:11px; line-height:1.45; }
-.lotError { color:#b91c1c; font-size:12px; font-weight:700; line-height:1.5; }
+.lotLabel { font-size:13px; font-weight:900; letter-spacing:.55px; color:#2563eb; margin-bottom:6px; }
+.lotName { font-size:16px; line-height:1.45; font-weight:900; color:#0f172a; }
+.lotHint { margin-top:6px; color:#64748b; font-size:13px; line-height:1.45; }
+.lotError { color:#b91c1c; font-size:14px; font-weight:700; line-height:1.5; }
 .lotSelect {
   width:100%; min-width:0; min-height:42px; padding:9px 10px;
   border:1px solid #bfdbfe; border-radius:10px; background:#fff;
-  color:#0f172a; font-size:13px; font-weight:700; outline:none;
+  color:#0f172a; font-size:15px; font-weight:700; outline:none;
 }
 
 .navSection { margin-top: 17px; }
 .navSection:first-child { margin-top:0; }
 .navSectionTitle {
   padding: 0 10px 7px;
-  color:#94a3b8; font-size:10px; font-weight:900; letter-spacing:1.1px;
+  color:#94a3b8; font-size:12px; font-weight:900; letter-spacing:1.1px;
 }
 .navList { display:grid; gap:4px; }
 .navLink {
   min-height:42px; display:flex; align-items:center; gap:10px;
   padding: 9px 10px; border-radius:11px;
-  color:#475569; text-decoration:none; font-size:13px; font-weight:800;
+  color:#475569; text-decoration:none; font-size:15px; font-weight:800;
   transition: background .15s ease, color .15s ease, transform .15s ease;
 }
 .navLink:hover { background:#f8fafc; color:#0f172a; transform:translateX(1px); }
 .navLinkActive { background:#eff6ff; color:#1d4ed8; box-shadow: inset 0 0 0 1px #dbeafe; }
 .navIcon {
   width:28px; height:28px; display:grid; place-items:center; flex:0 0 28px;
-  border-radius:9px; background:#f1f5f9; color:#475569; font-size:12px; font-weight:900;
+  border-radius:9px; background:#f1f5f9; color:#475569; font-size:14px; font-weight:900;
 }
 .navLinkActive .navIcon { background:#dbeafe; color:#1d4ed8; }
 
@@ -115,7 +115,7 @@
 }
 
 @media (max-width: 620px) {
-  .brandTitle { font-size:15px; }
+  .brandTitle { font-size:17px; }
   .brandMark { width:34px; height:34px; flex-basis:34px; border-radius:10px; }
   .userMeta { display:none; }
   .navList { grid-template-columns:1fr 1fr; }

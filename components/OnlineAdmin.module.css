@@ -14,7 +14,7 @@
 
 .page h2 {
   color: #0f172a;
-  font-size: 20px;
+  font-size: 22px;
   line-height: 1.35;
   font-weight: 900;
   letter-spacing: -0.02em;
@@ -56,7 +56,7 @@
   color: #0f172a;
   padding: 8px 13px;
   font: inherit;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 800;
   line-height: 1.2;
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
@@ -86,7 +86,7 @@
   background: #ffffff;
   color: #0f172a;
   font: inherit;
-  font-size: 15px;
+  font-size: 17px;
   box-sizing: border-box;
   outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -112,7 +112,7 @@
 
 .page label {
   color: #334155;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 800;
 }
 
@@ -126,7 +126,7 @@
   border-collapse: separate !important;
   border-spacing: 0;
   color: #334155;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .page thead th {
@@ -137,7 +137,7 @@
   color: #475569;
   padding: 11px 9px !important;
   border-bottom: 1px solid #cbd5e1;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 900;
   white-space: nowrap;
 }
@@ -182,7 +182,7 @@
 .eyebrow {
   margin-bottom: 7px;
   color: #2563eb;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 900;
   letter-spacing: 0.1em;
 }
@@ -209,7 +209,7 @@
   background: rgba(255,255,255,0.84);
   color: #334155;
   text-decoration: none;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 800;
 }
 
@@ -225,7 +225,7 @@
   gap: 10px;
   margin-top: 9px;
   color: #475569;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
 }
 
@@ -256,14 +256,14 @@
 
 .metricLabel {
   color: #64748b;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 800;
 }
 
 .metricValue {
   margin-top: 6px;
   color: #0f172a;
-  font-size: 27px;
+  font-size: 29px;
   line-height: 1;
   font-weight: 900;
   letter-spacing: -0.03em;
@@ -321,7 +321,7 @@
   border-radius: 11px;
   background: #eff6ff;
   color: #1d4ed8;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 900;
 }
 
@@ -336,7 +336,7 @@
 
 .navTitle {
   color: #0f172a;
-  font-size: 17px;
+  font-size: 19px;
   font-weight: 900;
 }
 
@@ -347,7 +347,7 @@
   background: #0f172a;
   color: #ffffff;
   text-align: center;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 900;
 }
 
@@ -356,7 +356,7 @@
   z-index: 1;
   margin-top: 8px;
   color: #64748b;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.7;
 }
 
@@ -374,7 +374,7 @@
   border-radius: 999px;
   background: #f1f5f9;
   color: #475569;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 900;
   white-space: nowrap;
 }
@@ -424,7 +424,7 @@
   }
 
   .page h1 {
-    font-size: 28px;
+    font-size: 30px;
   }
 
   .headerActions {
