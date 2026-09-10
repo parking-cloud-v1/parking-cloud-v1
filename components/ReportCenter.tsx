@@ -15,7 +15,7 @@ export default function ReportCenter() {
     <div style={{ paddingBottom: 40 }}>
       <h1 style={{ marginBottom: 6 }}>報表中心</h1>
       <p className="muted" style={{ marginTop: 0 }}>
-        報表中心只保留每月簽到表、月租總表、月租簽約異動與當日結班報表。防災檢查、計程車優惠報表與登革熱消毒改回各自模組，由主管逐一停車場直接上傳 Google Drive。
+        報表中心只提供報表下載，不處理 Google Drive 上傳。防災檢查、計程車優惠報表與登革熱消毒的 Google Drive 上傳，改由主管在各自模組逐一停車場操作。
       </p>
 
       <div className="card" style={{ marginTop: 18, maxWidth: 520 }}>
