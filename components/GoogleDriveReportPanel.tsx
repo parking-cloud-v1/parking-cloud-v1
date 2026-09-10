@@ -10,7 +10,6 @@ type Category =
   | 'taxi'
   | 'shift'
   | 'disaster'
-  | 'dengue'
 
 type StatusData = {
   configured: Record<Category, boolean>
@@ -68,12 +67,6 @@ const CATEGORIES: {
     label: '防災檢查',
     note: '直接歸檔現場已產生的正式 PDF，不重新排版。',
     sourceHref: '/dashboard/disaster-inspections',
-  },
-  {
-    key: 'dengue',
-    label: '登革熱消毒作業',
-    note: '同場同日一個 ZIP，含自主檢查／委外消毒照片與報表。',
-    sourceHref: '/dashboard/dengue-photos',
   },
 ]
 
@@ -191,7 +184,7 @@ export default function GoogleDriveReportPanel({ month }: { month: string }) {
         <div>
           <h2 style={{ margin: 0 }}>Google Drive 正式歸檔</h2>
           <div className="muted" style={{ marginTop: 6 }}>
-            正式資料夾：月份 → 停車場 → 報表類別。違規照片已移出報表中心，改由「違規即時通知」單案下載。
+            正式資料夾：月份 → 停車場 → 報表類別。違規照片與登革熱均已移出報表中心；登革熱改由各停車場現場頁逐日手動上傳。
           </div>
         </div>
 

@@ -16,7 +16,7 @@ export default function ReportCenter() {
     <div style={{ paddingBottom: 40 }}>
       <h1 style={{ marginBottom: 6 }}>報表中心</h1>
       <p className="muted" style={{ marginTop: 0 }}>
-        報表中心改為直接對應現場正式模組；Google Drive 與本機備份共用同一份資料來源。違規案件不再放在報表中心，請到「違規即時通知」查看、下載或舉發。
+        報表中心只保留正式月報／報表類別；Google Drive 與本機備份共用同一份資料來源。違規案件請到「違規即時通知」處理；登革熱請到各停車場「登革熱消毒作業」頁逐日手動上傳 Google Drive。
       </p>
 
       <div className="card" style={{ marginTop: 18, maxWidth: 520 }}>

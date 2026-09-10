@@ -1,4 +1,3 @@
-import JSZip from 'jszip'
 import * as XLSX from 'xlsx'
 
 export type ReportCategory =
@@ -8,7 +7,6 @@ export type ReportCategory =
   | 'taxi'
   | 'shift'
   | 'disaster'
-  | 'dengue'
 
 export type LotRow = { id: string; name: string }
 
@@ -32,7 +30,6 @@ export const REPORT_CATEGORIES: ReportCategory[] = [
   'taxi',
   'shift',
   'disaster',
-  'dengue',
 ]
 
 export const REPORT_CATEGORY_META: Record<
@@ -74,12 +71,6 @@ export const REPORT_CATEGORY_META: Record<
     note: '直接使用現場已產生的正式 PDF，不重新排版。',
     sourceHref: '/dashboard/disaster-inspections',
     backupButton: '下載 PDF ZIP',
-  },
-  dengue: {
-    label: '登革熱消毒作業',
-    note: '跟現場一致：同一停車場、同一天整理成一個 ZIP，內含自主檢查／委外消毒照片與報表。',
-    sourceHref: '/dashboard/dengue-photos',
-    backupButton: '下載每日資料夾 ZIP',
   },
 }
 
@@ -182,11 +173,6 @@ function workbookBytes(
   return normalizedArrayBuffer(result)
 }
 
-function dengueFolder(row: any) {
-  const workType = row.work_type === '委外消毒' ? '委外消毒' : '自主檢查'
-  const kind = row.file_kind === 'report' ? '報表' : '照片'
-  return `${workType}/${kind}`
-}
 
 export async function itemBytes(db: any, item: ExportItem) {
   if (item.bytes) return item.bytes
@@ -265,80 +251,6 @@ export async function collectReportItems(
         mimeType: 'application/pdf',
         bucket: 'disaster-inspection-pdfs',
         path: row.pdf_path,
-      })
-    }
-    return items
-  }
-
-  if (category === 'dengue') {
-    const { data, error } = await db
-      .from('dengue_prevention_photos')
-      .select(
-        'id,parking_lot_id,work_date,work_type,file_kind,storage_path,file_name,mime_type,uploaded_at'
-      )
-      .gte('work_date', start)
-      .lt('work_date', next)
-      .order('parking_lot_id')
-      .order('work_date')
-      .order('uploaded_at')
-    if (error) throw new Error(error.message)
-
-    const grouped = new Map<string, any[]>()
-    for (const row of data || []) {
-      const lotId = String(row.parking_lot_id || '')
-      if (!allowed.has(lotId) || !row.storage_path) continue
-      const key = `${lotId}::${row.work_date}`
-      if (!grouped.has(key)) grouped.set(key, [])
-      grouped.get(key)!.push(row)
-    }
-
-    for (const [key, rows] of grouped.entries()) {
-      const [lotId, date] = key.split('::')
-      const lotName = lotMap.get(lotId) || '未知停車場'
-      const rootFolder = `${date}_${safeName(lotName)}_登革熱消毒`
-      const zip = new JSZip()
-      let added = 0
-      const failures: string[] = []
-
-      for (let index = 0; index < rows.length; index++) {
-        const row = rows[index]
-        try {
-          const { data: blob, error: downloadError } = await db.storage
-            .from('dengue-prevention')
-            .download(row.storage_path)
-          if (downloadError || !blob) {
-            throw new Error(downloadError?.message || 'Storage 下載失敗')
-          }
-          const originalName = safeName(row.file_name || `file_${index + 1}`)
-          zip.file(
-            `${rootFolder}/${dengueFolder(row)}/${String(index + 1).padStart(2, '0')}_${originalName}`,
-            await blob.arrayBuffer()
-          )
-          added++
-        } catch (error: any) {
-          failures.push(`${row.file_name || row.id}：${error?.message || '下載失敗'}`)
-        }
-      }
-
-      if (!added) continue
-      if (failures.length) {
-        zip.file(`${rootFolder}/下載失敗清單.txt`, failures.join('\r\n'))
-      }
-
-      const generated = await zip.generateAsync({
-        type: 'uint8array',
-        compression: 'DEFLATE',
-        compressionOptions: { level: 6 },
-      })
-
-      items.push({
-        category,
-        parkingLotId: lotId,
-        parkingLotName: lotName,
-        sourceKey: `dengue-daily:${lotId}:${date}`,
-        fileName: `${date}_${safeName(lotName)}_登革熱消毒.zip`,
-        mimeType: 'application/zip',
-        bytes: normalizedArrayBuffer(generated),
       })
     }
     return items

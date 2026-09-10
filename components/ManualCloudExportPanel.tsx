@@ -9,7 +9,6 @@ type Category =
   | 'taxi'
   | 'shift'
   | 'disaster'
-  | 'dengue'
 
 const CATEGORIES: {
   key: Category
@@ -59,13 +58,6 @@ const CATEGORIES: {
     note: '直接下載現場已產生的正式 PDF。',
     button: '下載 PDF ZIP',
     sourceHref: '/dashboard/disaster-inspections',
-  },
-  {
-    key: 'dengue',
-    label: '登革熱消毒作業',
-    note: '同場同日一個資料夾 ZIP，包含自主檢查與委外消毒。',
-    button: '下載每日資料夾 ZIP',
-    sourceHref: '/dashboard/dengue-photos',
   },
 ]
 
