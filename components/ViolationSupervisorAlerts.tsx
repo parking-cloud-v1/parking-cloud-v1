@@ -111,6 +111,52 @@ export default function ViolationSupervisorAlerts() {
     }
   }
 
+  async function deleteCase(row: Row) {
+    const photos = row.violation_parking_photos || []
+    const confirmText = [
+      `確定永久刪除這筆違規通知？`,
+      ``,
+      `停車場：${lotName(row)}`,
+      `類型：${typeText(row)}`,
+      `車牌：${row.vehicle_plate || '無牌'}`,
+      `照片：${photos.length} 張`,
+      ``,
+      `刪除後會同步刪除：`,
+      `1. 違規案件資料庫紀錄`,
+      `2. 該案件全部照片資料庫紀錄`,
+      `3. violation-parking Storage 內的照片`,
+      ``,
+      `此操作無法復原。`,
+    ].join('\n')
+
+    if (!window.confirm(confirmText)) return
+
+    const key = `delete:${row.id}`
+    setWorking(key)
+    setMessage('違規案件刪除中…')
+
+    try {
+      const response = await fetch('/api/violation-parking/supervisor-alerts', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: row.id }),
+      })
+      const json = await response.json()
+      if (!response.ok) throw new Error(json?.error || '刪除失敗')
+
+      setRows((current) => current.filter((item) => item.id !== row.id))
+      if (expanded === row.id) setExpanded('')
+
+      const deletedPhotos = Number(json?.deletedPhotos || 0)
+      setMessage(`已永久刪除違規案件，並清除 ${deletedPhotos} 張照片。`)
+      await load()
+    } catch (error: any) {
+      setMessage(error?.message || '刪除失敗')
+    } finally {
+      setWorking('')
+    }
+  }
+
   async function openPhoto(caseId: string, photoId: string) {
     const key = `${caseId}:${photoId}`
     setWorking(key)
@@ -135,7 +181,7 @@ export default function ViolationSupervisorAlerts() {
     <div style={{ paddingBottom: 40 }}>
       <h1 style={{ marginBottom: 6 }}>違規即時通知</h1>
       <p className="muted" style={{ marginTop: 0 }}>
-        場站建立案件後會列在這裡；本頁每 10 秒自動更新。可直接展開完整案件與查看照片，再標記已查看、已舉發或結案。
+        場站建立案件後會列在這裡；本頁每 10 秒自動更新。可直接展開完整案件與查看照片，再標記已查看、已舉發、結案，或由主管永久刪除重複／誤傳案件。
       </p>
 
       <div className="card" style={{ marginTop: 14 }}>
@@ -171,6 +217,7 @@ export default function ViolationSupervisorAlerts() {
                     onToggle={() => setExpanded(isOpen ? '' : row.id)}
                     onStatus={(status) => changeStatus(row.id, status)}
                     onPhoto={(photoId) => openPhoto(row.id, photoId)}
+                    onDelete={() => deleteCase(row)}
                   />
                 )
               })}
@@ -194,6 +241,7 @@ function FragmentRow({
   onToggle,
   onStatus,
   onPhoto,
+  onDelete,
 }: {
   row: Row
   photos: PhotoRow[]
@@ -202,7 +250,14 @@ function FragmentRow({
   onToggle: () => void
   onStatus: (status: 'seen' | 'reported' | 'closed') => void
   onPhoto: (photoId: string) => void
+  onDelete: () => void
 }) {
+  const deleting = working === `delete:${row.id}`
+  const rowWorking =
+    working === row.id ||
+    deleting ||
+    working.startsWith(`${row.id}:`)
+
   return (
     <>
       <tr>
@@ -217,10 +272,23 @@ function FragmentRow({
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <button type="button" onClick={onToggle}>{isOpen ? '收合' : '完整查看'}</button>
             {row.supervisor_status === 'pending' && (
-              <button type="button" disabled={working === row.id} onClick={() => onStatus('seen')}>已查看</button>
+              <button type="button" disabled={rowWorking} onClick={() => onStatus('seen')}>已查看</button>
             )}
-            <button type="button" className="btn" disabled={working === row.id} onClick={() => onStatus('reported')}>已舉發</button>
-            <button type="button" disabled={working === row.id} onClick={() => onStatus('closed')}>結案</button>
+            <button type="button" className="btn" disabled={rowWorking} onClick={() => onStatus('reported')}>已舉發</button>
+            <button type="button" disabled={rowWorking} onClick={() => onStatus('closed')}>結案</button>
+            <button
+              type="button"
+              disabled={rowWorking}
+              onClick={onDelete}
+              style={{
+                border: '1px solid #dc2626',
+                color: '#b91c1c',
+                background: '#fff',
+                fontWeight: 700,
+              }}
+            >
+              {deleting ? '刪除中…' : '刪除'}
+            </button>
           </div>
         </td>
       </tr>
