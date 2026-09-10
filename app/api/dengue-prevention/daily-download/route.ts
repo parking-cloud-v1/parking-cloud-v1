@@ -219,6 +219,12 @@ export async function GET(request: Request) {
       compressionOptions: { level: 6 },
     })
 
+    // NextResponse / BodyInit 在目前 Next.js + TypeScript 型別下
+    // 不直接接受 JSZip 回傳的 Uint8Array<ArrayBufferLike>。
+    // 複製成標準 ArrayBuffer，內容完全相同，只修正 build 型別。
+    const responseBody = new ArrayBuffer(bytes.byteLength)
+    new Uint8Array(responseBody).set(bytes)
+
     try {
       await db.from('system_logs').insert({
         user_id: user.id,
@@ -238,7 +244,7 @@ export async function GET(request: Request) {
 
     const fileName = `${date}_${lotName}_登革熱消毒.zip`
 
-    return new NextResponse(bytes, {
+    return new NextResponse(responseBody, {
       status: 200,
       headers: {
         'Content-Type': 'application/zip',
