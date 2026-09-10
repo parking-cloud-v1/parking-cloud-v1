@@ -15,8 +15,7 @@ export default function ReportCenter() {
     <div style={{ paddingBottom: 40 }}>
       <h1 style={{ marginBottom: 6 }}>報表中心</h1>
       <p className="muted" style={{ marginTop: 0 }}>
-        Google Drive 已改為全手動歸檔：先下載系統整理好的正式檔案，再直接開啟你當下指定的 Google Drive 資料夾手動上傳。
-        資料夾連結可隨時更改，不再使用系統預設雲端位置。
+        報表中心只保留每月簽到表、月租總表、月租簽約異動與當日結班報表。防災檢查、計程車優惠報表與登革熱消毒改回各自模組，由主管逐一停車場直接上傳 Google Drive。
       </p>
 
       <div className="card" style={{ marginTop: 18, maxWidth: 520 }}>

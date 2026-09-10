@@ -182,7 +182,7 @@ export default async function DisasterInspectionsPage() {
               fontWeight: 700,
             }}
           >
-            主管可依日期一次下載當日所有停車場的防災檢查，系統會合併成 1 個 PDF。
+            主管可逐一開啟各停車場的檢查表，直接指定 Google Drive 資料夾並上傳正式 PDF；原本批次下載仍保留作為備份。
           </div>
         )}
         </div>
@@ -406,7 +406,7 @@ export default async function DisasterInspectionsPage() {
                               fontWeight: 700,
                             }}
                           >
-                            查看／編輯
+                            {isSupervisor ? '查看／編輯／上傳 Drive' : '查看／編輯'}
                           </Link>
 
                           {isSupervisor && (

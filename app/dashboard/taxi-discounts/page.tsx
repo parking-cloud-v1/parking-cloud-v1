@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useWorkParkingLotId } from '@/components/useWorkParkingLot'
+import SupervisorTaxiDriveUpload from '@/components/SupervisorTaxiDriveUpload'
 
 type ParkingLot = {
   id: string
@@ -2173,6 +2174,12 @@ export default function TaxiDiscountPage() {
             </button>
           </div>
         </div>
+
+        <SupervisorTaxiDriveUpload
+          parkingLotId={selectedLotId || ''}
+          parkingLotName={selectedLot?.name || ''}
+          month={filterMonth}
+        />
 
         <div
           id="taxi-report-pdf"

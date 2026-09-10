@@ -8,6 +8,7 @@ export type DriveCategory =
   | 'shift'
   | 'disaster'
   | 'dengue'
+  | 'violation'
 
 const CATEGORY_ENV: Record<DriveCategory, string> = {
   attendance: 'GOOGLE_DRIVE_ATTENDANCE_FOLDER_ID',
@@ -17,6 +18,7 @@ const CATEGORY_ENV: Record<DriveCategory, string> = {
   shift: 'GOOGLE_DRIVE_SHIFT_FOLDER_ID',
   disaster: 'GOOGLE_DRIVE_DISASTER_FOLDER_ID',
   dengue: 'GOOGLE_DRIVE_DENGUE_FOLDER_ID',
+  violation: 'GOOGLE_DRIVE_VIOLATION_FOLDER_ID',
 }
 
 export const DRIVE_CATEGORY_LABELS: Record<DriveCategory, string> = {
@@ -27,6 +29,7 @@ export const DRIVE_CATEGORY_LABELS: Record<DriveCategory, string> = {
   shift: '當日結班報表',
   disaster: '防災檢查',
   dengue: '登革熱消毒作業',
+  violation: '違規停車案件',
 }
 
 function env(name: string) {
@@ -55,7 +58,7 @@ async function getAccessToken() {
 
   if (!email || !rawKey) {
     throw new Error(
-      '尚未設定 GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL / GOOGLE_DRIVE_PRIVATE_KEY'
+      'Vercel 尚未設定 GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL / GOOGLE_DRIVE_PRIVATE_KEY'
     )
   }
 
@@ -106,18 +109,6 @@ async function getAccessToken() {
   return cachedAccessToken
 }
 
-export function configuredDriveRoot() {
-  return env('GOOGLE_DRIVE_REPORTS_FOLDER_ID')
-}
-
-export function configuredCategoryFolder(category: DriveCategory) {
-  return env(CATEGORY_ENV[category])
-}
-
-export function configuredDriveFolder(category: DriveCategory) {
-  return configuredDriveRoot() || configuredCategoryFolder(category)
-}
-
 export function configuredDriveCredentials() {
   return Boolean(
     env('GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL') && env('GOOGLE_DRIVE_PRIVATE_KEY')
@@ -128,13 +119,38 @@ export function configuredDriveServiceAccountEmail() {
   return env('GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL')
 }
 
+export function extractDriveFolderId(value: string) {
+  const input = String(value || '').trim()
+  if (!input) return ''
+
+  if (/^[A-Za-z0-9_-]{10,}$/.test(input)) {
+    return input
+  }
+
+  try {
+    const url = new URL(input)
+    if (url.hostname !== 'drive.google.com') return ''
+
+    const folderMatch = url.pathname.match(/\/folders\/([A-Za-z0-9_-]+)/)
+    if (folderMatch?.[1]) return folderMatch[1]
+
+    const id = url.searchParams.get('id')
+    if (id && /^[A-Za-z0-9_-]{10,}$/.test(id)) return id
+  } catch {
+    return ''
+  }
+
+  return ''
+}
 
 export async function verifyDriveFolderAccess(folderId: string) {
   const id = String(folderId || '').trim()
-  if (!id) throw new Error('缺少 Google Drive 資料夾 ID')
+  if (!id) throw new Error('Google Drive 資料夾網址格式不正確')
 
   const token = await getAccessToken()
-  const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`)
+  const url = new URL(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`
+  )
   url.searchParams.set('fields', 'id,name,mimeType,capabilities(canAddChildren)')
   url.searchParams.set('supportsAllDrives', 'true')
 
@@ -145,16 +161,31 @@ export async function verifyDriveFolderAccess(folderId: string) {
   const json = await response.json()
 
   if (!response.ok) {
-    throw new Error(json?.error?.message || 'Google Drive 資料夾存取測試失敗')
+    throw new Error(
+      json?.error?.message ||
+        '服務帳號無法存取這個 Google Drive 資料夾；請確認已共享給服務帳號'
+    )
   }
   if (json?.mimeType !== 'application/vnd.google-apps.folder') {
-    throw new Error('指定的 Google Drive ID 不是資料夾')
+    throw new Error('指定的 Google Drive 連結不是資料夾')
   }
   if (json?.capabilities?.canAddChildren === false) {
-    throw new Error('服務帳號只有讀取權限，請把此資料夾共享為「編輯者」')
+    throw new Error('服務帳號只有讀取權限，請把資料夾共享權限改成「編輯者」')
   }
 
   return { id: String(json.id), name: String(json.name || '') }
+}
+
+export function configuredDriveRoot() {
+  return env('GOOGLE_DRIVE_REPORTS_FOLDER_ID')
+}
+
+export function configuredCategoryFolder(category: DriveCategory) {
+  return env(CATEGORY_ENV[category])
+}
+
+export function configuredDriveFolder(category: DriveCategory) {
+  return configuredDriveRoot() || configuredCategoryFolder(category)
 }
 
 export function driveFolderUrl(folderId: string) {
@@ -237,12 +268,6 @@ async function ensureFolder(token: string, parentId: string, name: string) {
   return created
 }
 
-/**
- * 正式結構：總資料夾 / YYYY-MM / 停車場 / 類別
- *
- * rootFolderIdOverride：由報表中心主管設定頁儲存於 Supabase 的總資料夾 ID。
- * 若沒有設定，才退回 Vercel GOOGLE_DRIVE_REPORTS_FOLDER_ID；再沒有才使用舊的類別專用 Folder ID。
- */
 export async function resolveReportFolder({
   category,
   month,
@@ -259,7 +284,7 @@ export async function resolveReportFolder({
 
   if (!root && !categoryRoot) {
     throw new Error(
-      `尚未設定 Google Drive Folder ID：可在報表中心設定總資料夾，或設定 ${CATEGORY_ENV[category]}`
+      `尚未設定 Google Drive Folder ID：可使用畫面直接指定資料夾，或設定 ${CATEGORY_ENV[category]}`
     )
   }
 
@@ -287,7 +312,7 @@ export async function uploadToGoogleDrive({
   bytes: ArrayBuffer
 }) {
   if (!folderId) {
-    throw new Error('尚未設定此類別的 Google Drive Folder ID')
+    throw new Error('缺少 Google Drive 資料夾 ID')
   }
 
   const token = await getAccessToken()

@@ -73,9 +73,11 @@ function formatBytes(value?: number | null) {
 export default function DenguePhotoUpload({
   parkingLotId,
   parkingLotName,
+  canDirectUploadToDrive = false,
 }: {
   parkingLotId: string
   parkingLotName: string
+  canDirectUploadToDrive?: boolean
 }) {
   const supabase = createClient()
 
@@ -90,6 +92,7 @@ export default function DenguePhotoUpload({
   const [savingPhotos, setSavingPhotos] = useState(false)
   const [savingReport, setSavingReport] = useState(false)
   const [downloadingDate, setDownloadingDate] = useState('')
+  const [uploadingDriveDate, setUploadingDriveDate] = useState('')
   const [driveFolderUrl, setDriveFolderUrl] = useState('')
   const [message, setMessage] = useState('')
 
@@ -363,6 +366,58 @@ export default function DenguePhotoUpload({
     }
   }
 
+  async function uploadDayToDrive(date: string) {
+    if (!canDirectUploadToDrive || !parkingLotId || uploadingDriveDate) return
+
+    const folderUrl = driveFolderUrl.trim()
+    if (!folderUrl) {
+      setMessage('請先貼上這間停車場要上傳的 Google Drive 資料夾網址。')
+      return
+    }
+    if (!isDriveFolderUrl(folderUrl)) {
+      setMessage('Google Drive 資料夾網址格式不正確。')
+      return
+    }
+
+    if (
+      !window.confirm(
+        `確定將 ${parkingLotName || '目前停車場'}／${date} 的登革熱資料直接上傳到目前指定的 Google Drive 資料夾？`
+      )
+    ) {
+      return
+    }
+
+    setUploadingDriveDate(date)
+    setMessage(`${date} 登革熱資料正在直接上傳 Google Drive…`)
+
+    try {
+      const response = await fetch('/api/dengue-prevention/google-drive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          parkingLotId,
+          date,
+          folderUrl,
+        }),
+      })
+
+      const json = await response.json()
+      if (!response.ok) {
+        throw new Error(json?.error || 'Google Drive 上傳失敗')
+      }
+
+      window.localStorage.setItem(driveStorageKey(parkingLotId), folderUrl)
+      setMessage(
+        `${date} 已直接上傳 Google Drive（共 ${json?.fileCount || 0} 個檔案）` +
+          (json?.fileUrl ? '。可按「開啟資料夾」確認。' : '。')
+      )
+    } catch (error: any) {
+      setMessage(error?.message || 'Google Drive 上傳失敗')
+    } finally {
+      setUploadingDriveDate('')
+    }
+  }
+
   async function remove(row: Row) {
     if (!window.confirm(`確定刪除「${row.file_name}」？`)) {
       return
@@ -461,37 +516,39 @@ export default function DenguePhotoUpload({
         </div>
       </div>
 
-      <div
-        className="card"
-        style={{ marginTop: 18, padding: 18 }}
-      >
-        <h2 style={{ margin: 0 }}>Google Drive 手動上傳</h2>
-        <div className="muted" style={{ marginTop: 6 }}>
-          這裡不再自動上傳，也不需要預先設定 Drive Folder ID。先下載某一天的完整 ZIP，再開啟你現在指定的 Google Drive 資料夾手動上傳。
-        </div>
+      {canDirectUploadToDrive && (
+        <div
+          className="card"
+          style={{ marginTop: 18, padding: 18 }}
+        >
+          <h2 style={{ margin: 0 }}>主管｜Google Drive 直接上傳</h2>
+          <div className="muted" style={{ marginTop: 6 }}>
+            每一間停車場都可指定不同的 Google Drive 資料夾。貼上目前要使用的資料夾網址後，直接按每日資料夾的「直接上傳 Google Drive」，不需要先下載再人工上傳。
+          </div>
 
-        <div className="field" style={{ marginTop: 12 }}>
-          <label>{parkingLotName || '目前停車場'}－Google Drive 資料夾網址</label>
-          <input
-            value={driveFolderUrl}
-            onChange={(event) => setDriveFolderUrl(event.target.value)}
-            placeholder="https://drive.google.com/drive/folders/..."
-          />
-        </div>
+          <div className="field" style={{ marginTop: 12 }}>
+            <label>{parkingLotName || '目前停車場'}－Google Drive 資料夾網址</label>
+            <input
+              value={driveFolderUrl}
+              onChange={(event) => setDriveFolderUrl(event.target.value)}
+              placeholder="https://drive.google.com/drive/folders/..."
+            />
+          </div>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-          <button type="button" onClick={saveDriveFolder}>
-            儲存／更新連結
-          </button>
-          <button type="button" className="btn" onClick={openDriveFolder}>
-            開啟 Google Drive
-          </button>
-        </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+            <button type="button" onClick={saveDriveFolder}>
+              儲存／更新此場連結
+            </button>
+            <button type="button" onClick={openDriveFolder}>
+              開啟資料夾
+            </button>
+          </div>
 
-        <div className="muted" style={{ marginTop: 8 }}>
-          連結只儲存在目前瀏覽器，不寫入 Vercel 或資料庫；公司更換資料夾時直接貼新網址即可。
+          <div className="muted" style={{ marginTop: 8 }}>
+            連結只記在目前瀏覽器，可隨時改成新的公司資料夾；實際上傳時系統會再次檢查該資料夾是否有寫入權限。
+          </div>
         </div>
-      </div>
+      )}
 
       <div
         style={{
@@ -602,7 +659,7 @@ export default function DenguePhotoUpload({
       <div className="card" style={{ marginTop: 18, padding: 20 }}>
         <h2 style={{ marginTop: 0 }}>每日作業資料夾</h2>
         <p className="muted">
-          每個日期只顯示一個資料夾。先下載當日 ZIP，再按「開啟 Drive 手動上傳」進入目前指定的公司雲端資料夾。
+          每個日期只顯示一個資料夾。主管可直接將整個當日資料夾上傳到目前指定的 Google Drive；下載 ZIP 仍保留作為本機備份。
         </p>
 
         {!dailyFolders.length ? (
@@ -660,13 +717,18 @@ export default function DenguePhotoUpload({
                         : '下載當日資料夾'}
                     </button>
 
-                    <button
-                      type="button"
-                      disabled={Boolean(downloadingDate)}
-                      onClick={openDriveFolder}
-                    >
-                      開啟 Drive 手動上傳
-                    </button>
+                    {canDirectUploadToDrive && (
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={Boolean(uploadingDriveDate)}
+                        onClick={() => void uploadDayToDrive(folder.date)}
+                      >
+                        {uploadingDriveDate === folder.date
+                          ? 'Google Drive 上傳中…'
+                          : '直接上傳 Google Drive'}
+                      </button>
+                    )}
                   </div>
                 </div>
 

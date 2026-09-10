@@ -5,27 +5,29 @@ import DisasterInspectionEditor from '@/components/DisasterInspectionEditor'
 export default async function DisasterInspectionDetailPage({
   params,
 }: {
-  params: Promise<{
-    id: string
-  }>
+  params: Promise<{ id: string }>
 }) {
   const { id } = await params
-
-  const supabase =
-    await createClient()
+  const supabase = await createClient()
 
   const {
     data: { user },
-  } =
-    await supabase.auth.getUser()
+  } = await supabase.auth.getUser()
 
-  if (!user) {
-    redirect('/login')
-  }
+  if (!user) redirect('/login')
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role,is_active')
+    .eq('id', user.id)
+    .maybeSingle()
+
+  if (!profile?.is_active) redirect('/login')
 
   return (
     <DisasterInspectionEditor
       inspectionId={id}
+      isSupervisor={profile.role === 'supervisor'}
     />
   )
 }

@@ -7,9 +7,7 @@ type Category =
   | 'attendance'
   | 'rentals'
   | 'changes'
-  | 'taxi'
   | 'shift'
-  | 'disaster'
 
 const CATEGORIES: {
   key: Category
@@ -40,25 +38,11 @@ const CATEGORIES: {
     sourceHref: '/dashboard/monthly-rentals/changes',
   },
   {
-    key: 'taxi',
-    label: '計程車優惠報表',
-    note: '下載各停車場計程車免費停車統計表。',
-    button: '下載 Excel ZIP',
-    sourceHref: '/dashboard/taxi-discounts',
-  },
-  {
     key: 'shift',
     label: '當日結班報表',
     note: '下載各停車場指定月份結班彙整 Excel。',
     button: '下載 Excel ZIP',
     sourceHref: '/dashboard/shift-closing',
-  },
-  {
-    key: 'disaster',
-    label: '防災檢查',
-    note: '下載現場已產生的正式 PDF ZIP。',
-    button: '下載 PDF ZIP',
-    sourceHref: '/dashboard/disaster-inspections',
   },
 ]
 
@@ -75,9 +59,7 @@ export default function ManualCloudExportPanel({ month }: { month: string }) {
     attendance: '',
     rentals: '',
     changes: '',
-    taxi: '',
     shift: '',
-    disaster: '',
   })
   const [message, setMessage] = useState('')
 
@@ -132,7 +114,7 @@ export default function ManualCloudExportPanel({ month }: { month: string }) {
     <div className="card" style={{ marginTop: 18 }}>
       <h2 style={{ marginTop: 0 }}>Google Drive 手動歸檔</h2>
       <div className="muted">
-        不再由系統自動上傳。每一類報表都先下載，再開啟你指定的 Drive 資料夾手動上傳；連結只記在目前瀏覽器，可隨時更改，不寫入 Vercel 或資料庫。
+        報表中心只處理這 4 類月報。防災、計程車與登革熱已移回各自現場模組，不再從報表中心操作。這 4 類仍保留本機下載與 Drive 連結備援。
       </div>
 
       {message && (

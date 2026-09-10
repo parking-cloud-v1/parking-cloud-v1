@@ -89,10 +89,20 @@ function rocDate(
   return `${y - 1911}年${String(m).padStart(2, '0')}月${String(d).padStart(2, '0')}日`
 }
 
+function disasterDriveStorageKey(parkingLotId: string) {
+  return `direct-google-drive-folder:disaster:${parkingLotId}`
+}
+
+function isDriveFolderUrl(value: string) {
+  return /^https:\/\/drive\.google\.com\//i.test(value.trim())
+}
+
 export default function DisasterInspectionEditor({
   inspectionId,
+  isSupervisor = false,
 }: {
   inspectionId: string
+  isSupervisor?: boolean
 }) {
   const supabase =
     createClient()
@@ -157,11 +167,37 @@ export default function DisasterInspectionEditor({
   ] =
     useState(false)
 
+  const [driveFolderUrl, setDriveFolderUrl] = useState('')
+  const [uploadingDrive, setUploadingDrive] = useState(false)
+
   useEffect(() => {
     loadAll()
   }, [
     inspectionId,
   ])
+
+  useEffect(() => {
+    if (!inspection?.parking_lot_id) return
+    setDriveFolderUrl(
+      window.localStorage.getItem(
+        disasterDriveStorageKey(inspection.parking_lot_id)
+      ) || ''
+    )
+  }, [inspection?.parking_lot_id])
+
+  function saveDriveFolder() {
+    if (!inspection?.parking_lot_id) return
+    const value = driveFolderUrl.trim()
+    if (!value || !isDriveFolderUrl(value)) {
+      setMessage('請貼上正確的 Google Drive 資料夾網址。')
+      return
+    }
+    window.localStorage.setItem(
+      disasterDriveStorageKey(inspection.parking_lot_id),
+      value
+    )
+    setMessage('這間停車場的 Google Drive 連結已儲存在目前瀏覽器，可隨時更改。')
+  }
 
   async function loadAll() {
     setLoading(
@@ -816,8 +852,20 @@ export default function DisasterInspectionEditor({
     )
   }
 
-  async function exportPdf() {
-    if (exportingPdf) return
+  async function exportPdf(uploadDirectlyToDrive = false) {
+    if (exportingPdf || uploadingDrive) return
+
+    if (uploadDirectlyToDrive) {
+      if (!isSupervisor) {
+        alert('只有主管可以直接上傳 Google Drive。')
+        return
+      }
+      const value = driveFolderUrl.trim()
+      if (!value || !isDriveFolderUrl(value)) {
+        alert('請先貼上正確的 Google Drive 資料夾網址。')
+        return
+      }
+    }
 
     const pages =
       Array.from(
@@ -832,6 +880,7 @@ export default function DisasterInspectionEditor({
     }
 
     setExportingPdf(true)
+    if (uploadDirectlyToDrive) setUploadingDrive(true)
 
     try {
       const [
@@ -953,15 +1002,39 @@ export default function DisasterInspectionEditor({
         )
       }
 
-      pdf.save(fileName)
+      if (uploadDirectlyToDrive) {
+        const driveResponse = await fetch(
+          `/api/disaster-inspections/${inspectionId}/google-drive`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folderUrl: driveFolderUrl.trim() }),
+          }
+        )
+        const driveJson = await driveResponse.json()
+        if (!driveResponse.ok) {
+          throw new Error(driveJson?.error || 'Google Drive 上傳失敗')
+        }
+
+        if (inspection?.parking_lot_id) {
+          window.localStorage.setItem(
+            disasterDriveStorageKey(inspection.parking_lot_id),
+            driveFolderUrl.trim()
+          )
+        }
+        setMessage(`防災正式 PDF 已直接上傳 Google Drive：${driveJson?.fileName || fileName}`)
+      } else {
+        pdf.save(fileName)
+      }
     } catch (error: any) {
       console.error(error)
       alert(
-        'PDF 匯出失敗：' +
+        (uploadDirectlyToDrive ? 'Google Drive 上傳失敗：' : 'PDF 匯出失敗：') +
           (error?.message || '未知錯誤')
       )
     } finally {
       setExportingPdf(false)
+      setUploadingDrive(false)
     }
   }
 
@@ -1048,7 +1121,7 @@ export default function DisasterInspectionEditor({
             <button
               type="button"
               className="btn"
-              onClick={exportPdf}
+              onClick={() => void exportPdf(false)}
               disabled={exportingPdf}
             >
               {exportingPdf
@@ -1071,6 +1144,65 @@ export default function DisasterInspectionEditor({
             </button>
           </div>
         </div>
+
+        {isSupervisor && (
+          <div
+            className="card"
+            style={{
+              marginTop: 16,
+              padding: 14,
+              border: '1px solid #bfdbfe',
+              background: '#eff6ff',
+            }}
+          >
+            <div style={{ fontSize: 18, fontWeight: 900 }}>
+              主管｜此停車場直接上傳 Google Drive
+            </div>
+            <div className="muted" style={{ marginTop: 5 }}>
+              不需要先下載 PDF。請先開啟「預覽表單」，貼上這間停車場目前要使用的 Google Drive 資料夾網址，再按直接上傳；系統會先產生正式 PDF、封存 Supabase，再直接送到 Google Drive。
+            </div>
+            <div className="field" style={{ marginTop: 10 }}>
+              <label>{inspection?.parking_lots?.name || '目前停車場'}－Google Drive 資料夾網址</label>
+              <input
+                value={driveFolderUrl}
+                onChange={(event) => setDriveFolderUrl(event.target.value)}
+                placeholder="https://drive.google.com/drive/folders/..."
+              />
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+              <button type="button" onClick={saveDriveFolder}>
+                儲存／更新此場連結
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void exportPdf(true)}
+                disabled={!preview || exportingPdf || uploadingDrive}
+              >
+                {uploadingDrive ? 'Google Drive 上傳中…' : '直接上傳 Google Drive'}
+              </button>
+              {driveFolderUrl.trim() && isDriveFolderUrl(driveFolderUrl) && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    window.open(
+                      driveFolderUrl.trim(),
+                      '_blank',
+                      'noopener,noreferrer'
+                    )
+                  }
+                >
+                  開啟資料夾
+                </button>
+              )}
+            </div>
+            {!preview && (
+              <div style={{ marginTop: 8, color: '#92400e', fontWeight: 700 }}>
+                先按上方「預覽表單」，即可使用直接上傳。
+              </div>
+            )}
+          </div>
+        )}
 
         {message && (
           <div
