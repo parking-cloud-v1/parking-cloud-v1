@@ -50,21 +50,12 @@ type DailyFolder = {
   workTypes: string[]
 }
 
-type DriveArchive = {
-  fileName: string
-  archivedAt: string
-  fileUrl: string
-  folderUrl: string
+function driveStorageKey(parkingLotId: string) {
+  return `manual-google-drive-folder:dengue:${parkingLotId}`
 }
 
-type DriveStatus = {
-  configured: boolean
-  credentialsConfigured: boolean
-  rootConfigured: boolean
-  rootFolderUrl: string
-  serviceAccountEmail: string
-  archives: Record<string, DriveArchive>
-  archiveWarning?: string
+function isDriveFolderUrl(value: string) {
+  return /^https:\/\/drive\.google\.com\//i.test(value.trim())
 }
 
 function kindText(value?: FileKind | null) {
@@ -99,8 +90,7 @@ export default function DenguePhotoUpload({
   const [savingPhotos, setSavingPhotos] = useState(false)
   const [savingReport, setSavingReport] = useState(false)
   const [downloadingDate, setDownloadingDate] = useState('')
-  const [uploadingDriveDate, setUploadingDriveDate] = useState('')
-  const [driveStatus, setDriveStatus] = useState<DriveStatus | null>(null)
+  const [driveFolderUrl, setDriveFolderUrl] = useState('')
   const [message, setMessage] = useState('')
 
   const dailyFolders = useMemo<DailyFolder[]>(() => {
@@ -125,29 +115,42 @@ export default function DenguePhotoUpload({
 
   useEffect(() => {
     void loadRows()
-    void loadDriveStatus()
+    setDriveFolderUrl(
+      parkingLotId
+        ? window.localStorage.getItem(driveStorageKey(parkingLotId)) || ''
+        : ''
+    )
   }, [parkingLotId])
 
-  async function loadDriveStatus() {
-    if (!parkingLotId) {
-      setDriveStatus(null)
+  function saveDriveFolder() {
+    const value = driveFolderUrl.trim()
+    if (!parkingLotId) return
+
+    if (value && !isDriveFolderUrl(value)) {
+      setMessage('請貼上正確的 Google Drive 資料夾網址。')
       return
     }
 
-    try {
-      const response = await fetch(
-        `/api/dengue-prevention/google-drive?parkingLotId=${encodeURIComponent(
-          parkingLotId
-        )}`,
-        { cache: 'no-store' }
-      )
-      const json = await response.json()
-      if (!response.ok) throw new Error(json?.error || 'Google Drive 狀態讀取失敗')
-      setDriveStatus(json as DriveStatus)
-    } catch (error: any) {
-      setDriveStatus(null)
-      setMessage(error?.message || 'Google Drive 狀態讀取失敗')
+    if (value) {
+      window.localStorage.setItem(driveStorageKey(parkingLotId), value)
+      setMessage('這個停車場的 Google Drive 連結已儲存在目前瀏覽器，可隨時更改。')
+    } else {
+      window.localStorage.removeItem(driveStorageKey(parkingLotId))
+      setMessage('已清除這個停車場的 Google Drive 連結。')
     }
+  }
+
+  function openDriveFolder() {
+    const value = driveFolderUrl.trim()
+    if (!value) {
+      setMessage('請先貼上這次要上傳的 Google Drive 資料夾網址。')
+      return
+    }
+    if (!isDriveFolderUrl(value)) {
+      setMessage('Google Drive 連結格式不正確。')
+      return
+    }
+    window.open(value, '_blank', 'noopener,noreferrer')
   }
 
   async function loadRows() {
@@ -360,45 +363,6 @@ export default function DenguePhotoUpload({
     }
   }
 
-  async function uploadDayToDrive(date: string) {
-    if (!parkingLotId || uploadingDriveDate) return
-
-    if (
-      !window.confirm(
-        `確定將 ${parkingLotName}／${date} 的登革熱作業資料夾上傳到公司 Google Drive？\n\n會以整包 ZIP 上傳，不會逐張照片上傳。`
-      )
-    ) {
-      return
-    }
-
-    setUploadingDriveDate(date)
-    setMessage(`${date} 每日資料夾正在上傳 Google Drive…`)
-
-    try {
-      const response = await fetch('/api/dengue-prevention/google-drive', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ parkingLotId, date }),
-      })
-
-      const json = await response.json()
-      if (!response.ok) {
-        throw new Error(json?.error || 'Google Drive 上傳失敗')
-      }
-
-      setMessage(
-        json?.skipped
-          ? `${date} 目前內容已經存在 Google Drive，未重複上傳。`
-          : `${date} 每日資料夾已上傳 Google Drive（共 ${json?.fileCount || 0} 個檔案）。`
-      )
-      await loadDriveStatus()
-    } catch (error: any) {
-      setMessage(error?.message || 'Google Drive 上傳失敗')
-    } finally {
-      setUploadingDriveDate('')
-    }
-  }
-
   async function remove(row: Row) {
     if (!window.confirm(`確定刪除「${row.file_name}」？`)) {
       return
@@ -499,60 +463,34 @@ export default function DenguePhotoUpload({
 
       <div
         className="card"
-        style={{
-          marginTop: 18,
-          padding: 18,
-          borderColor: driveStatus?.configured ? '#bbf7d0' : '#fecaca',
-        }}
+        style={{ marginTop: 18, padding: 18 }}
       >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            gap: 12,
-            alignItems: 'center',
-            flexWrap: 'wrap',
-          }}
-        >
-          <div>
-            <h2 style={{ margin: 0 }}>Google Drive 手動上傳</h2>
-            <div className="muted" style={{ marginTop: 6 }}>
-              這裡只處理目前停車場；每一天由現場人員確認後手動上傳一個完整 ZIP。
-            </div>
-          </div>
-          <button type="button" onClick={() => void loadDriveStatus()}>
-            重新檢查 Drive
+        <h2 style={{ margin: 0 }}>Google Drive 手動上傳</h2>
+        <div className="muted" style={{ marginTop: 6 }}>
+          這裡不再自動上傳，也不需要預先設定 Drive Folder ID。先下載某一天的完整 ZIP，再開啟你現在指定的 Google Drive 資料夾手動上傳。
+        </div>
+
+        <div className="field" style={{ marginTop: 12 }}>
+          <label>{parkingLotName || '目前停車場'}－Google Drive 資料夾網址</label>
+          <input
+            value={driveFolderUrl}
+            onChange={(event) => setDriveFolderUrl(event.target.value)}
+            placeholder="https://drive.google.com/drive/folders/..."
+          />
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+          <button type="button" onClick={saveDriveFolder}>
+            儲存／更新連結
+          </button>
+          <button type="button" className="btn" onClick={openDriveFolder}>
+            開啟 Google Drive
           </button>
         </div>
 
-        {driveStatus?.configured ? (
-          <div style={{ marginTop: 10, color: '#166534', fontWeight: 800 }}>
-            Google Drive 已可使用。每日資料夾右側會顯示「上傳到 Google Drive」。
-          </div>
-        ) : (
-          <div style={{ marginTop: 10, color: '#b91c1c', fontWeight: 700 }}>
-            {!driveStatus
-              ? '尚未取得 Google Drive 設定狀態。'
-              : !driveStatus.credentialsConfigured
-                ? 'Vercel 尚未完成 Google Drive 服務帳號設定。'
-                : !driveStatus.rootConfigured
-                  ? '尚未設定公司 Google Drive 總資料夾，請主管先到報表中心完成一次設定。'
-                  : 'Google Drive 尚未可用，請重新檢查設定。'}
-          </div>
-        )}
-
-        {driveStatus?.rootFolderUrl && (
-          <div style={{ marginTop: 8 }}>
-            <a
-              href={driveStatus.rootFolderUrl}
-              target="_blank"
-              rel="noreferrer"
-              style={{ fontWeight: 700 }}
-            >
-              開啟公司 Google Drive 總資料夾
-            </a>
-          </div>
-        )}
+        <div className="muted" style={{ marginTop: 8 }}>
+          連結只儲存在目前瀏覽器，不寫入 Vercel 或資料庫；公司更換資料夾時直接貼新網址即可。
+        </div>
       </div>
 
       <div
@@ -664,7 +602,7 @@ export default function DenguePhotoUpload({
       <div className="card" style={{ marginTop: 18, padding: 20 }}>
         <h2 style={{ marginTop: 0 }}>每日作業資料夾</h2>
         <p className="muted">
-          每個日期只顯示一個資料夾。按「下載當日資料夾」會一次取得當日所有照片與報表 ZIP。
+          每個日期只顯示一個資料夾。先下載當日 ZIP，再按「開啟 Drive 手動上傳」進入目前指定的公司雲端資料夾。
         </p>
 
         {!dailyFolders.length ? (
@@ -714,7 +652,7 @@ export default function DenguePhotoUpload({
                     <button
                       type="button"
                       className="btn"
-                      disabled={Boolean(downloadingDate) || Boolean(uploadingDriveDate)}
+                      disabled={Boolean(downloadingDate)}
                       onClick={() => downloadDay(folder.date)}
                     >
                       {downloadingDate === folder.date
@@ -724,56 +662,14 @@ export default function DenguePhotoUpload({
 
                     <button
                       type="button"
-                      className="btn"
-                      disabled={
-                        !driveStatus?.configured ||
-                        Boolean(uploadingDriveDate) ||
-                        Boolean(downloadingDate)
-                      }
-                      onClick={() => void uploadDayToDrive(folder.date)}
+                      disabled={Boolean(downloadingDate)}
+                      onClick={openDriveFolder}
                     >
-                      {uploadingDriveDate === folder.date
-                        ? '上傳 Drive 中…'
-                        : '上傳到 Google Drive'}
+                      開啟 Drive 手動上傳
                     </button>
-
-                    {driveStatus?.archives?.[folder.date] && (
-                      <span style={{ color: '#166534', fontWeight: 800 }}>
-                        曾歸檔
-                      </span>
-                    )}
                   </div>
                 </div>
 
-                {driveStatus?.archives?.[folder.date] && (
-                  <div
-                    style={{
-                      marginTop: 10,
-                      padding: 10,
-                      borderRadius: 8,
-                      background: '#f0fdf4',
-                      color: '#166534',
-                    }}
-                  >
-                    Google Drive 最近上傳：
-                    {new Date(
-                      driveStatus.archives[folder.date].archivedAt
-                    ).toLocaleString('zh-TW')}
-                    {driveStatus.archives[folder.date].fileUrl && (
-                      <>
-                        {' '}｜{' '}
-                        <a
-                          href={driveStatus.archives[folder.date].fileUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ fontWeight: 800 }}
-                        >
-                          開啟雲端檔案
-                        </a>
-                      </>
-                    )}
-                  </div>
-                )}
 
                 <details style={{ marginTop: 12 }}>
                   <summary

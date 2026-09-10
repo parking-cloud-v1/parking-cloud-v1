@@ -55,8 +55,15 @@ function statusText(value: string) {
   if (value === 'pending') return '待主管查看'
   if (value === 'seen') return '主管已查看'
   if (value === 'reported') return '已舉發'
-  if (value === 'closed') return '歷史狀態'
   return value || '-'
+}
+
+function driveStorageKey() {
+  return 'manual-google-drive-folder:violation'
+}
+
+function isDriveFolderUrl(value: string) {
+  return /^https:\/\/drive\.google\.com\//i.test(value.trim())
 }
 
 export default function ViolationSupervisorAlerts() {
@@ -64,6 +71,7 @@ export default function ViolationSupervisorAlerts() {
   const [message, setMessage] = useState('')
   const [working, setWorking] = useState('')
   const [expanded, setExpanded] = useState('')
+  const [driveFolderUrl, setDriveFolderUrl] = useState('')
 
   async function load() {
     try {
@@ -84,6 +92,39 @@ export default function ViolationSupervisorAlerts() {
     return () => window.clearInterval(timer)
   }, [])
 
+  useEffect(() => {
+    setDriveFolderUrl(window.localStorage.getItem(driveStorageKey()) || '')
+  }, [])
+
+  function saveDriveFolder() {
+    const value = driveFolderUrl.trim()
+    if (value && !isDriveFolderUrl(value)) {
+      setMessage('請貼上正確的 Google Drive 資料夾網址。')
+      return
+    }
+
+    if (value) {
+      window.localStorage.setItem(driveStorageKey(), value)
+      setMessage('違規案件 Google Drive 連結已儲存在目前瀏覽器，可隨時更改。')
+    } else {
+      window.localStorage.removeItem(driveStorageKey())
+      setMessage('已清除違規案件 Google Drive 連結。')
+    }
+  }
+
+  function openDriveFolder() {
+    const value = driveFolderUrl.trim()
+    if (!value) {
+      setMessage('請先貼上公司這次指定的 Google Drive 資料夾網址。')
+      return
+    }
+    if (!isDriveFolderUrl(value)) {
+      setMessage('Google Drive 連結格式不正確。')
+      return
+    }
+    window.open(value, '_blank', 'noopener,noreferrer')
+  }
+
   async function changeStatus(id: string, status: 'seen' | 'reported') {
     setWorking(id)
     setMessage('')
@@ -97,12 +138,16 @@ export default function ViolationSupervisorAlerts() {
       const json = await response.json()
       if (!response.ok) throw new Error(json?.error || '處理失敗')
 
-      setMessage(
-        status === 'reported'
-          ? '案件已標記為「已舉發」，此狀態即為最終處理。'
-          : '已標記主管查看。'
-      )
-      await load()
+      if (status === 'reported') {
+        setRows((current) => current.filter((row) => row.id !== id))
+        if (expanded === id) setExpanded('')
+        setMessage(
+          '案件已標記為「已舉發」，並從現場／即時通知待處理清單移除。資料庫與照片仍保留作為舉發留底；如屬重複誤傳可另按「刪除」永久清除。'
+        )
+      } else {
+        setMessage('已標記主管查看。')
+        await load()
+      }
     } catch (error: any) {
       setMessage(error?.message || '處理失敗')
     } finally {
@@ -196,19 +241,36 @@ export default function ViolationSupervisorAlerts() {
   }
 
   const pendingCount = rows.filter((row) => row.supervisor_status === 'pending').length
-  const reportedCount = rows.filter((row) => row.supervisor_status === 'reported').length
 
   return (
     <div style={{ paddingBottom: 40 }}>
       <h1 style={{ marginBottom: 6 }}>違規即時通知</h1>
       <p className="muted" style={{ marginTop: 0 }}>
-        場站建立案件後會列在這裡；本頁每 10 秒自動更新。每個案件可一次下載完整 ZIP
-        給公司；主管確認後以「已舉發」作為最終處理狀態。
+        場站建立案件後會列在這裡；本頁每 10 秒自動更新。案件先下載完整 ZIP，再直接開啟公司指定的 Google Drive 資料夾手動上傳；「已舉發」就是最終處理，按下後會從現場與即時通知待處理清單消失。
       </p>
 
       <div className="card" style={{ marginTop: 14 }}>
         <strong>待主管首次查看：{pendingCount} 件</strong>
-        <span className="muted">　目前通知共 {rows.length} 件｜已舉發 {reportedCount} 件</span>
+        <span className="muted">　目前待處理共 {rows.length} 件</span>
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <h2 style={{ marginTop: 0 }}>公司 Google Drive 手動上傳</h2>
+        <div className="muted">
+          不再由系統自動傳到固定資料夾。先下載案件 ZIP，再打開你這次指定的 Drive 資料夾手動上傳。
+        </div>
+        <div className="field" style={{ marginTop: 10 }}>
+          <label>違規舉發資料夾網址</label>
+          <input
+            value={driveFolderUrl}
+            onChange={(event) => setDriveFolderUrl(event.target.value)}
+            placeholder="https://drive.google.com/drive/folders/..."
+          />
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+          <button type="button" onClick={saveDriveFolder}>儲存／更新連結</button>
+          <button type="button" className="btn" onClick={openDriveFolder}>開啟 Google Drive</button>
+        </div>
       </div>
 
       {message && (
@@ -248,6 +310,7 @@ export default function ViolationSupervisorAlerts() {
                     onStatus={(status) => void changeStatus(row.id, status)}
                     onPhoto={(photoId) => void openPhoto(row.id, photoId)}
                     onDownload={() => downloadCase(row)}
+                    onOpenDrive={openDriveFolder}
                     onDelete={() => void deleteCase(row)}
                   />
                 )
@@ -277,6 +340,7 @@ function FragmentRow({
   onStatus,
   onPhoto,
   onDownload,
+  onOpenDrive,
   onDelete,
 }: {
   row: Row
@@ -287,6 +351,7 @@ function FragmentRow({
   onStatus: (status: 'seen' | 'reported') => void
   onPhoto: (photoId: string) => void
   onDownload: () => void
+  onOpenDrive: () => void
   onDelete: () => void
 }) {
   const deleting = working === `delete:${row.id}`
@@ -322,6 +387,14 @@ function FragmentRow({
               style={{ fontWeight: 700 }}
             >
               {downloading ? '整理中…' : '下載案件資料夾'}
+            </button>
+
+            <button
+              type="button"
+              disabled={rowWorking}
+              onClick={onOpenDrive}
+            >
+              開啟 Drive 手動上傳
             </button>
 
             {row.supervisor_status === 'pending' && (

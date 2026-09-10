@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import GoogleDriveReportPanel from '@/components/GoogleDriveReportPanel'
 import ManualCloudExportPanel from '@/components/ManualCloudExportPanel'
 
 function currentMonth() {
@@ -16,7 +15,8 @@ export default function ReportCenter() {
     <div style={{ paddingBottom: 40 }}>
       <h1 style={{ marginBottom: 6 }}>報表中心</h1>
       <p className="muted" style={{ marginTop: 0 }}>
-        報表中心只保留正式月報／報表類別；Google Drive 與本機備份共用同一份資料來源。違規案件請到「違規即時通知」處理；登革熱請到各停車場「登革熱消毒作業」頁逐日手動上傳 Google Drive。
+        Google Drive 已改為全手動歸檔：先下載系統整理好的正式檔案，再直接開啟你當下指定的 Google Drive 資料夾手動上傳。
+        資料夾連結可隨時更改，不再使用系統預設雲端位置。
       </p>
 
       <div className="card" style={{ marginTop: 18, maxWidth: 520 }}>
@@ -30,7 +30,6 @@ export default function ReportCenter() {
         </div>
       </div>
 
-      <GoogleDriveReportPanel month={month} />
       <ManualCloudExportPanel month={month} />
     </div>
   )

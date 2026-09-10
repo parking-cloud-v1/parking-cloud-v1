@@ -120,6 +120,8 @@ export default function ViolationParkingClient({
 
   useEffect(() => {
     void loadRows()
+    const timer = window.setInterval(() => void loadRows(), 10000)
+    return () => window.clearInterval(timer)
   }, [parkingLotId])
 
   const filtered = useMemo(

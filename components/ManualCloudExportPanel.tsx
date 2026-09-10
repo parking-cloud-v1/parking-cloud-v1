@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useEffect, useState } from 'react'
 
 type Category =
   | 'attendance'
@@ -20,65 +21,139 @@ const CATEGORIES: {
   {
     key: 'attendance',
     label: '每月簽到表',
-    note: '原始上傳檔直接打包。',
+    note: '下載現場同月上傳的原始簽到檔 ZIP。',
     button: '下載 ZIP',
     sourceHref: '/dashboard/monthly-attendance',
   },
   {
     key: 'rentals',
     label: '月租總表',
-    note: '與現場 Excel 匯出相同欄位。',
+    note: '下載與月租管理欄位一致的 Excel ZIP。',
     button: '下載 Excel ZIP',
     sourceHref: '/dashboard/monthly-rentals',
   },
   {
     key: 'changes',
     label: '月租簽約異動',
-    note: '與現場會計異動 Excel 相同欄位。',
+    note: '下載與現場會計異動欄位一致的 Excel ZIP。',
     button: '下載 Excel ZIP',
     sourceHref: '/dashboard/monthly-rentals/changes',
   },
   {
     key: 'taxi',
     label: '計程車優惠報表',
-    note: '各停車場免費停車統計表。',
+    note: '下載各停車場計程車免費停車統計表。',
     button: '下載 Excel ZIP',
     sourceHref: '/dashboard/taxi-discounts',
   },
   {
     key: 'shift',
     label: '當日結班報表',
-    note: '下載各停車場月份結班彙整 Excel。',
+    note: '下載各停車場指定月份結班彙整 Excel。',
     button: '下載 Excel ZIP',
     sourceHref: '/dashboard/shift-closing',
   },
   {
     key: 'disaster',
     label: '防災檢查',
-    note: '直接下載現場已產生的正式 PDF。',
+    note: '下載現場已產生的正式 PDF ZIP。',
     button: '下載 PDF ZIP',
     sourceHref: '/dashboard/disaster-inspections',
   },
 ]
 
+function storageKey(category: Category) {
+  return `manual-google-drive-folder:${category}`
+}
+
+function isDriveFolderUrl(value: string) {
+  return /^https:\/\/drive\.google\.com\//i.test(value.trim())
+}
+
 export default function ManualCloudExportPanel({ month }: { month: string }) {
+  const [folderUrls, setFolderUrls] = useState<Record<Category, string>>({
+    attendance: '',
+    rentals: '',
+    changes: '',
+    taxi: '',
+    shift: '',
+    disaster: '',
+  })
+  const [message, setMessage] = useState('')
+
+  useEffect(() => {
+    const next = {} as Record<Category, string>
+    for (const item of CATEGORIES) {
+      next[item.key] = window.localStorage.getItem(storageKey(item.key)) || ''
+    }
+    setFolderUrls(next)
+  }, [])
+
+  function updateFolder(category: Category, value: string) {
+    setFolderUrls((current) => ({ ...current, [category]: value }))
+  }
+
+  function saveFolder(category: Category) {
+    const value = folderUrls[category].trim()
+    if (value && !isDriveFolderUrl(value)) {
+      setMessage('請貼上 Google Drive 資料夾網址，例如 https://drive.google.com/drive/folders/...')
+      return
+    }
+
+    if (value) {
+      window.localStorage.setItem(storageKey(category), value)
+      setMessage(`${CATEGORIES.find((item) => item.key === category)?.label || '此類別'} Drive 連結已儲存在這台瀏覽器；之後仍可直接修改。`)
+    } else {
+      window.localStorage.removeItem(storageKey(category))
+      setMessage('已清除此類別的 Google Drive 連結。')
+    }
+  }
+
   function download(category: Category) {
     window.location.href = `/api/report-center/manual-export?month=${encodeURIComponent(
       month
     )}&category=${encodeURIComponent(category)}`
   }
 
+  function openDrive(category: Category) {
+    const value = folderUrls[category].trim()
+    if (!value) {
+      setMessage('請先貼上這次要上傳的 Google Drive 資料夾網址。')
+      return
+    }
+    if (!isDriveFolderUrl(value)) {
+      setMessage('Google Drive 連結格式不正確，請確認後再開啟。')
+      return
+    }
+    window.open(value, '_blank', 'noopener,noreferrer')
+  }
+
   return (
     <div className="card" style={{ marginTop: 18 }}>
-      <h2 style={{ marginTop: 0 }}>本機下載備份</h2>
+      <h2 style={{ marginTop: 0 }}>Google Drive 手動歸檔</h2>
       <div className="muted">
-        本機備份與 Google Drive 現在共用同一個報表來源，不再各自維護一套欄位；因此兩邊下載內容會一致。
+        不再由系統自動上傳。每一類報表都先下載，再開啟你指定的 Drive 資料夾手動上傳；連結只記在目前瀏覽器，可隨時更改，不寫入 Vercel 或資料庫。
       </div>
+
+      {message && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: 10,
+            borderRadius: 8,
+            background: message.includes('不正確') || message.includes('請先') ? '#fef2f2' : '#f0fdf4',
+            color: message.includes('不正確') || message.includes('請先') ? '#b91c1c' : '#166534',
+            fontWeight: 700,
+          }}
+        >
+          {message}
+        </div>
+      )}
 
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit,minmax(270px,1fr))',
+          gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))',
           gap: 12,
           marginTop: 16,
         }}
@@ -89,26 +164,42 @@ export default function ManualCloudExportPanel({ month }: { month: string }) {
             style={{
               border: '1px solid #dbe3ec',
               borderRadius: 12,
-              padding: 14,
+              padding: 16,
               background: '#fff',
             }}
           >
-            <strong>{item.label}</strong>
-            <div className="muted" style={{ marginTop: 6, minHeight: 42 }}>
+            <strong style={{ fontSize: 19 }}>{item.label}</strong>
+            <div className="muted" style={{ marginTop: 6, minHeight: 44 }}>
               {item.note}
             </div>
+
+            <div className="field" style={{ marginTop: 12 }}>
+              <label>這次要上傳的 Google Drive 資料夾</label>
+              <input
+                value={folderUrls[item.key]}
+                onChange={(event) => updateFolder(item.key, event.target.value)}
+                placeholder="https://drive.google.com/drive/folders/..."
+              />
+            </div>
+
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-              <Link href={item.sourceHref} style={{ fontWeight: 700 }}>
-                開啟現場報表
-              </Link>
               <button
                 type="button"
                 className="btn"
                 onClick={() => download(item.key)}
                 disabled={!month}
               >
-                {item.button}
+                ① {item.button}
               </button>
+              <button type="button" onClick={() => openDrive(item.key)}>
+                ② 開啟 Drive 手動上傳
+              </button>
+              <button type="button" onClick={() => saveFolder(item.key)}>
+                儲存／更新連結
+              </button>
+              <Link href={item.sourceHref} style={{ fontWeight: 700, alignSelf: 'center' }}>
+                開啟現場報表
+              </Link>
             </div>
           </div>
         ))}

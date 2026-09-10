@@ -105,6 +105,7 @@ export async function GET(request: Request) {
         )
       `)
       .eq('parking_lot_id', lotId)
+      .in('supervisor_status', ['pending', 'seen'])
       .order('created_at', { ascending: false })
 
     if (error) {

@@ -56,7 +56,7 @@ export async function GET() {
           uploaded_at
         )
       `)
-      .in('supervisor_status', ['pending', 'seen', 'reported'])
+      .in('supervisor_status', ['pending', 'seen'])
       .order('created_at', { ascending: false })
       .limit(200)
 
