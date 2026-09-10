@@ -17,7 +17,9 @@ export async function POST(
 ) {
   try {
     const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
 
     if (!user) {
       return NextResponse.json({ error: '登入狀態已失效。' }, { status: 401 })
@@ -42,12 +44,16 @@ export async function POST(
 
     const body = await request.json()
     const nextStatus = String(body?.status || '').trim()
-    if (!['seen', 'reported', 'closed'].includes(nextStatus)) {
+
+    // 「已舉發」即為案件處理完成狀態；不再提供另外的「結案」按鈕。
+    if (!['seen', 'reported'].includes(nextStatus)) {
       return NextResponse.json({ error: '狀態錯誤。' }, { status: 400 })
     }
 
     const { id } = await context.params
-    if (!id) return NextResponse.json({ error: '缺少違規案件 ID。' }, { status: 400 })
+    if (!id) {
+      return NextResponse.json({ error: '缺少違規案件 ID。' }, { status: 400 })
+    }
 
     const db = admin()
     const { data: caseRow, error: readError } = await db
@@ -73,12 +79,6 @@ export async function POST(
     }
 
     if (nextStatus === 'reported') {
-      patch.handled_at = now
-      patch.handled_by = user.id
-    }
-
-    if (nextStatus === 'closed') {
-      patch.status = 'closed'
       patch.handled_at = now
       patch.handled_by = user.id
     }

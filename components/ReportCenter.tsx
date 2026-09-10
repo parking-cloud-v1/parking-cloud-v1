@@ -16,7 +16,7 @@ export default function ReportCenter() {
     <div style={{ paddingBottom: 40 }}>
       <h1 style={{ marginBottom: 6 }}>報表中心</h1>
       <p className="muted" style={{ marginTop: 0 }}>
-        Google Drive 為正式歸檔，本機 ZIP 為備援下載；主管可查看全部停車場，管理員僅能處理自己被指派的停車場。
+        報表中心改為直接對應現場正式模組；Google Drive 與本機備份共用同一份資料來源。違規案件不再放在報表中心，請到「違規即時通知」查看、下載或舉發。
       </p>
 
       <div className="card" style={{ marginTop: 18, maxWidth: 520 }}>

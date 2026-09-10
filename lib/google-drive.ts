@@ -8,7 +8,6 @@ export type DriveCategory =
   | 'shift'
   | 'disaster'
   | 'dengue'
-  | 'violation'
 
 const CATEGORY_ENV: Record<DriveCategory, string> = {
   attendance: 'GOOGLE_DRIVE_ATTENDANCE_FOLDER_ID',
@@ -18,18 +17,16 @@ const CATEGORY_ENV: Record<DriveCategory, string> = {
   shift: 'GOOGLE_DRIVE_SHIFT_FOLDER_ID',
   disaster: 'GOOGLE_DRIVE_DISASTER_FOLDER_ID',
   dengue: 'GOOGLE_DRIVE_DENGUE_FOLDER_ID',
-  violation: 'GOOGLE_DRIVE_VIOLATION_FOLDER_ID',
 }
 
 export const DRIVE_CATEGORY_LABELS: Record<DriveCategory, string> = {
   attendance: '每月簽到表',
   rentals: '月租總表',
-  changes: '月租異動',
-  taxi: '計程車折扣',
-  shift: '結班報表',
+  changes: '月租簽約異動',
+  taxi: '計程車優惠報表',
+  shift: '當日結班報表',
   disaster: '防災檢查',
-  dengue: '登革熱自主檢查報表',
-  violation: '違規停車照片',
+  dengue: '登革熱消毒作業',
 }
 
 function env(name: string) {
@@ -113,8 +110,51 @@ export function configuredDriveRoot() {
   return env('GOOGLE_DRIVE_REPORTS_FOLDER_ID')
 }
 
+export function configuredCategoryFolder(category: DriveCategory) {
+  return env(CATEGORY_ENV[category])
+}
+
 export function configuredDriveFolder(category: DriveCategory) {
-  return configuredDriveRoot() || env(CATEGORY_ENV[category])
+  return configuredDriveRoot() || configuredCategoryFolder(category)
+}
+
+export function configuredDriveCredentials() {
+  return Boolean(
+    env('GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL') && env('GOOGLE_DRIVE_PRIVATE_KEY')
+  )
+}
+
+export function configuredDriveServiceAccountEmail() {
+  return env('GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL')
+}
+
+
+export async function verifyDriveFolderAccess(folderId: string) {
+  const id = String(folderId || '').trim()
+  if (!id) throw new Error('缺少 Google Drive 資料夾 ID')
+
+  const token = await getAccessToken()
+  const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`)
+  url.searchParams.set('fields', 'id,name,mimeType,capabilities(canAddChildren)')
+  url.searchParams.set('supportsAllDrives', 'true')
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  })
+  const json = await response.json()
+
+  if (!response.ok) {
+    throw new Error(json?.error?.message || 'Google Drive 資料夾存取測試失敗')
+  }
+  if (json?.mimeType !== 'application/vnd.google-apps.folder') {
+    throw new Error('指定的 Google Drive ID 不是資料夾')
+  }
+  if (json?.capabilities?.canAddChildren === false) {
+    throw new Error('服務帳號只有讀取權限，請把此資料夾共享為「編輯者」')
+  }
+
+  return { id: String(json.id), name: String(json.name || '') }
 }
 
 export function driveFolderUrl(folderId: string) {
@@ -197,39 +237,40 @@ async function ensureFolder(token: string, parentId: string, name: string) {
   return created
 }
 
+/**
+ * 正式結構：總資料夾 / YYYY-MM / 停車場 / 類別
+ *
+ * rootFolderIdOverride：由報表中心主管設定頁儲存於 Supabase 的總資料夾 ID。
+ * 若沒有設定，才退回 Vercel GOOGLE_DRIVE_REPORTS_FOLDER_ID；再沒有才使用舊的類別專用 Folder ID。
+ */
 export async function resolveReportFolder({
   category,
   month,
   parkingLotName,
+  rootFolderIdOverride,
 }: {
   category: DriveCategory
   month: string
   parkingLotName: string
+  rootFolderIdOverride?: string
 }) {
-  const root = configuredDriveRoot()
-  const categoryRoot = env(CATEGORY_ENV[category])
+  const root = String(rootFolderIdOverride || '').trim() || configuredDriveRoot()
+  const categoryRoot = configuredCategoryFolder(category)
 
   if (!root && !categoryRoot) {
     throw new Error(
-      `尚未設定 Google Drive Folder ID：可設定 GOOGLE_DRIVE_REPORTS_FOLDER_ID，或 ${CATEGORY_ENV[category]}`
+      `尚未設定 Google Drive Folder ID：可在報表中心設定總資料夾，或設定 ${CATEGORY_ENV[category]}`
     )
   }
 
   const token = await getAccessToken()
 
-  // 正式結構：主資料夾 / YYYY-MM / 停車場 / 類別
   if (root) {
     const monthFolder = await ensureFolder(token, root, month)
     const lotFolder = await ensureFolder(token, monthFolder, parkingLotName)
-    const categoryFolder = await ensureFolder(
-      token,
-      lotFolder,
-      DRIVE_CATEGORY_LABELS[category]
-    )
-    return categoryFolder
+    return ensureFolder(token, lotFolder, DRIVE_CATEGORY_LABELS[category])
   }
 
-  // 相容舊環境變數：類別專用資料夾 / YYYY-MM / 停車場
   const monthFolder = await ensureFolder(token, categoryRoot, month)
   return ensureFolder(token, monthFolder, parkingLotName)
 }

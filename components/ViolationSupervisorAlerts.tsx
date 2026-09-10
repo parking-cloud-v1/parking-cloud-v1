@@ -55,7 +55,7 @@ function statusText(value: string) {
   if (value === 'pending') return '待主管查看'
   if (value === 'seen') return '主管已查看'
   if (value === 'reported') return '已舉發'
-  if (value === 'closed') return '已結案'
+  if (value === 'closed') return '歷史狀態'
   return value || '-'
 }
 
@@ -84,9 +84,10 @@ export default function ViolationSupervisorAlerts() {
     return () => window.clearInterval(timer)
   }, [])
 
-  async function changeStatus(id: string, status: 'seen' | 'reported' | 'closed') {
+  async function changeStatus(id: string, status: 'seen' | 'reported') {
     setWorking(id)
     setMessage('')
+
     try {
       const response = await fetch(`/api/violation-parking/${id}/status`, {
         method: 'POST',
@@ -98,10 +99,8 @@ export default function ViolationSupervisorAlerts() {
 
       setMessage(
         status === 'reported'
-          ? '已標記為「已舉發」。'
-          : status === 'closed'
-            ? '案件已結案。'
-            : '已標記主管查看。'
+          ? '案件已標記為「已舉發」，此狀態即為最終處理。'
+          : '已標記主管查看。'
       )
       await load()
     } catch (error: any) {
@@ -111,22 +110,41 @@ export default function ViolationSupervisorAlerts() {
     }
   }
 
+  function downloadCase(row: Row) {
+    const key = `download:${row.id}`
+    setWorking(key)
+    setMessage('正在整理案件資料夾…')
+
+    // 用瀏覽器直接下載 Server 產生的 ZIP；下載開始後不需要把整個檔案讀進前端記憶體。
+    const anchor = document.createElement('a')
+    anchor.href = `/api/violation-parking/${encodeURIComponent(row.id)}/download`
+    anchor.style.display = 'none'
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+
+    window.setTimeout(() => {
+      setWorking((current) => (current === key ? '' : current))
+      setMessage('案件資料夾已開始下載；可直接將 ZIP 傳給公司。')
+    }, 1200)
+  }
+
   async function deleteCase(row: Row) {
     const photos = row.violation_parking_photos || []
     const confirmText = [
-      `確定永久刪除這筆違規通知？`,
-      ``,
+      '確定永久刪除這筆違規通知？',
+      '',
       `停車場：${lotName(row)}`,
       `類型：${typeText(row)}`,
       `車牌：${row.vehicle_plate || '無牌'}`,
       `照片：${photos.length} 張`,
-      ``,
-      `刪除後會同步刪除：`,
-      `1. 違規案件資料庫紀錄`,
-      `2. 該案件全部照片資料庫紀錄`,
-      `3. violation-parking Storage 內的照片`,
-      ``,
-      `此操作無法復原。`,
+      '',
+      '刪除後會同步刪除：',
+      '1. 違規案件資料庫紀錄',
+      '2. 該案件全部照片資料庫紀錄',
+      '3. violation-parking Storage 內的照片',
+      '',
+      '此操作無法復原。',
     ].join('\n')
 
     if (!window.confirm(confirmText)) return
@@ -166,7 +184,9 @@ export default function ViolationSupervisorAlerts() {
         { cache: 'no-store' }
       )
       const json = await response.json()
-      if (!response.ok || !json?.signedUrl) throw new Error(json?.error || '照片開啟失敗')
+      if (!response.ok || !json?.signedUrl) {
+        throw new Error(json?.error || '照片開啟失敗')
+      }
       window.open(json.signedUrl, '_blank', 'noopener,noreferrer')
     } catch (error: any) {
       setMessage(error?.message || '照片開啟失敗')
@@ -176,17 +196,19 @@ export default function ViolationSupervisorAlerts() {
   }
 
   const pendingCount = rows.filter((row) => row.supervisor_status === 'pending').length
+  const reportedCount = rows.filter((row) => row.supervisor_status === 'reported').length
 
   return (
     <div style={{ paddingBottom: 40 }}>
       <h1 style={{ marginBottom: 6 }}>違規即時通知</h1>
       <p className="muted" style={{ marginTop: 0 }}>
-        場站建立案件後會列在這裡；本頁每 10 秒自動更新。可直接展開完整案件與查看照片，再標記已查看、已舉發、結案，或由主管永久刪除重複／誤傳案件。
+        場站建立案件後會列在這裡；本頁每 10 秒自動更新。每個案件可一次下載完整 ZIP
+        給公司；主管確認後以「已舉發」作為最終處理狀態。
       </p>
 
       <div className="card" style={{ marginTop: 14 }}>
         <strong>待主管首次查看：{pendingCount} 件</strong>
-        <span className="muted">　目前未結案通知共 {rows.length} 件</span>
+        <span className="muted">　目前通知共 {rows.length} 件｜已舉發 {reportedCount} 件</span>
       </div>
 
       {message && (
@@ -197,16 +219,24 @@ export default function ViolationSupervisorAlerts() {
 
       <div className="card" style={{ marginTop: 18 }}>
         <div style={{ overflowX: 'auto' }}>
-          <table className="table" style={{ minWidth: 980 }}>
+          <table className="table" style={{ minWidth: 1080 }}>
             <thead>
               <tr>
-                <th>時間</th><th>停車場</th><th>類型</th><th>車牌</th><th>位置</th><th>照片</th><th>狀態</th><th>操作</th>
+                <th>時間</th>
+                <th>停車場</th>
+                <th>類型</th>
+                <th>車牌</th>
+                <th>位置</th>
+                <th>照片</th>
+                <th>狀態</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row) => {
                 const photos = row.violation_parking_photos || []
                 const isOpen = expanded === row.id
+
                 return (
                   <FragmentRow
                     key={row.id}
@@ -215,15 +245,20 @@ export default function ViolationSupervisorAlerts() {
                     isOpen={isOpen}
                     working={working}
                     onToggle={() => setExpanded(isOpen ? '' : row.id)}
-                    onStatus={(status) => changeStatus(row.id, status)}
-                    onPhoto={(photoId) => openPhoto(row.id, photoId)}
-                    onDelete={() => deleteCase(row)}
+                    onStatus={(status) => void changeStatus(row.id, status)}
+                    onPhoto={(photoId) => void openPhoto(row.id, photoId)}
+                    onDownload={() => downloadCase(row)}
+                    onDelete={() => void deleteCase(row)}
                   />
                 )
               })}
 
               {rows.length === 0 && (
-                <tr><td colSpan={8} style={{ textAlign: 'center', padding: 26 }}>目前沒有待處理違規案件</td></tr>
+                <tr>
+                  <td colSpan={8} style={{ textAlign: 'center', padding: 26 }}>
+                    目前沒有違規案件
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>
@@ -241,6 +276,7 @@ function FragmentRow({
   onToggle,
   onStatus,
   onPhoto,
+  onDownload,
   onDelete,
 }: {
   row: Row
@@ -248,14 +284,17 @@ function FragmentRow({
   isOpen: boolean
   working: string
   onToggle: () => void
-  onStatus: (status: 'seen' | 'reported' | 'closed') => void
+  onStatus: (status: 'seen' | 'reported') => void
   onPhoto: (photoId: string) => void
+  onDownload: () => void
   onDelete: () => void
 }) {
   const deleting = working === `delete:${row.id}`
+  const downloading = working === `download:${row.id}`
   const rowWorking =
     working === row.id ||
     deleting ||
+    downloading ||
     working.startsWith(`${row.id}:`)
 
   return (
@@ -267,15 +306,41 @@ function FragmentRow({
         <td>{row.vehicle_plate || '無牌'}</td>
         <td>{row.location_text || '-'}</td>
         <td>{photos.length} 張</td>
-        <td><strong>{statusText(row.supervisor_status)}</strong></td>
+        <td>
+          <strong>{statusText(row.supervisor_status)}</strong>
+        </td>
         <td>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            <button type="button" onClick={onToggle}>{isOpen ? '收合' : '完整查看'}</button>
+            <button type="button" onClick={onToggle}>
+              {isOpen ? '收合' : '完整查看'}
+            </button>
+
+            <button
+              type="button"
+              disabled={rowWorking}
+              onClick={onDownload}
+              style={{ fontWeight: 700 }}
+            >
+              {downloading ? '整理中…' : '下載案件資料夾'}
+            </button>
+
             {row.supervisor_status === 'pending' && (
-              <button type="button" disabled={rowWorking} onClick={() => onStatus('seen')}>已查看</button>
+              <button type="button" disabled={rowWorking} onClick={() => onStatus('seen')}>
+                已查看
+              </button>
             )}
-            <button type="button" className="btn" disabled={rowWorking} onClick={() => onStatus('reported')}>已舉發</button>
-            <button type="button" disabled={rowWorking} onClick={() => onStatus('closed')}>結案</button>
+
+            {row.supervisor_status !== 'reported' && (
+              <button
+                type="button"
+                className="btn"
+                disabled={rowWorking}
+                onClick={() => onStatus('reported')}
+              >
+                已舉發
+              </button>
+            )}
+
             <button
               type="button"
               disabled={rowWorking}
@@ -296,18 +361,43 @@ function FragmentRow({
       {isOpen && (
         <tr>
           <td colSpan={8} style={{ background: '#f8fafc', padding: 16 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 10 }}>
-              <div><strong>發現／開始日期：</strong>{row.start_date}</div>
-              <div><strong>案件狀態：</strong>{row.status || '-'}</div>
-              <div><strong>主管狀態：</strong>{statusText(row.supervisor_status)}</div>
-              <div><strong>案件 ID：</strong><span style={{ fontSize: 12 }}>{row.id}</span></div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))',
+                gap: 10,
+              }}
+            >
+              <div>
+                <strong>發現／開始日期：</strong>
+                {row.start_date}
+              </div>
+              <div>
+                <strong>主管狀態：</strong>
+                {statusText(row.supervisor_status)}
+              </div>
+              <div>
+                <strong>舉發時間：</strong>
+                {row.supervisor_status === 'reported' && row.handled_at
+                  ? new Date(row.handled_at).toLocaleString('zh-TW')
+                  : '-'}
+              </div>
+              <div>
+                <strong>案件 ID：</strong>
+                <span style={{ fontSize: 12 }}>{row.id}</span>
+              </div>
             </div>
 
-            <div style={{ marginTop: 10 }}><strong>備註：</strong>{row.notes || '無'}</div>
+            <div style={{ marginTop: 10 }}>
+              <strong>備註：</strong>
+              {row.notes || '無'}
+            </div>
 
             <div style={{ marginTop: 14, fontWeight: 800 }}>案件照片</div>
             {photos.length === 0 ? (
-              <div className="muted" style={{ marginTop: 8 }}>此案件尚未上傳照片。</div>
+              <div className="muted" style={{ marginTop: 8 }}>
+                此案件尚未上傳照片；仍可下載案件 ZIP，裡面會保留案件文字資料。
+              </div>
             ) : (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
                 {photos

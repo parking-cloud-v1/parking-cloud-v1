@@ -1,5 +1,7 @@
 'use client'
 
+import Link from 'next/link'
+
 type Category =
   | 'attendance'
   | 'rentals'
@@ -8,36 +10,83 @@ type Category =
   | 'shift'
   | 'disaster'
   | 'dengue'
-  | 'violation'
 
-const CATEGORIES: { key: Category; label: string; note: string; button: string }[] = [
-  { key: 'attendance', label: '每月簽到表', note: '下載所選月份簽到表備份。', button: '下載 ZIP' },
-  { key: 'rentals', label: '月租總表', note: '下載目前月租總表 CSV 備份。', button: '下載 ZIP' },
-  { key: 'changes', label: '月租異動', note: '下載所選月份月租異動。', button: '下載 ZIP' },
-  { key: 'taxi', label: '計程車折扣', note: '各停車場 Excel，無資料場站仍保留空白表。', button: '下載 Excel ZIP' },
-  { key: 'shift', label: '結班報表', note: '下載所選月份結班資料。', button: '下載 ZIP' },
-  { key: 'disaster', label: '防災檢查', note: '只下載所選月份已產生的正式 PDF。', button: '下載 PDF ZIP' },
-  { key: 'dengue', label: '登革熱自主檢查', note: '只包含自主檢查報表。', button: '下載 ZIP' },
-  { key: 'violation', label: '違規停車照片', note: '下載所選月份違規停車照片。', button: '下載 ZIP' },
+const CATEGORIES: {
+  key: Category
+  label: string
+  note: string
+  button: string
+  sourceHref: string
+}[] = [
+  {
+    key: 'attendance',
+    label: '每月簽到表',
+    note: '原始上傳檔直接打包。',
+    button: '下載 ZIP',
+    sourceHref: '/dashboard/monthly-attendance',
+  },
+  {
+    key: 'rentals',
+    label: '月租總表',
+    note: '與現場 Excel 匯出相同欄位。',
+    button: '下載 Excel ZIP',
+    sourceHref: '/dashboard/monthly-rentals',
+  },
+  {
+    key: 'changes',
+    label: '月租簽約異動',
+    note: '與現場會計異動 Excel 相同欄位。',
+    button: '下載 Excel ZIP',
+    sourceHref: '/dashboard/monthly-rentals/changes',
+  },
+  {
+    key: 'taxi',
+    label: '計程車優惠報表',
+    note: '各停車場免費停車統計表。',
+    button: '下載 Excel ZIP',
+    sourceHref: '/dashboard/taxi-discounts',
+  },
+  {
+    key: 'shift',
+    label: '當日結班報表',
+    note: '下載各停車場月份結班彙整 Excel。',
+    button: '下載 Excel ZIP',
+    sourceHref: '/dashboard/shift-closing',
+  },
+  {
+    key: 'disaster',
+    label: '防災檢查',
+    note: '直接下載現場已產生的正式 PDF。',
+    button: '下載 PDF ZIP',
+    sourceHref: '/dashboard/disaster-inspections',
+  },
+  {
+    key: 'dengue',
+    label: '登革熱消毒作業',
+    note: '同場同日一個資料夾 ZIP，包含自主檢查與委外消毒。',
+    button: '下載每日資料夾 ZIP',
+    sourceHref: '/dashboard/dengue-photos',
+  },
 ]
 
 export default function ManualCloudExportPanel({ month }: { month: string }) {
   function download(category: Category) {
-    window.location.href =
-      `/api/report-center/manual-export?month=${encodeURIComponent(month)}&category=${encodeURIComponent(category)}`
+    window.location.href = `/api/report-center/manual-export?month=${encodeURIComponent(
+      month
+    )}&category=${encodeURIComponent(category)}`
   }
 
   return (
     <div className="card" style={{ marginTop: 18 }}>
       <h2 style={{ marginTop: 0 }}>本機下載備份</h2>
       <div className="muted">
-        Google Drive 為正式歸檔；這裡只保留人工下載備援，不再另外保存瀏覽器端 Drive 資料夾網址，避免兩套流程混用。
+        本機備份與 Google Drive 現在共用同一個報表來源，不再各自維護一套欄位；因此兩邊下載內容會一致。
       </div>
 
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit,minmax(250px,1fr))',
+          gridTemplateColumns: 'repeat(auto-fit,minmax(270px,1fr))',
           gap: 12,
           marginTop: 16,
         }}
@@ -45,19 +94,30 @@ export default function ManualCloudExportPanel({ month }: { month: string }) {
         {CATEGORIES.map((item) => (
           <div
             key={item.key}
-            style={{ border: '1px solid #dbe3ec', borderRadius: 12, padding: 14, background: '#fff' }}
+            style={{
+              border: '1px solid #dbe3ec',
+              borderRadius: 12,
+              padding: 14,
+              background: '#fff',
+            }}
           >
             <strong>{item.label}</strong>
-            <div className="muted" style={{ marginTop: 6, minHeight: 42 }}>{item.note}</div>
-            <button
-              type="button"
-              className="btn"
-              style={{ marginTop: 10 }}
-              onClick={() => download(item.key)}
-              disabled={!month}
-            >
-              {item.button}
-            </button>
+            <div className="muted" style={{ marginTop: 6, minHeight: 42 }}>
+              {item.note}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+              <Link href={item.sourceHref} style={{ fontWeight: 700 }}>
+                開啟現場報表
+              </Link>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => download(item.key)}
+                disabled={!month}
+              >
+                {item.button}
+              </button>
+            </div>
           </div>
         ))}
       </div>

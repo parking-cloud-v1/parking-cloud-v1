@@ -3,41 +3,29 @@ import { NextResponse } from 'next/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import {
+  configuredDriveCredentials,
   configuredDriveFolder,
+  configuredDriveRoot,
+  configuredDriveServiceAccountEmail,
   driveFolderUrl,
-  DRIVE_CATEGORY_LABELS,
   resolveReportFolder,
   uploadToGoogleDrive,
+  verifyDriveFolderAccess,
   type DriveCategory,
 } from '@/lib/google-drive'
+import {
+  REPORT_CATEGORIES,
+  REPORT_CATEGORY_META,
+  collectReportItems,
+  itemBytes,
+  type LotRow,
+  type ReportCategory,
+} from '@/lib/report-center-export'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
-const CATEGORIES: DriveCategory[] = [
-  'attendance',
-  'rentals',
-  'changes',
-  'taxi',
-  'shift',
-  'disaster',
-  'dengue',
-  'violation',
-]
-
-type LotRow = { id: string; name: string }
-
-type ExportItem = {
-  category: DriveCategory
-  parkingLotId: string
-  parkingLotName: string
-  sourceKey: string
-  fileName: string
-  mimeType: string
-  bucket?: string
-  path?: string
-  content?: string
-}
+const SETTING_KEY = 'google_drive_root_folder_id'
 
 function admin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -52,44 +40,15 @@ function monthStart(month: string) {
   return `${month}-01`
 }
 
-function nextMonthStart(month: string) {
-  const [year, monthNumber] = month.split('-').map(Number)
-  const date = new Date(year, monthNumber, 1)
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-01`
-}
+function parseDriveFolderId(input: unknown) {
+  const value = String(input || '').trim()
+  if (!value) return ''
 
-function safeName(value: unknown) {
-  return String(value || '')
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, '_')
-    .trim()
-}
+  const match = value.match(/\/folders\/([A-Za-z0-9_-]+)/i)
+  if (match?.[1]) return match[1]
 
-function csvEscape(value: unknown) {
-  const source = String(value ?? '')
-  if (/[",\n\r]/.test(source)) return `"${source.replace(/"/g, '""')}"`
-  return source
-}
-
-function rowsToCsv(headers: string[], rows: Record<string, unknown>[]) {
-  return (
-    '\uFEFF' +
-    [
-      headers.map(csvEscape).join(','),
-      ...rows.map((row) => headers.map((key) => csvEscape(row[key])).join(',')),
-    ].join('\r\n')
-  )
-}
-
-function groupByLot(rows: any[]) {
-  const map = new Map<string, any[]>()
-  for (const row of rows || []) {
-    const id = String(row?.parking_lot_id || '')
-    if (!id) continue
-    if (!map.has(id)) map.set(id, [])
-    map.get(id)!.push(row)
-  }
-  return map
+  if (/^[A-Za-z0-9_-]{10,}$/.test(value)) return value
+  throw new Error('Google Drive 資料夾格式不正確，請貼上資料夾網址或 Folder ID。')
 }
 
 async function authorize() {
@@ -110,7 +69,7 @@ async function authorize() {
 }
 
 async function allowedLots(db: ReturnType<typeof admin>, userId: string, role: string) {
-  let query = db.from('parking_lots').select('id,name').order('name')
+  let query = db.from('parking_lots').select('id,name').eq('status', 'active').order('name')
 
   if (role === 'manager') {
     const { data: assignments, error } = await db
@@ -121,7 +80,11 @@ async function allowedLots(db: ReturnType<typeof admin>, userId: string, role: s
     if (error) throw new Error(`停車場權限讀取失敗：${error.message}`)
 
     const ids = Array.from(
-      new Set((assignments || []).map((row: any) => String(row.parking_lot_id || '')).filter(Boolean))
+      new Set(
+        (assignments || [])
+          .map((row: any) => String(row.parking_lot_id || ''))
+          .filter(Boolean)
+      )
     )
 
     if (!ids.length) return [] as LotRow[]
@@ -133,368 +96,20 @@ async function allowedLots(db: ReturnType<typeof admin>, userId: string, role: s
   return (data || []) as LotRow[]
 }
 
-function photoText(type: string) {
-  const labels: Record<string, string> = {
-    overview: '車格和牌面全景',
-    center_window: '置中全窗',
-    right_window: '右側全窗',
-    left_window: '左側全窗',
-    daily: '每日追蹤',
-    general: '現場照片',
-  }
-  return labels[type] || type
+async function savedDriveRoot(db: ReturnType<typeof admin>) {
+  const { data, error } = await db
+    .from('report_center_settings')
+    .select('value')
+    .eq('key', SETTING_KEY)
+    .maybeSingle()
+
+  // 尚未執行第 6 段第 10 修正 SQL 時，不讓整個報表中心掛掉；仍可退回 Vercel env。
+  if (error) return ''
+  return String((data as any)?.value || '').trim()
 }
 
-function caseText(row: any) {
-  if (row?.case_type === 'reserved_violation') {
-    return row?.reserved_type === 'disabled' ? '身障違規' : '婦幼違規'
-  }
-  if (row?.case_type === 'long_stay') return '久停車'
-  return '無牌車'
-}
-
-async function collectItems(
-  db: ReturnType<typeof admin>,
-  category: DriveCategory,
-  month: string,
-  lots: LotRow[]
-): Promise<ExportItem[]> {
-  const start = monthStart(month)
-  const next = nextMonthStart(month)
-  const lotMap = new Map(lots.map((lot) => [String(lot.id), lot.name]))
-  const allowed = new Set(lots.map((lot) => String(lot.id)))
-  const items: ExportItem[] = []
-
-  if (category === 'attendance') {
-    const { data, error } = await db
-      .from('monthly_attendance_sheets')
-      .select('id,parking_lot_id,attendance_month,storage_path,file_name,mime_type,uploaded_at')
-      .eq('attendance_month', start)
-      .order('uploaded_at')
-    if (error) throw new Error(error.message)
-
-    for (const row of data || []) {
-      const lotId = String((row as any).parking_lot_id || '')
-      if (!allowed.has(lotId) || !(row as any).storage_path) continue
-      const lotName = lotMap.get(lotId) || '未知停車場'
-      items.push({
-        category,
-        parkingLotId: lotId,
-        parkingLotName: lotName,
-        sourceKey: `attendance:${(row as any).id}`,
-        fileName: `${month}_${safeName(lotName)}_簽到表_${safeName((row as any).file_name)}`,
-        mimeType: (row as any).mime_type || 'application/octet-stream',
-        bucket: 'monthly-attendance',
-        path: (row as any).storage_path,
-      })
-    }
-  }
-
-  if (category === 'disaster') {
-    const { data, error } = await db
-      .from('disaster_inspections')
-      .select('id,parking_lot_id,inspection_date,pdf_path,pdf_file_name,pdf_generated_at')
-      .not('pdf_path', 'is', null)
-      .gte('inspection_date', start)
-      .lt('inspection_date', next)
-      .order('inspection_date')
-    if (error) throw new Error(error.message)
-
-    for (const row of data || []) {
-      const lotId = String((row as any).parking_lot_id || '')
-      if (!allowed.has(lotId) || !(row as any).pdf_path) continue
-      const lotName = lotMap.get(lotId) || '未知停車場'
-      items.push({
-        category,
-        parkingLotId: lotId,
-        parkingLotName: lotName,
-        sourceKey: `disaster:${(row as any).id}:pdf`,
-        fileName: safeName(
-          (row as any).pdf_file_name || `${lotName}_${(row as any).inspection_date}_防災自主檢查表.pdf`
-        ),
-        mimeType: 'application/pdf',
-        bucket: 'disaster-inspection-pdfs',
-        path: (row as any).pdf_path,
-      })
-    }
-  }
-
-  if (category === 'dengue') {
-    const { data, error } = await db
-      .from('dengue_prevention_photos')
-      .select('id,parking_lot_id,work_date,storage_path,file_name,mime_type')
-      .eq('work_type', '自主檢查')
-      .eq('file_kind', 'report')
-      .gte('work_date', start)
-      .lt('work_date', next)
-      .order('work_date')
-    if (error) throw new Error(error.message)
-
-    for (const row of data || []) {
-      const lotId = String((row as any).parking_lot_id || '')
-      if (!allowed.has(lotId) || !(row as any).storage_path) continue
-      const lotName = lotMap.get(lotId) || '未知停車場'
-      items.push({
-        category,
-        parkingLotId: lotId,
-        parkingLotName: lotName,
-        sourceKey: `dengue:${(row as any).id}`,
-        fileName: `${(row as any).work_date}_${safeName(lotName)}_登革熱自主檢查_${safeName((row as any).file_name)}`,
-        mimeType: (row as any).mime_type || 'application/octet-stream',
-        bucket: 'dengue-prevention',
-        path: (row as any).storage_path,
-      })
-    }
-  }
-
-  if (category === 'violation') {
-    const { data: photos, error } = await db
-      .from('violation_parking_photos')
-      .select('id,case_id,parking_lot_id,photo_type,photo_date,storage_path,file_name,mime_type')
-      .gte('photo_date', start)
-      .lt('photo_date', next)
-      .order('photo_date')
-    if (error) throw new Error(error.message)
-
-    const scoped = (photos || []).filter((row: any) => allowed.has(String(row.parking_lot_id || '')))
-    const ids = Array.from(new Set(scoped.map((row: any) => String(row.case_id || '')).filter(Boolean)))
-    let cases = new Map<string, any>()
-
-    if (ids.length) {
-      const { data: caseRows, error: caseError } = await db
-        .from('violation_parking_cases')
-        .select('id,case_type,reserved_type,vehicle_plate,start_date')
-        .in('id', ids)
-      if (caseError) throw new Error(caseError.message)
-      cases = new Map((caseRows || []).map((row: any) => [String(row.id), row]))
-    }
-
-    for (const row of scoped as any[]) {
-      if (!row.storage_path) continue
-      const lotId = String(row.parking_lot_id || '')
-      const lotName = lotMap.get(lotId) || '未知停車場'
-      const c = cases.get(String(row.case_id || ''))
-      const plate = safeName(c?.vehicle_plate || '無牌')
-      items.push({
-        category,
-        parkingLotId: lotId,
-        parkingLotName: lotName,
-        sourceKey: `violation:${row.id}`,
-        fileName: `${row.photo_date}_${caseText(c)}_${plate}_${photoText(row.photo_type)}_${safeName(row.file_name)}`,
-        mimeType: row.mime_type || 'image/jpeg',
-        bucket: 'violation-parking',
-        path: row.storage_path,
-      })
-    }
-  }
-
-  if (category === 'rentals') {
-    const { data, error } = await db
-      .from('monthly_rentals')
-      .select(`
-        parking_lot_id,customer_code,customer_name,phone,vehicle_plate,vehicle_type,
-        rental_type,start_date,end_date,monthly_fee,payment_status,payment_date,
-        invoice_number,rental_status,notes,updated_at
-      `)
-      .order('parking_lot_id')
-      .order('customer_name')
-    if (error) throw new Error(error.message)
-
-    const grouped = groupByLot((data || []).filter((row: any) => allowed.has(String(row.parking_lot_id || ''))))
-
-    for (const lot of lots) {
-      const rows = (grouped.get(String(lot.id)) || []).map((row: any) => ({
-        客戶編號: row.customer_code || '',
-        姓名: row.customer_name || '',
-        電話: row.phone || '',
-        車牌: row.vehicle_plate || '',
-        車種: row.vehicle_type || '',
-        類型: row.rental_type || '',
-        租期開始: row.start_date || '',
-        租期結束: row.end_date || '',
-        月租金額: row.monthly_fee ?? '',
-        繳費狀態: row.payment_status || '',
-        繳費日期: row.payment_date || '',
-        發票號碼: row.invoice_number || '',
-        月租狀態: row.rental_status || '',
-        備註: row.notes || '',
-        更新時間: row.updated_at || '',
-      }))
-
-      items.push({
-        category,
-        parkingLotId: String(lot.id),
-        parkingLotName: lot.name,
-        sourceKey: `rentals:${lot.id}`,
-        fileName: `${month}_${safeName(lot.name)}_月租總表.csv`,
-        mimeType: 'text/csv;charset=utf-8',
-        content: rowsToCsv(
-          ['客戶編號','姓名','電話','車牌','車種','類型','租期開始','租期結束','月租金額','繳費狀態','繳費日期','發票號碼','月租狀態','備註','更新時間'],
-          rows
-        ),
-      })
-    }
-  }
-
-  if (category === 'changes') {
-    const { data, error } = await db
-      .from('monthly_rental_changes')
-      .select(`
-        parking_lot_id,customer_code,customer_name,phone,vehicle_plate,vehicle_type,
-        rental_type,change_type,effective_date,reason,source,created_at
-      `)
-      .gte('effective_date', start)
-      .lt('effective_date', next)
-      .order('effective_date')
-    if (error) throw new Error(error.message)
-
-    const grouped = groupByLot((data || []).filter((row: any) => allowed.has(String(row.parking_lot_id || ''))))
-    for (const lot of lots) {
-      const sourceRows = grouped.get(String(lot.id)) || []
-      if (!sourceRows.length) continue
-      const rows = sourceRows.map((row: any) => ({
-        客戶編號: row.customer_code || '',
-        姓名: row.customer_name || '',
-        電話: row.phone || '',
-        車牌: row.vehicle_plate || '',
-        車種: row.vehicle_type || '',
-        類型: row.rental_type || '',
-        異動類型: row.change_type || '',
-        生效日期: row.effective_date || '',
-        原因: row.reason || '',
-        來源: row.source || '',
-        建立時間: row.created_at || '',
-      }))
-      items.push({
-        category,
-        parkingLotId: String(lot.id),
-        parkingLotName: lot.name,
-        sourceKey: `changes:${lot.id}`,
-        fileName: `${month}_${safeName(lot.name)}_月租異動.csv`,
-        mimeType: 'text/csv;charset=utf-8',
-        content: rowsToCsv(
-          ['客戶編號','姓名','電話','車牌','車種','類型','異動類型','生效日期','原因','來源','建立時間'],
-          rows
-        ),
-      })
-    }
-  }
-
-  if (category === 'shift') {
-    const { data, error } = await db
-      .from('shift_closing_reports')
-      .select(`
-        parking_lot_id,closing_date,operator_name,closing_status,invoice_start_no,
-        invoice_end_no,amount_due,amount_paid,aps_monthly_count,aps_monthly_amount,
-        electronic_payment_total,mobile_payment_total,cash_actual,remittance_total,
-        remittance_status,created_at
-      `)
-      .gte('closing_date', start)
-      .lt('closing_date', next)
-      .order('closing_date')
-    if (error) throw new Error(error.message)
-
-    const grouped = groupByLot((data || []).filter((row: any) => allowed.has(String(row.parking_lot_id || ''))))
-    for (const lot of lots) {
-      const sourceRows = grouped.get(String(lot.id)) || []
-      if (!sourceRows.length) continue
-      const rows = sourceRows.map((row: any) => ({
-        結班日期: row.closing_date || '',
-        結班人員: row.operator_name || '',
-        狀態: row.closing_status || '',
-        發票起號: row.invoice_start_no || '',
-        發票迄號: row.invoice_end_no || '',
-        應收: row.amount_due ?? '',
-        實收: row.amount_paid ?? '',
-        APS月租筆數: row.aps_monthly_count ?? '',
-        APS月租金額: row.aps_monthly_amount ?? '',
-        電子支付: row.electronic_payment_total ?? '',
-        手機支付: row.mobile_payment_total ?? '',
-        現金實收: row.cash_actual ?? '',
-        匯款金額: row.remittance_total ?? '',
-        匯款狀態: row.remittance_status || '',
-        建立時間: row.created_at || '',
-      }))
-      items.push({
-        category,
-        parkingLotId: String(lot.id),
-        parkingLotName: lot.name,
-        sourceKey: `shift:${lot.id}`,
-        fileName: `${month}_${safeName(lot.name)}_結班報表.csv`,
-        mimeType: 'text/csv;charset=utf-8',
-        content: rowsToCsv(
-          ['結班日期','結班人員','狀態','發票起號','發票迄號','應收','實收','APS月租筆數','APS月租金額','電子支付','手機支付','現金實收','匯款金額','匯款狀態','建立時間'],
-          rows
-        ),
-      })
-    }
-  }
-
-  if (category === 'taxi') {
-    const { data, error } = await db
-      .from('taxi_discount_records')
-      .select('parking_lot_id,vehicle_plate,entry_time,exit_time,discount_amount,is_holiday,created_at')
-      .gte('entry_time', `${start}T00:00:00+08:00`)
-      .lt('entry_time', `${next}T00:00:00+08:00`)
-      .order('parking_lot_id')
-      .order('entry_time')
-    if (error) throw new Error(error.message)
-
-    const grouped = groupByLot((data || []).filter((row: any) => allowed.has(String(row.parking_lot_id || ''))))
-
-    // 延續既有規則：即使當月沒有計程車紀錄，各場仍建立空白月報。
-    for (const lot of lots) {
-      const sourceRows = grouped.get(String(lot.id)) || []
-      const dailyCounter: Record<string, number> = {}
-      const bodyRows = sourceRows
-        .map((row: any) => {
-          const entry = row.entry_time ? new Date(row.entry_time) : null
-          const exit = row.exit_time ? new Date(row.exit_time) : null
-          const date = entry
-            ? new Intl.DateTimeFormat('zh-TW', {
-                timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit',
-              }).format(entry)
-            : ''
-          dailyCounter[date] = (dailyCounter[date] || 0) + 1
-          const timeText = (value: Date | null) =>
-            value
-              ? new Intl.DateTimeFormat('zh-TW', {
-                  timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit', hour12: false,
-                }).format(value)
-              : ''
-          return `<tr><td>${dailyCounter[date]}</td><td>${date}</td><td>${String(row.vehicle_plate || '')}</td><td>${timeText(entry)}</td><td>${timeText(exit)}</td><td>${Number(row.discount_amount || 0)}</td><td>${row.is_holiday ? '是' : '否'}</td></tr>`
-        })
-        .join('')
-
-      const content = `<!doctype html><html><head><meta charset="utf-8"><style>table{border-collapse:collapse;width:100%;font-family:Arial,"Microsoft JhengHei",sans-serif}th,td{border:1px solid #000;text-align:center;padding:6px}.title{font-size:20px;font-weight:700}</style></head><body><table><tr><th class="title" colspan="7">新北市政府交通局計程車免費停車統計表（${lot.name}）</th></tr><tr><th>每日項次</th><th>日期</th><th>車牌</th><th>進場時間</th><th>離場時間</th><th>銷單金額</th><th>是否假日</th></tr>${bodyRows}</table></body></html>`
-
-      items.push({
-        category,
-        parkingLotId: String(lot.id),
-        parkingLotName: lot.name,
-        sourceKey: `taxi:${lot.id}`,
-        fileName: `${safeName(lot.name)}_計程車免費停車統計表.xls`,
-        mimeType: 'application/vnd.ms-excel',
-        content: '\uFEFF' + content,
-      })
-    }
-  }
-
-  return items
-}
-
-async function itemBytes(db: ReturnType<typeof admin>, item: ExportItem) {
-  if (typeof item.content === 'string') {
-    const encoded = new TextEncoder().encode(item.content)
-    const buffer = new ArrayBuffer(encoded.byteLength)
-    new Uint8Array(buffer).set(encoded)
-    return buffer
-  }
-
-  if (!item.bucket || !item.path) throw new Error('缺少 Storage 檔案位置')
-  const { data: blob, error } = await db.storage.from(item.bucket).download(item.path)
-  if (error || !blob) throw new Error(error?.message || 'Storage 下載失敗')
-  return blob.arrayBuffer()
+function effectiveFolder(savedRoot: string, category: ReportCategory) {
+  return savedRoot || configuredDriveFolder(category as DriveCategory)
 }
 
 function sha256(bytes: ArrayBuffer) {
@@ -503,18 +118,19 @@ function sha256(bytes: ArrayBuffer) {
 
 async function archiveCount(
   db: ReturnType<typeof admin>,
-  category: DriveCategory,
+  category: ReportCategory,
   month: string,
   lots: LotRow[]
 ) {
   if (!lots.length) return 0
+
   let query = db
     .from('report_center_drive_archives')
     .select('id', { count: 'exact', head: true })
     .eq('category', category)
     .eq('report_month', monthStart(month))
+    .in('parking_lot_id', lots.map((lot) => lot.id))
 
-  query = query.in('parking_lot_id', lots.map((lot) => lot.id))
   const { count, error } = await query
   if (error) throw new Error(`歸檔紀錄讀取失敗：${error.message}`)
   return count || 0
@@ -538,30 +154,38 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: '目前沒有指派可查看的停車場。' }, { status: 403 })
     }
 
-    const configured = {} as Record<DriveCategory, boolean>
-    const folderUrls = {} as Record<DriveCategory, string>
-    const counts = {} as Record<DriveCategory, number>
-    const archiveCounts = {} as Record<DriveCategory, number>
-    const categoryErrors = {} as Partial<Record<DriveCategory, string>>
+    const savedRoot = await savedDriveRoot(db)
+    const configured = {} as Record<ReportCategory, boolean>
+    const folderUrls = {} as Record<ReportCategory, string>
+    const counts = {} as Record<ReportCategory, number>
+    const archiveCounts = {} as Record<ReportCategory, number>
+    const categoryErrors = {} as Partial<Record<ReportCategory, string>>
 
-    // 每一個報表類別分開讀取。
-    // 某一張資料表權限或欄位異常時，不再讓整個報表中心一起失敗。
-    for (const category of CATEGORIES) {
-      const root = configuredDriveFolder(category)
-      configured[category] = Boolean(root)
+    // 每個類別獨立讀取，單一資料表異常不再拖垮整個報表中心。
+    for (const category of REPORT_CATEGORIES) {
+      const root = effectiveFolder(savedRoot, category)
+      configured[category] = Boolean(root && configuredDriveCredentials())
       folderUrls[category] = driveFolderUrl(root)
-      counts[category] = 0
-      archiveCounts[category] = 0
 
       try {
-        const items = await collectItems(db, category, month, lots)
+        const items = await collectReportItems(db, category, month, lots)
         counts[category] = items.length
+      } catch (error: any) {
+        counts[category] = 0
+        categoryErrors[category] = error?.message || '資料讀取失敗'
+      }
+
+      try {
         archiveCounts[category] = await archiveCount(db, category, month, lots)
-      } catch (categoryError: any) {
-        categoryErrors[category] =
-          categoryError?.message || `${DRIVE_CATEGORY_LABELS[category]}資料讀取失敗`
+      } catch (error: any) {
+        archiveCounts[category] = 0
+        categoryErrors[category] = categoryErrors[category]
+          ? `${categoryErrors[category]}；歸檔紀錄：${error?.message || '讀取失敗'}`
+          : `歸檔紀錄：${error?.message || '讀取失敗'}`
       }
     }
+
+    const root = savedRoot || configuredDriveRoot()
 
     return NextResponse.json({
       configured,
@@ -571,10 +195,92 @@ export async function GET(request: Request) {
       categoryErrors,
       role: profile.role,
       lotCount: lots.length,
+      driveRootFolderId: root,
+      driveRootFolderUrl: driveFolderUrl(root),
+      driveRootSettingSource: savedRoot ? 'database' : configuredDriveRoot() ? 'environment' : 'legacy',
+      driveCredentialsConfigured: configuredDriveCredentials(),
+      serviceAccountEmail: configuredDriveServiceAccountEmail(),
+      categories: REPORT_CATEGORIES.map((category) => ({
+        key: category,
+        ...REPORT_CATEGORY_META[category],
+      })),
     })
   } catch (error: any) {
     return NextResponse.json(
       { error: error?.message || 'Google Drive 狀態讀取失敗。' },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * 主管可直接在報表中心儲存公司 Google Drive「報表總資料夾」。
+ * 只儲存 Folder ID；服務帳號 email/private key 仍只放 Vercel 環境變數。
+ */
+export async function PUT(request: Request) {
+  try {
+    const { user, profile } = await authorize()
+    if (!user || !profile?.is_active || profile.role !== 'supervisor') {
+      return NextResponse.json({ error: '只有主管可以設定 Google Drive 總資料夾。' }, { status: 403 })
+    }
+
+    if (!configuredDriveCredentials()) {
+      return NextResponse.json(
+        { error: 'Vercel 尚未設定 Google Drive 服務帳號 email / private key。' },
+        { status: 400 }
+      )
+    }
+
+    const body = await request.json().catch(() => ({}))
+    const folderId = parseDriveFolderId(body?.folder)
+    if (!folderId) {
+      return NextResponse.json({ error: '請輸入 Google Drive 資料夾網址或 Folder ID。' }, { status: 400 })
+    }
+
+    // 先確認服務帳號真的看得到且可新增子資料夾，避免「設定成功但仍無法上傳」。
+    const folder = await verifyDriveFolderAccess(folderId)
+    const db = admin()
+
+    const { error } = await db.from('report_center_settings').upsert(
+      {
+        key: SETTING_KEY,
+        value: folderId,
+        updated_by: user.id,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'key' }
+    )
+
+    if (error) {
+      throw new Error(
+        error.code === '42P01'
+          ? '尚未建立 report_center_settings，請先執行第 6 段第 10 修正 SQL。'
+          : error.message
+      )
+    }
+
+    try {
+      await db.from('system_logs').insert({
+        user_id: user.id,
+        parking_lot_id: null,
+        action: 'REPORT_CENTER_DRIVE_ROOT_UPDATED',
+        entity_type: 'report_center_settings',
+        entity_id: null,
+        detail: { folder_id: folderId, folder_name: folder.name },
+      })
+    } catch {
+      // 稽核紀錄失敗不阻止設定。
+    }
+
+    return NextResponse.json({
+      ok: true,
+      folderId,
+      folderName: folder.name,
+      folderUrl: driveFolderUrl(folderId),
+    })
+  } catch (error: any) {
+    return NextResponse.json(
+      { error: error?.message || 'Google Drive 資料夾設定失敗。' },
       { status: 500 }
     )
   }
@@ -588,29 +294,37 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const category = String(body?.category || '') as DriveCategory
+    const category = String(body?.category || '') as ReportCategory
     const month = String(body?.month || '').trim()
 
-    if (!CATEGORIES.includes(category)) {
+    if (!REPORT_CATEGORIES.includes(category)) {
       return NextResponse.json({ error: '上傳類型錯誤。' }, { status: 400 })
     }
     if (!/^\d{4}-\d{2}$/.test(month)) {
       return NextResponse.json({ error: '月份格式錯誤。' }, { status: 400 })
     }
-    if (!configuredDriveFolder(category)) {
+    if (!configuredDriveCredentials()) {
       return NextResponse.json(
-        { error: `尚未設定「${DRIVE_CATEGORY_LABELS[category]}」Google Drive 資料夾。` },
+        { error: 'Vercel 尚未設定 Google Drive 服務帳號 email / private key。' },
         { status: 400 }
       )
     }
 
     const db = admin()
+    const savedRoot = await savedDriveRoot(db)
+    if (!effectiveFolder(savedRoot, category)) {
+      return NextResponse.json(
+        { error: '尚未設定公司 Google Drive 報表總資料夾，請主管先在報表中心完成設定。' },
+        { status: 400 }
+      )
+    }
+
     const lots = await allowedLots(db, user.id, profile.role)
     if (!lots.length) {
       return NextResponse.json({ error: '目前沒有指派可歸檔的停車場。' }, { status: 403 })
     }
 
-    const items = await collectItems(db, category, month, lots)
+    const items = await collectReportItems(db, category, month, lots)
     if (!items.length) {
       return NextResponse.json({ error: '這個月份沒有可歸檔的資料。' }, { status: 400 })
     }
@@ -640,9 +354,10 @@ export async function POST(request: Request) {
         }
 
         const folderId = await resolveReportFolder({
-          category,
+          category: category as DriveCategory,
           month,
           parkingLotName: item.parkingLotName,
+          rootFolderIdOverride: savedRoot || undefined,
         })
 
         const driveFile = await uploadToGoogleDrive({
@@ -697,13 +412,15 @@ export async function POST(request: Request) {
       // 稽核紀錄失敗不阻止歸檔結果回傳。
     }
 
+    const effectiveRoot = effectiveFolder(savedRoot, category)
+
     return NextResponse.json({
       ok: failures.length === 0,
       uploaded,
       skipped,
       failed: failures.length,
       failures: failures.slice(0, 20),
-      folderUrl: driveFolderUrl(configuredDriveFolder(category)),
+      folderUrl: driveFolderUrl(effectiveRoot),
     })
   } catch (error: any) {
     return NextResponse.json(
