@@ -301,7 +301,12 @@ export async function collectReportItems(
       .eq('is_active', true)
       .in('parking_lot_id', lots.map((lot) => lot.id))
     if (termError) throw new Error(termError.message)
-    const termMap = new Map((termRows || []).map((row: any) => [String(row.parking_lot_id), row]))
+    const termMap = new Map<string, any>(
+      (termRows || []).map((row: any): [string, any] => [
+        String(row.parking_lot_id || ''),
+        row,
+      ])
+    )
 
     const grouped = groupByLot(scopedRows)
     for (const lot of lots) {
