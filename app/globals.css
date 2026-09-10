@@ -395,3 +395,54 @@ svg {
     line-height: 1.55;
   }
 }
+
+/* ============================================================
+   第6段第8修正：全站字體再放大一級
+   僅套用螢幕顯示，不影響列印 / 正式 PDF 固定版面。
+   ============================================================ */
+@media screen {
+  body {
+    font-size: 19px;
+    line-height: 1.6;
+  }
+
+  .brand {
+    font-size: 20px;
+  }
+
+  .sidebar a {
+    font-size: 18px;
+    line-height: 1.5;
+  }
+
+  .stat {
+    font-size: 32px;
+  }
+
+  .muted {
+    font-size: 16px !important;
+    line-height: 1.6;
+  }
+
+  .field label {
+    font-size: 18px;
+  }
+
+  button,
+  input,
+  select,
+  textarea,
+  .btn {
+    font-size: 19px !important;
+  }
+
+  .table th,
+  .table td {
+    font-size: 17px !important;
+    line-height: 1.6;
+  }
+
+  .table th {
+    font-weight: 800;
+  }
+}

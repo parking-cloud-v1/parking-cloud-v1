@@ -307,3 +307,15 @@
     box-shadow: none !important;
   }
 }
+
+/* 第6段第8修正：民眾端字體再放大一級（screen only） */
+@media screen {
+  .portal{font-size:19px!important;line-height:1.65}
+  .portal::before{font-size:15px}
+  .portal label{font-size:18px}
+  .portal input:not([type="checkbox"]),.portal select,.portal textarea{font-size:20px!important}
+  .portal button{font-size:19px!important}
+  .pageLead{font-size:19px}
+  .lotCard::after{font-size:15px}
+  .lotHero::before{font-size:15px}
+}

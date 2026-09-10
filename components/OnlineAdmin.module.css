@@ -448,3 +448,19 @@
     padding: 16px !important;
   }
 }
+
+/* 第6段第8修正：線上管理介面字體再放大一級（screen only） */
+@media screen {
+  .page{font-size:19px;line-height:1.6}
+  .page h1{font-size:clamp(30px,3vw,38px)}
+  .page h2{font-size:24px}
+  .page :global(.btn),.page button{font-size:18px}
+  .page input:not([type='checkbox']):not([type='radio']),.page select,.page textarea{font-size:19px}
+  .page label{font-size:18px}
+  .page table{font-size:18px}
+  .page thead th{font-size:16px}
+  .eyebrow{font-size:16px}.headerActions a{font-size:17px}.lotBanner{font-size:18px}
+  .metricLabel{font-size:16px}.metricValue{font-size:31px}
+  .navIcon{font-size:22px}.navTitle{font-size:21px}.navBadge{font-size:18px}.navDesc{font-size:17px}.chip{font-size:16px}
+}
+@media screen and (max-width:640px){.page h1{font-size:32px}}

@@ -121,3 +121,12 @@
   .navList { grid-template-columns:1fr 1fr; }
   .main { padding:16px 10px 32px; }
 }
+
+/* 第6段第8修正：平台框架字體再放大一級（screen only） */
+@media screen {
+  .brandMark{font-size:18px}.brandTitle{font-size:21px}.brandSub{font-size:14px}
+  .userName{font-size:18px}.userRole{font-size:16px}.warning{font-size:17px}
+  .lotLabel{font-size:14px}.lotName{font-size:18px}.lotHint{font-size:14px}.lotError{font-size:16px}.lotSelect{font-size:17px}
+  .navSectionTitle{font-size:13px}.navLink{font-size:17px}.navIcon{font-size:15px}
+}
+@media screen and (max-width:620px){.brandTitle{font-size:19px}}
