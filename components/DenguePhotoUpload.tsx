@@ -1,11 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
 function today() {
   const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+    d.getDate()
+  ).padStart(2, '0')}`
 }
 
 function storageWorkType(value: WorkType) {
@@ -40,6 +42,14 @@ type Row = {
   uploaded_at: string
 }
 
+type DailyFolder = {
+  date: string
+  rows: Row[]
+  photoCount: number
+  reportCount: number
+  workTypes: string[]
+}
+
 function kindText(value?: FileKind | null) {
   return value === 'report' ? '報表' : '照片'
 }
@@ -71,7 +81,28 @@ export default function DenguePhotoUpload({
   const [rows, setRows] = useState<Row[]>([])
   const [savingPhotos, setSavingPhotos] = useState(false)
   const [savingReport, setSavingReport] = useState(false)
+  const [downloadingDate, setDownloadingDate] = useState('')
   const [message, setMessage] = useState('')
+
+  const dailyFolders = useMemo<DailyFolder[]>(() => {
+    const grouped = new Map<string, Row[]>()
+
+    for (const row of rows) {
+      const list = grouped.get(row.work_date) || []
+      list.push(row)
+      grouped.set(row.work_date, list)
+    }
+
+    return Array.from(grouped.entries())
+      .map(([date, groupRows]) => ({
+        date,
+        rows: groupRows,
+        photoCount: groupRows.filter((row) => row.file_kind !== 'report').length,
+        reportCount: groupRows.filter((row) => row.file_kind === 'report').length,
+        workTypes: Array.from(new Set(groupRows.map((row) => row.work_type).filter(Boolean))),
+      }))
+      .sort((a, b) => b.date.localeCompare(a.date))
+  }, [rows])
 
   useEffect(() => {
     void loadRows()
@@ -87,7 +118,9 @@ export default function DenguePhotoUpload({
 
     const { data, error } = await supabase
       .from('dengue_prevention_photos')
-      .select('id,work_date,work_type,file_kind,storage_path,file_name,mime_type,file_size,note,uploaded_at')
+      .select(
+        'id,work_date,work_type,file_kind,storage_path,file_name,mime_type,file_size,note,uploaded_at'
+      )
       .eq('parking_lot_id', parkingLotId)
       .gte('work_date', `${y}-${m}-${d}`)
       .order('work_date', { ascending: false })
@@ -119,10 +152,11 @@ export default function DenguePhotoUpload({
     userId: string,
     index = 0
   ) {
-    // Supabase Storage object key uses ASCII-only path segments.
-    // Keep the user's original filename in dengue_prevention_photos.file_name
-    // so downloads still use the original Chinese filename.
-    const path = `${parkingLotId}/${storageWorkType(workType)}/${workDate}/${fileKind}/${Date.now()}_${index}.${safeExtension(file)}`
+    // Storage 本身就依「停車場／作業類型／日期」分層；
+    // 同一天再次上傳會持續放進同一個日期資料夾。
+    const path = `${parkingLotId}/${storageWorkType(workType)}/${workDate}/${fileKind}/${Date.now()}_${index}.${safeExtension(
+      file
+    )}`
 
     const { error: uploadError } = await supabase.storage
       .from('dengue-prevention')
@@ -151,10 +185,7 @@ export default function DenguePhotoUpload({
       })
 
     if (rowError) {
-      await supabase.storage
-        .from('dengue-prevention')
-        .remove([path])
-
+      await supabase.storage.from('dengue-prevention').remove([path])
       throw rowError
     }
   }
@@ -183,10 +214,14 @@ export default function DenguePhotoUpload({
 
       const count = photoFiles.length
       setPhotoFiles([])
-      const input = document.getElementById('dengue-photo-files') as HTMLInputElement | null
+      const input = document.getElementById(
+        'dengue-photo-files'
+      ) as HTMLInputElement | null
       if (input) input.value = ''
 
-      setMessage(`已上傳 ${count} 張「${workType}」照片。`)
+      setMessage(
+        `已上傳 ${count} 張「${workType}」照片，已自動歸入 ${workDate} 每日資料夾。`
+      )
       await loadRows()
     } catch (error: any) {
       setMessage('照片上傳失敗：' + (error?.message || '未知錯誤'))
@@ -219,10 +254,12 @@ export default function DenguePhotoUpload({
       await insertFile(reportFile, 'report', userId)
 
       setReportFile(null)
-      const input = document.getElementById('dengue-report-file') as HTMLInputElement | null
+      const input = document.getElementById(
+        'dengue-report-file'
+      ) as HTMLInputElement | null
       if (input) input.value = ''
 
-      setMessage(`已上傳「${workType}」報表。`)
+      setMessage(`已上傳「${workType}」報表，已自動歸入 ${workDate} 每日資料夾。`)
       await loadRows()
     } catch (error: any) {
       setMessage('報表上傳失敗：' + (error?.message || '未知錯誤'))
@@ -231,24 +268,54 @@ export default function DenguePhotoUpload({
     }
   }
 
-  async function download(row: Row) {
-    const { data, error } = await supabase.storage
-      .from('dengue-prevention')
-      .download(row.storage_path)
+  async function downloadDay(date: string) {
+    if (!parkingLotId || downloadingDate) return
 
-    if (error || !data) {
-      setMessage('下載失敗：' + (error?.message || '找不到檔案'))
-      return
+    setDownloadingDate(date)
+    setMessage('')
+
+    try {
+      const response = await fetch(
+        `/api/dengue-prevention/daily-download?parkingLotId=${encodeURIComponent(
+          parkingLotId
+        )}&date=${encodeURIComponent(date)}`,
+        { cache: 'no-store' }
+      )
+
+      if (!response.ok) {
+        let errorText = '每日資料夾下載失敗。'
+        try {
+          const json = await response.json()
+          errorText = json?.error || errorText
+        } catch {
+          // 非 JSON 錯誤就使用預設訊息。
+        }
+        throw new Error(errorText)
+      }
+
+      const blob = await response.blob()
+      const disposition = response.headers.get('content-disposition') || ''
+      const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+      const fallbackName = `${date}_${parkingLotName || '停車場'}_登革熱消毒.zip`
+      const fileName = utf8Match?.[1]
+        ? decodeURIComponent(utf8Match[1])
+        : fallbackName
+
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = fileName
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 1500)
+
+      setMessage(`${date} 每日資料夾已開始下載。`)
+    } catch (error: any) {
+      setMessage(error?.message || '每日資料夾下載失敗。')
+    } finally {
+      setDownloadingDate('')
     }
-
-    const url = URL.createObjectURL(data)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = row.file_name
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    setTimeout(() => URL.revokeObjectURL(url), 1500)
   }
 
   async function remove(row: Row) {
@@ -334,6 +401,19 @@ export default function DenguePhotoUpload({
             placeholder="例如：9 月自主檢查／委外消毒完成"
           />
         </div>
+
+        <div
+          style={{
+            marginTop: 14,
+            padding: 12,
+            borderRadius: 10,
+            background: '#eff6ff',
+            color: '#1e3a8a',
+            fontWeight: 700,
+          }}
+        >
+          上傳成功後會自動依「日期」整理成每日資料夾；同一天追加上傳也會併入同一日。
+        </div>
       </div>
 
       <div
@@ -347,7 +427,7 @@ export default function DenguePhotoUpload({
         <div className="card" style={{ padding: 20 }}>
           <h2 style={{ marginTop: 0 }}>作業照片上傳</h2>
           <p className="muted">
-            現場照片可複選；作業類型只保留「自主檢查」與「委外消毒」。
+            現場照片可複選；上傳完成後不用逐張整理，系統會直接放進當日資料夾。
           </p>
 
           <div className="field">
@@ -380,7 +460,7 @@ export default function DenguePhotoUpload({
           <div className="card" style={{ padding: 20 }}>
             <h2 style={{ marginTop: 0 }}>報表上傳</h2>
             <p className="muted">
-              自主檢查完成後可上傳報表；委外消毒不需要報表上傳。
+              自主檢查完成後可上傳報表；同日照片與報表下載時會整理在同一個每日 ZIP 裡。
             </p>
 
             <div className="field">
@@ -389,7 +469,9 @@ export default function DenguePhotoUpload({
                 id="dengue-report-file"
                 type="file"
                 accept=".pdf,.xlsx,.xls,.doc,.docx,.jpg,.jpeg,.png"
-                onChange={(event) => setReportFile(event.target.files?.[0] || null)}
+                onChange={(event) =>
+                  setReportFile(event.target.files?.[0] || null)
+                }
               />
             </div>
 
@@ -413,7 +495,7 @@ export default function DenguePhotoUpload({
           <div className="card" style={{ padding: 20 }}>
             <h2 style={{ marginTop: 0 }}>委外消毒</h2>
             <p className="muted" style={{ marginBottom: 0 }}>
-              委外消毒只需要上傳作業照片，不需要另外上傳報表。
+              委外消毒只需要上傳作業照片；同一天的照片會集中成一個每日資料夾，不需要逐張下載。
             </p>
           </div>
         )}
@@ -425,8 +507,14 @@ export default function DenguePhotoUpload({
             marginTop: 14,
             padding: 12,
             borderRadius: 10,
-            background: message.includes('失敗') ? '#fef2f2' : '#f0fdf4',
-            color: message.includes('失敗') ? '#b91c1c' : '#166534',
+            background:
+              message.includes('失敗') || message.includes('錯誤')
+                ? '#fef2f2'
+                : '#f0fdf4',
+            color:
+              message.includes('失敗') || message.includes('錯誤')
+                ? '#b91c1c'
+                : '#166534',
             fontWeight: 700,
           }}
         >
@@ -435,59 +523,117 @@ export default function DenguePhotoUpload({
       )}
 
       <div className="card" style={{ marginTop: 18, padding: 20 }}>
-        <h2 style={{ marginTop: 0 }}>最近上傳資料</h2>
+        <h2 style={{ marginTop: 0 }}>每日作業資料夾</h2>
+        <p className="muted">
+          每個日期只顯示一個資料夾。按「下載當日資料夾」會一次取得當日所有照片與報表 ZIP。
+        </p>
 
-        {!rows.length ? (
+        {!dailyFolders.length ? (
           <div className="muted">最近 6 個月尚無資料。</div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table
-              style={{
-                width: '100%',
-                minWidth: 900,
-                borderCollapse: 'collapse',
-              }}
-            >
-              <thead>
-                <tr>
-                  <th>日期</th>
-                  <th>作業類型</th>
-                  <th>資料類型</th>
-                  <th>檔名</th>
-                  <th>備註</th>
-                  <th>上傳時間</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id} style={{ borderTop: '1px solid #e5e7eb' }}>
-                    <td style={{ padding: 8 }}>{row.work_date}</td>
-                    <td style={{ padding: 8 }}>{row.work_type}</td>
-                    <td style={{ padding: 8 }}>{kindText(row.file_kind)}</td>
-                    <td style={{ padding: 8 }}>{row.file_name}</td>
-                    <td style={{ padding: 8 }}>{row.note || '-'}</td>
-                    <td style={{ padding: 8 }}>
-                      {new Date(row.uploaded_at).toLocaleString('zh-TW')}
-                    </td>
-                    <td style={{ padding: 8 }}>
-                      <div style={{ display: 'flex', gap: 10 }}>
-                        <button type="button" onClick={() => download(row)}>
-                          下載
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => remove(row)}
-                          style={{ color: '#b91c1c' }}
-                        >
-                          刪除
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div style={{ display: 'grid', gap: 12 }}>
+            {dailyFolders.map((folder) => (
+              <div
+                key={folder.date}
+                style={{
+                  border: '1px solid #dbe3ec',
+                  borderRadius: 12,
+                  padding: 16,
+                  background: '#fff',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 12,
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: 19, fontWeight: 900 }}>
+                      📁 {folder.date}
+                    </div>
+                    <div className="muted" style={{ marginTop: 5 }}>
+                      {folder.workTypes.join('＋') || '登革熱作業'}｜照片 {folder.photoCount}{' '}
+                      張
+                      {folder.reportCount > 0
+                        ? `｜報表 ${folder.reportCount} 份`
+                        : ''}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={Boolean(downloadingDate)}
+                    onClick={() => downloadDay(folder.date)}
+                  >
+                    {downloadingDate === folder.date
+                      ? '整理 ZIP 中…'
+                      : '下載當日資料夾'}
+                  </button>
+                </div>
+
+                <details style={{ marginTop: 12 }}>
+                  <summary
+                    style={{
+                      cursor: 'pointer',
+                      fontWeight: 700,
+                    }}
+                  >
+                    查看檔案明細／刪除誤傳檔案
+                  </summary>
+
+                  <div style={{ overflowX: 'auto', marginTop: 10 }}>
+                    <table
+                      style={{
+                        width: '100%',
+                        minWidth: 760,
+                        borderCollapse: 'collapse',
+                      }}
+                    >
+                      <thead>
+                        <tr>
+                          <th>作業類型</th>
+                          <th>資料類型</th>
+                          <th>檔名</th>
+                          <th>備註</th>
+                          <th>上傳時間</th>
+                          <th>操作</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {folder.rows.map((row) => (
+                          <tr
+                            key={row.id}
+                            style={{ borderTop: '1px solid #e5e7eb' }}
+                          >
+                            <td style={{ padding: 8 }}>{row.work_type}</td>
+                            <td style={{ padding: 8 }}>{kindText(row.file_kind)}</td>
+                            <td style={{ padding: 8 }}>{row.file_name}</td>
+                            <td style={{ padding: 8 }}>{row.note || '-'}</td>
+                            <td style={{ padding: 8 }}>
+                              {new Date(row.uploaded_at).toLocaleString('zh-TW')}
+                            </td>
+                            <td style={{ padding: 8 }}>
+                              <button
+                                type="button"
+                                onClick={() => remove(row)}
+                                style={{ color: '#b91c1c' }}
+                              >
+                                刪除
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              </div>
+            ))}
           </div>
         )}
       </div>

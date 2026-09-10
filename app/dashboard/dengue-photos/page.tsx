@@ -46,7 +46,7 @@ export default async function DenguePhotosPage() {
     <div>
       <h1 style={{ marginBottom: 6 }}>登革熱消毒作業</h1>
       <p className="muted" style={{ marginTop: 0 }}>
-        現場只保留「自主檢查」與「委外消毒」兩種作業，可上傳照片與完成報表；主管可於報表中心依類型一鍵下載報表。
+        現場上傳成功後，系統會依作業日期自動整理成每日資料夾；同一天的照片可一次下載，不需要逐張下載。
       </p>
 
       {!lotId ? (
@@ -56,7 +56,7 @@ export default async function DenguePhotosPage() {
       ) : (
         <div style={{ marginTop: 20 }}>
           <DenguePhotoUpload
-            parkingLotId={lotId}
+            parkingLotId={lotId || ''}
             parkingLotName={lotName || '目前停車場'}
           />
         </div>
