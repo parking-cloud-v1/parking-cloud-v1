@@ -9,6 +9,24 @@ function num(value: unknown) {
   return Number.isFinite(result) ? result : 0
 }
 
+function timeValue(value: unknown) {
+  const date = new Date(String(value || ''))
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime()
+}
+
+type GroupedRow = {
+  key: string
+  status: 'accumulating' | 'remitted'
+  representative: any
+  rows: any[]
+  startDate: string
+  endDate: string
+  total: number
+  count: number
+  remittedAt: string | null
+  sortAt: number
+}
+
 export default async function ShiftClosingPage({
   searchParams,
 }: {
@@ -53,6 +71,7 @@ export default async function ShiftClosingPage({
       id,
       parking_lot_id,
       closing_date,
+      shift_start_at,
       shift_end_at,
       closing_status,
       amount_paid,
@@ -84,52 +103,160 @@ export default async function ShiftClosingPage({
     )
   }
 
-  if (date) {
-    query = query.eq(
-      'closing_date',
-      date
-    )
-  }
-
-  if (remittance) {
-    query = query.eq(
-      'remittance_status',
-      remittance
-    )
-  }
-
   const reportsResult = await query
-
-  const pendingResult = workLotId
-    ? await supabase
-        .from('shift_closing_reports')
-        .select('id, remittance_total')
-        .eq('parking_lot_id', workLotId)
-        .or(
-          'remittance_status.eq.accumulating,remittance_status.is.null'
-        )
-    : {
-        data: [],
-        error: null,
-      }
-
-  const reports =
-    reportsResult.data || []
+  const rawReports = reportsResult.data || []
   const error = reportsResult.error
 
-  const pendingReports =
-    pendingResult.data || []
+  const pendingRows = rawReports.filter(
+    (item: any) =>
+      item.remittance_status !== 'remitted'
+  )
 
-  const pendingTotal =
-    pendingReports.reduce(
-      (total: number, item: any) =>
-        total +
-        num(item.remittance_total),
-      0
+  const grouped: GroupedRow[] = []
+
+  if (pendingRows.length > 0) {
+    const sorted = [...pendingRows].sort(
+      (a: any, b: any) =>
+        timeValue(b.shift_end_at) -
+        timeValue(a.shift_end_at)
     )
 
-  const pendingCount =
-    pendingReports.length
+    const dates = pendingRows
+      .map((item: any) =>
+        String(item.closing_date || '')
+      )
+      .filter(Boolean)
+      .sort()
+
+    grouped.push({
+      key: 'pending-current-cycle',
+      status: 'accumulating',
+      representative: sorted[0],
+      rows: pendingRows,
+      startDate: dates[0] || '',
+      endDate:
+        dates[dates.length - 1] || '',
+      total: pendingRows.reduce(
+        (sum: number, item: any) =>
+          sum + num(item.remittance_total),
+        0
+      ),
+      count: pendingRows.length,
+      remittedAt: null,
+      sortAt: timeValue(
+        sorted[0]?.shift_end_at
+      ),
+    })
+  }
+
+  const remittedMap = new Map<
+    string,
+    any[]
+  >()
+
+  for (const item of rawReports) {
+    if (
+      item.remittance_status !==
+      'remitted'
+    ) {
+      continue
+    }
+
+    const key =
+      item.remittance_batch_id ||
+      `legacy-${item.id}`
+
+    if (!remittedMap.has(key)) {
+      remittedMap.set(key, [])
+    }
+
+    remittedMap.get(key)!.push(item)
+  }
+
+  for (const [key, rows] of remittedMap) {
+    const sorted = [...rows].sort(
+      (a: any, b: any) =>
+        timeValue(b.shift_end_at) -
+        timeValue(a.shift_end_at)
+    )
+
+    const representative = sorted[0]
+    const dates = rows
+      .map((item: any) =>
+        String(item.closing_date || '')
+      )
+      .filter(Boolean)
+      .sort()
+
+    const batchTotal =
+      num(
+        representative
+          ?.remittance_batch_total
+      ) ||
+      rows.reduce(
+        (sum: number, item: any) =>
+          sum + num(item.remittance_total),
+        0
+      )
+
+    const batchCount =
+      num(
+        representative
+          ?.remittance_batch_report_count
+      ) || rows.length
+
+    grouped.push({
+      key,
+      status: 'remitted',
+      representative,
+      rows,
+      startDate: dates[0] || '',
+      endDate:
+        dates[dates.length - 1] || '',
+      total: batchTotal,
+      count: batchCount,
+      remittedAt:
+        representative?.remitted_at || null,
+      sortAt:
+        timeValue(
+          representative?.remitted_at
+        ) ||
+        timeValue(
+          representative?.shift_end_at
+        ),
+    })
+  }
+
+  const displayRows = grouped
+    .filter((group) => {
+      if (
+        remittance &&
+        group.status !== remittance
+      ) {
+        return false
+      }
+
+      if (
+        date &&
+        !group.rows.some(
+          (item: any) =>
+            item.closing_date === date
+        )
+      ) {
+        return false
+      }
+
+      return true
+    })
+    .sort((a, b) => b.sortAt - a.sortAt)
+
+  const pendingTotal = pendingRows.reduce(
+    (total: number, item: any) =>
+      total + num(item.remittance_total),
+    0
+  )
+
+  const pendingCount = pendingRows.length
 
   return (
     <div>
@@ -231,7 +358,7 @@ export default async function ShiftClosingPage({
             }}
           >
             {pendingCount > 0
-              ? `目前共有 ${pendingCount} 班尚未匯款；下一班會繼續接續累積。`
+              ? `目前共有 ${pendingCount} 班尚未匯款；主列表只顯示一筆累積中紀錄，按「編輯」可查看全部明細。`
               : '目前沒有尚未匯款的結班資料。'}
           </div>
         </div>
@@ -316,136 +443,116 @@ export default async function ShiftClosingPage({
           overflowX: 'auto',
         }}
       >
-        <h2>結班紀錄</h2>
+        <h2>匯款週期紀錄</h2>
+
+        <div
+          className="muted"
+          style={{
+            marginBottom: 14,
+          }}
+        >
+          累積中的班別只顯示一列；匯款完成後，每一批只保留一列留底紀錄。每班原始資料仍保留在系統內供明細查詢。
+        </div>
 
         <table
           className="table"
-          style={{ minWidth: 1080 }}
+          style={{ minWidth: 980 }}
         >
           <thead>
             <tr>
               <th>停車場</th>
-              <th>結班日期</th>
-              <th>結班狀態</th>
+              <th>累積期間</th>
               <th>匯款狀態</th>
-              <th>實收</th>
-              <th>本班匯款</th>
+              <th>班數</th>
               <th>待匯／批次總額</th>
-              <th>值班人員</th>
+              <th>匯款完成時間</th>
               <th>操作</th>
             </tr>
           </thead>
 
           <tbody>
-            {reports.map(
-              (item: any) => {
-                const lot = Array.isArray(
-                  item.parking_lots
-                )
-                  ? item.parking_lots[0] ||
-                    null
-                  : item.parking_lots ||
-                    null
+            {displayRows.map((group) => {
+              const item =
+                group.representative
+              const lot = Array.isArray(
+                item?.parking_lots
+              )
+                ? item.parking_lots[0] ||
+                  null
+                : item?.parking_lots || null
 
-                const isRemitted =
-                  item.remittance_status ===
-                  'remitted'
+              const period =
+                group.startDate &&
+                group.endDate &&
+                group.startDate !==
+                  group.endDate
+                  ? `${group.startDate} ～ ${group.endDate}`
+                  : group.startDate || '-'
 
-                const cycleAmount =
-                  isRemitted
-                    ? num(
-                        item.remittance_batch_total
-                      ) ||
-                      num(
-                        item.remittance_total
-                      )
-                    : pendingTotal
+              return (
+                <tr key={group.key}>
+                  <td>
+                    {lot?.name || '-'}
+                  </td>
 
-                const cycleCount =
-                  isRemitted
-                    ? num(
-                        item.remittance_batch_report_count
-                      ) || 1
-                    : pendingCount
+                  <td>{period}</td>
 
-                return (
-                  <tr key={item.id}>
-                    <td>
-                      {lot?.name || '-'}
-                    </td>
-
-                    <td>
-                      {item.closing_date}
-                    </td>
-
-                    <td>
-                      {item.closing_status ===
-                      'abnormal'
-                        ? '異常'
-                        : '正常'}
-                    </td>
-
-                    <td>
-                      {isRemitted
+                  <td>
+                    <strong
+                      style={{
+                        color:
+                          group.status ===
+                          'remitted'
+                            ? '#15803d'
+                            : '#b45309',
+                      }}
+                    >
+                      {group.status ===
+                      'remitted'
                         ? '已匯款'
                         : '累積中'}
-                    </td>
+                    </strong>
+                  </td>
 
-                    <td>
+                  <td>
+                    {group.count} 班
+                  </td>
+
+                  <td>
+                    <strong>
                       NT${' '}
-                      {num(
-                        item.amount_paid
-                      ).toLocaleString()}
-                    </td>
+                      {group.total.toLocaleString()}
+                    </strong>
+                  </td>
 
-                    <td>
-                      NT${' '}
-                      {num(
-                        item.remittance_total
-                      ).toLocaleString()}
-                    </td>
+                  <td>
+                    {group.remittedAt
+                      ? new Date(
+                          group.remittedAt
+                        ).toLocaleString(
+                          'zh-TW'
+                        )
+                      : '-'}
+                  </td>
 
-                    <td>
-                      <strong>
-                        NT${' '}
-                        {cycleAmount.toLocaleString()}
-                      </strong>
-                      <div
-                        className="muted"
-                        style={{
-                          fontSize: 12,
-                          marginTop: 2,
-                        }}
-                      >
-                        {isRemitted
-                          ? `本批 ${cycleCount} 班`
-                          : `目前 ${cycleCount} 班待匯`}
-                      </div>
-                    </td>
+                  <td>
+                    <Link
+                      href={`/dashboard/shift-closing/${item.id}/edit`}
+                    >
+                      {group.status ===
+                      'remitted'
+                        ? '查看留底'
+                        : '編輯／查看明細'}
+                    </Link>
+                  </td>
+                </tr>
+              )
+            })}
 
-                    <td>
-                      {item.operator_name ||
-                        '-'}
-                    </td>
-
-                    <td>
-                      <Link
-                        href={`/dashboard/shift-closing/${item.id}/edit`}
-                      >
-                        {isRemitted
-                          ? '查看'
-                          : '編輯'}
-                      </Link>
-                    </td>
-                  </tr>
-                )
-              }
-            )}
-
-            {reports.length === 0 && (
+            {displayRows.length === 0 && (
               <tr>
                 <td
-                  colSpan={9}
+                  colSpan={7}
                   style={{
                     textAlign: 'center',
                     padding: 25,

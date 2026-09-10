@@ -64,35 +64,87 @@ export default async function EditShiftClosingPage({
 
   let priorAccumulatedAmount = 0
   let priorAccumulatedCount = 0
+  let accumulatedReports: any[] = []
 
   if (
-    report.remittance_status !==
+    report.remittance_status ===
     'remitted'
   ) {
-    const { data: otherPending } =
-      await supabase
+    if (report.remittance_batch_id) {
+      const { data } = await supabase
         .from('shift_closing_reports')
-        .select('id, remittance_total')
+        .select(`
+          id,
+          closing_date,
+          shift_start_at,
+          shift_end_at,
+          closing_status,
+          operator_name,
+          amount_paid,
+          remittance_total,
+          remittance_status
+        `)
         .eq(
           'parking_lot_id',
           report.parking_lot_id
         )
-        .neq('id', report.id)
+        .eq(
+          'remittance_batch_id',
+          report.remittance_batch_id
+        )
+        .order('shift_end_at', {
+          ascending: true,
+        })
+
+      accumulatedReports = data || []
+    } else {
+      accumulatedReports = [report]
+    }
+  } else {
+    const { data: pendingRows } =
+      await supabase
+        .from('shift_closing_reports')
+        .select(`
+          id,
+          closing_date,
+          shift_start_at,
+          shift_end_at,
+          closing_status,
+          operator_name,
+          amount_paid,
+          remittance_total,
+          remittance_status
+        `)
+        .eq(
+          'parking_lot_id',
+          report.parking_lot_id
+        )
         .or(
           'remittance_status.eq.accumulating,remittance_status.is.null'
         )
+        .order('shift_end_at', {
+          ascending: true,
+        })
 
-    priorAccumulatedAmount = (
-      otherPending || []
-    ).reduce(
-      (total: number, item: any) =>
-        total +
-        num(item.remittance_total),
-      0
-    )
+    accumulatedReports =
+      pendingRows || []
+
+    const otherPending =
+      accumulatedReports.filter(
+        (item: any) =>
+          item.id !== report.id
+      )
+
+    priorAccumulatedAmount =
+      otherPending.reduce(
+        (total: number, item: any) =>
+          total +
+          num(item.remittance_total),
+        0
+      )
 
     priorAccumulatedCount =
-      (otherPending || []).length
+      otherPending.length
   }
 
   return (
@@ -115,8 +167,8 @@ export default async function EditShiftClosingPage({
           >
             {report.remittance_status ===
             'remitted'
-              ? '查看已匯款結班報表'
-              : '修改當日結班報表'}
+              ? '查看已匯款留底'
+              : '修改累積中結班報表'}
           </h1>
 
           <p
@@ -127,10 +179,10 @@ export default async function EditShiftClosingPage({
           >
             {report.remittance_status ===
             'remitted'
-              ? '此筆已併入匯款批次，保留歷史資料供查詢。'
+              ? `此筆為已完成匯款批次，這一批共 ${accumulatedReports.length || 1} 班；下方保留本批每次結班明細。`
               : priorAccumulatedCount > 0
-                ? `同場另有 ${priorAccumulatedCount} 班尚未匯款，前班累積 NT$ ${priorAccumulatedAmount.toLocaleString()}；本班會與它們一起結清。`
-                : '已儲存的結班資料可再次修改；未匯款時會自動與下一班接續累積。'}
+                ? `目前同場共 ${priorAccumulatedCount + 1} 班累積中，待匯總額會連續累加；下方可查看每一班明細。`
+                : '目前只有這一班累積中；後續結班會繼續加入同一輪待匯款。'}
           </p>
         </div>
 
@@ -162,6 +214,9 @@ export default async function EditShiftClosingPage({
           }
           priorAccumulatedCount={
             priorAccumulatedCount
+          }
+          accumulatedReports={
+            accumulatedReports as any
           }
         />
       </div>

@@ -54,6 +54,18 @@ type InitialReport = {
   remittance_batch_report_count?: number | null
 }
 
+type AccumulatedReportRow = {
+  id: string
+  closing_date: string
+  shift_start_at?: string | null
+  shift_end_at?: string | null
+  closing_status?: 'normal' | 'abnormal' | string | null
+  operator_name?: string | null
+  amount_paid?: number | null
+  remittance_total?: number | null
+  remittance_status?: 'accumulating' | 'remitted' | string | null
+}
+
 function num(value: any) {
   const result = Number(value)
   return Number.isFinite(result) ? result : 0
@@ -120,6 +132,7 @@ export default function ShiftClosingForm({
   defaultParkingLotId = '',
   priorAccumulatedAmount = 0,
   priorAccumulatedCount = 0,
+  accumulatedReports = [],
 }: {
   parkingLots: ParkingLotOption[]
   initialReport?: InitialReport | null
@@ -127,6 +140,7 @@ export default function ShiftClosingForm({
   defaultParkingLotId?: string
   priorAccumulatedAmount?: number
   priorAccumulatedCount?: number
+  accumulatedReports?: AccumulatedReportRow[]
 }) {
   const router = useRouter()
   const supabase = createClient()
@@ -852,43 +866,6 @@ export default function ShiftClosingForm({
               }
             : item
       )
-    )
-  }
-
-  function addDetail() {
-    setDetails((current) => [
-      ...current,
-      {
-        detail_start_date:
-          datePartFromDateTimeLocal(
-            shiftStartAt,
-            closingDate
-          ),
-        detail_end_date:
-          datePartFromDateTimeLocal(
-            shiftEndAt,
-            closingDate
-          ),
-        temporary_cash: 0,
-        monthly_cash: 0,
-      },
-    ])
-  }
-
-  function removeDetail(
-    index: number
-  ) {
-    setDetails((current) =>
-      current.length <= 1
-        ? current
-        : current.filter(
-            (
-              _,
-              itemIndex
-            ) =>
-              itemIndex !==
-              index
-          )
     )
   }
 
@@ -2293,47 +2270,24 @@ export default function ShiftClosingForm({
           marginTop: 18,
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent:
-              'space-between',
-            alignItems:
-              'center',
-            gap: 10,
-            flexWrap:
-              'wrap',
-          }}
-        >
-          <div>
-            <h2
-              style={{
-                margin: 0,
-              }}
-            >
-              當日結班明細
-            </h2>
-
-            <div
-              className="muted"
-              style={{
-                marginTop: 5,
-                fontSize: 13,
-              }}
-            >
-              第一筆臨停現金與月租現金會自動依上方結班金額計算。
-            </div>
-          </div>
-
-          <button
-            type="button"
-            className="btn"
-            onClick={
-              addDetail
-            }
+        <div>
+          <h2
+            style={{
+              margin: 0,
+            }}
           >
-            ＋新增明細
-          </button>
+            本班結班明細
+          </h2>
+
+          <div
+            className="muted"
+            style={{
+              marginTop: 5,
+              fontSize: 13,
+            }}
+          >
+            每次結班固定保留一筆本班明細；臨停現金與月租現金會自動依上方結班金額計算，不需要另外新增明細。
+          </div>
         </div>
 
         <div
@@ -2366,9 +2320,6 @@ export default function ShiftClosingForm({
                 </th>
                 <th>
                   當日現金總計
-                </th>
-                <th>
-                  操作
                 </th>
               </tr>
             </thead>
@@ -2531,26 +2482,6 @@ export default function ShiftClosingForm({
                       ).toLocaleString()}
                     </td>
 
-                    <td
-                      style={{
-                        padding: 8,
-                      }}
-                    >
-                      <button
-                        type="button"
-                        disabled={
-                          details.length <=
-                          1
-                        }
-                        onClick={() =>
-                          removeDetail(
-                            index
-                          )
-                        }
-                      >
-                        刪除
-                      </button>
-                    </td>
                   </tr>
                 )
               )}
@@ -2627,6 +2558,211 @@ export default function ShiftClosingForm({
           )}
         </div>
       </div>
+
+      {initialReport?.id &&
+        accumulatedReports.length > 0 && (
+          <div
+            className="card"
+            style={{
+              marginTop: 18,
+            }}
+          >
+            <h2
+              style={{
+                marginTop: 0,
+                marginBottom: 6,
+              }}
+            >
+              {initialReport.remittance_status ===
+              'remitted'
+                ? '本次匯款留底明細'
+                : '目前累積中的結班明細'}
+            </h2>
+
+            <div
+              className="muted"
+              style={{
+                marginBottom: 14,
+                fontSize: 13,
+              }}
+            >
+              {initialReport.remittance_status ===
+              'remitted'
+                ? '這些是同一批已完成匯款的每班原始結班紀錄。主列表只保留一列批次留底，但明細不會被刪除。'
+                : '這些班別都屬於目前尚未匯款的同一輪累積；本班以外的資料只供查看，不會在這裡被修改。'}
+            </div>
+
+            <div className="closing-table-wrap">
+              <table
+                style={{
+                  width: '100%',
+                  minWidth: 900,
+                  borderCollapse:
+                    'collapse',
+                }}
+              >
+                <thead>
+                  <tr>
+                    <th>結班日期</th>
+                    <th>開班時間</th>
+                    <th>結班時間</th>
+                    <th>值班人員</th>
+                    <th>實收</th>
+                    <th>本班匯款</th>
+                    <th>結班狀態</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {accumulatedReports.map(
+                    (item) => {
+                      const isCurrent =
+                        item.id ===
+                        initialReport.id
+
+                      const formatTime = (
+                        value?: string | null
+                      ) => {
+                        if (!value) return '-'
+                        const date =
+                          new Date(value)
+                        if (
+                          Number.isNaN(
+                            date.getTime()
+                          )
+                        ) {
+                          return '-'
+                        }
+                        return date.toLocaleString(
+                          'zh-TW',
+                          {
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            hour12: false,
+                          }
+                        )
+                      }
+
+                      return (
+                        <tr
+                          key={item.id}
+                          style={{
+                            borderTop:
+                              '1px solid #e5e7eb',
+                            background:
+                              isCurrent
+                                ? '#fffbeb'
+                                : 'transparent',
+                          }}
+                        >
+                          <td
+                            style={{
+                              padding: 8,
+                              fontWeight:
+                                isCurrent
+                                  ? 800
+                                  : 400,
+                            }}
+                          >
+                            {item.closing_date ||
+                              '-'}
+                            {isCurrent && (
+                              <span
+                                style={{
+                                  marginLeft: 6,
+                                  color:
+                                    '#b45309',
+                                  fontSize: 12,
+                                }}
+                              >
+                                目前編輯
+                              </span>
+                            )}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                            }}
+                          >
+                            {formatTime(
+                              item.shift_start_at
+                            )}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                            }}
+                          >
+                            {formatTime(
+                              item.shift_end_at
+                            )}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                            }}
+                          >
+                            {item.operator_name ||
+                              '-'}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                            }}
+                          >
+                            NT${' '}
+                            {num(
+                              item.amount_paid
+                            ).toLocaleString()}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                              fontWeight: 800,
+                            }}
+                          >
+                            NT${' '}
+                            {num(
+                              item.remittance_total
+                            ).toLocaleString()}
+                          </td>
+                          <td
+                            style={{
+                              padding: 8,
+                            }}
+                          >
+                            {item.closing_status ===
+                            'abnormal'
+                              ? '異常'
+                              : '正常'}
+                          </td>
+                        </tr>
+                      )
+                    }
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div
+              style={{
+                marginTop: 14,
+                textAlign: 'right',
+                fontWeight: 900,
+                fontSize: 18,
+              }}
+            >
+              {initialReport.remittance_status ===
+              'remitted'
+                ? '本批匯款總額'
+                : '目前待匯總額'}
+              ：NT${' '}
+              {pendingRemittanceTotal.toLocaleString()}
+            </div>
+          </div>
+        )}
 
       <div
         className="card"
