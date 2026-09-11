@@ -1,4 +1,7 @@
-import { createSign } from 'crypto'
+import {
+  configuredGoogleDriveOAuth,
+  getGoogleDriveAccessToken,
+} from '@/lib/google-drive-oauth'
 
 export type DriveCategory =
   | 'attendance'
@@ -36,87 +39,17 @@ function env(name: string) {
   return String(process.env[name] || '').trim()
 }
 
-function base64url(input: string | Buffer) {
-  return Buffer.from(input)
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '')
-}
-
-let cachedAccessToken = ''
-let cachedAccessTokenExpiresAt = 0
-const folderCache = new Map<string, string>()
-
-async function getAccessToken() {
-  if (cachedAccessToken && Date.now() < cachedAccessTokenExpiresAt) {
-    return cachedAccessToken
-  }
-
-  const email = env('GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL')
-  const rawKey = env('GOOGLE_DRIVE_PRIVATE_KEY')
-
-  if (!email || !rawKey) {
-    throw new Error(
-      'Vercel 尚未設定 GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL / GOOGLE_DRIVE_PRIVATE_KEY'
-    )
-  }
-
-  const privateKey = rawKey.replace(/\\n/g, '\n')
-  const now = Math.floor(Date.now() / 1000)
-  const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
-  const payload = base64url(
-    JSON.stringify({
-      iss: email,
-      scope: 'https://www.googleapis.com/auth/drive',
-      aud: 'https://oauth2.googleapis.com/token',
-      iat: now,
-      exp: now + 3600,
-    })
-  )
-
-  const unsigned = `${header}.${payload}`
-  const signer = createSign('RSA-SHA256')
-  signer.update(unsigned)
-  signer.end()
-
-  const signature = signer
-    .sign(privateKey)
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '')
-
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion: `${unsigned}.${signature}`,
-    }),
-    cache: 'no-store',
-  })
-
-  const json = await response.json()
-  if (!response.ok || !json?.access_token) {
-    throw new Error(
-      json?.error_description || json?.error || 'Google Drive 授權失敗'
-    )
-  }
-
-  cachedAccessToken = String(json.access_token)
-  cachedAccessTokenExpiresAt = Date.now() + 50 * 60 * 1000
-  return cachedAccessToken
-}
-
+/**
+ * 舊呼叫名稱保留，避免其他尚未清掉的模組 Build 失敗。
+ * 現在代表「OAuth Client 三個環境變數是否完整」，不再代表服務帳號。
+ */
 export function configuredDriveCredentials() {
-  return Boolean(
-    env('GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL') && env('GOOGLE_DRIVE_PRIVATE_KEY')
-  )
+  return configuredGoogleDriveOAuth()
 }
 
+/** 已停用服務帳號模式，保留函式只為舊程式相容。 */
 export function configuredDriveServiceAccountEmail() {
-  return env('GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL')
+  return ''
 }
 
 export function extractDriveFolderId(value: string) {
@@ -147,7 +80,7 @@ export async function verifyDriveFolderAccess(folderId: string) {
   const id = String(folderId || '').trim()
   if (!id) throw new Error('Google Drive 資料夾網址格式不正確')
 
-  const token = await getAccessToken()
+  const token = await getGoogleDriveAccessToken()
   const url = new URL(
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`
   )
@@ -163,14 +96,14 @@ export async function verifyDriveFolderAccess(folderId: string) {
   if (!response.ok) {
     throw new Error(
       json?.error?.message ||
-        '服務帳號無法存取這個 Google Drive 資料夾；請確認已共享給服務帳號'
+        '目前連結的 Google 帳號無法存取這個資料夾，請確認網址與帳號權限。'
     )
   }
   if (json?.mimeType !== 'application/vnd.google-apps.folder') {
     throw new Error('指定的 Google Drive 連結不是資料夾')
   }
   if (json?.capabilities?.canAddChildren === false) {
-    throw new Error('服務帳號只有讀取權限，請把資料夾共享權限改成「編輯者」')
+    throw new Error('目前連結的 Google 帳號沒有此資料夾的上傳／編輯權限')
   }
 
   return { id: String(json.id), name: String(json.name || '') }
@@ -196,6 +129,8 @@ export function driveFolderUrl(folderId: string) {
 function escapeDriveQuery(value: string) {
   return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
 }
+
+const folderCache = new Map<string, string>()
 
 async function findFolder(token: string, parentId: string, name: string) {
   const q = [
@@ -268,6 +203,9 @@ async function ensureFolder(token: string, parentId: string, name: string) {
   return created
 }
 
+/**
+ * 舊報表歸檔函式保留相容；目前正式報表中心已改為純下載，不會呼叫這段。
+ */
 export async function resolveReportFolder({
   category,
   month,
@@ -283,12 +221,10 @@ export async function resolveReportFolder({
   const categoryRoot = configuredCategoryFolder(category)
 
   if (!root && !categoryRoot) {
-    throw new Error(
-      `尚未設定 Google Drive Folder ID：可使用畫面直接指定資料夾，或設定 ${CATEGORY_ENV[category]}`
-    )
+    throw new Error('目前報表中心為純下載模式，沒有設定預設 Google Drive Folder ID。')
   }
 
-  const token = await getAccessToken()
+  const token = await getGoogleDriveAccessToken()
 
   if (root) {
     const monthFolder = await ensureFolder(token, root, month)
@@ -315,15 +251,14 @@ export async function uploadToGoogleDrive({
     throw new Error('缺少 Google Drive 資料夾 ID')
   }
 
-  const token = await getAccessToken()
+  const token = await getGoogleDriveAccessToken()
   const form = new FormData()
 
   form.append(
     'metadata',
-    new Blob(
-      [JSON.stringify({ name: fileName, parents: [folderId] })],
-      { type: 'application/json' }
-    )
+    new Blob([JSON.stringify({ name: fileName, parents: [folderId] })], {
+      type: 'application/json',
+    })
   )
 
   form.append(

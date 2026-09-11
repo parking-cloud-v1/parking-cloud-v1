@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useGoogleDriveOAuth } from '@/components/useGoogleDriveOAuth'
 
 type Inspection = {
   id: string
@@ -106,6 +107,11 @@ export default function DisasterInspectionEditor({
 }) {
   const supabase =
     createClient()
+
+  const driveOAuth =
+    useGoogleDriveOAuth(
+      isSupervisor
+    )
 
   const [
     inspection,
@@ -860,6 +866,10 @@ export default function DisasterInspectionEditor({
         alert('只有主管可以直接上傳 Google Drive。')
         return
       }
+      if (!driveOAuth.connected) {
+        alert('請先按「連結 Google Drive」完成主管 Google 帳號授權。')
+        return
+      }
       const value = driveFolderUrl.trim()
       if (!value || !isDriveFolderUrl(value)) {
         alert('請先貼上正確的 Google Drive 資料夾網址。')
@@ -1161,6 +1171,64 @@ export default function DisasterInspectionEditor({
             <div className="muted" style={{ marginTop: 5 }}>
               不需要先下載 PDF。請先開啟「預覽表單」，貼上這間停車場目前要使用的 Google Drive 資料夾網址，再按直接上傳；系統會先產生正式 PDF、封存 Supabase，再直接送到 Google Drive。
             </div>
+            <div
+              style={{
+                marginTop: 10,
+                padding: 10,
+                borderRadius: 8,
+                background: driveOAuth.connected ? '#ecfdf5' : '#fff7ed',
+              }}
+            >
+              <strong>
+                {driveOAuth.loading
+                  ? '正在檢查 Google Drive 連線…'
+                  : driveOAuth.connected
+                    ? 'Google Drive 已連結'
+                    : 'Google Drive 尚未連結'}
+              </strong>
+              {!driveOAuth.configured && !driveOAuth.loading && (
+                <div style={{ marginTop: 5, color: '#b91c1c', fontWeight: 700 }}>
+                  Vercel OAuth 三個環境變數尚未設定完整。
+                </div>
+              )}
+              {driveOAuth.error && (
+                <div style={{ marginTop: 5, color: '#b91c1c' }}>
+                  {driveOAuth.error}
+                </div>
+              )}
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  marginTop: 8,
+                }}
+              >
+                {!driveOAuth.connected ? (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={driveOAuth.connect}
+                    disabled={!driveOAuth.configured || driveOAuth.loading}
+                  >
+                    連結 Google Drive
+                  </button>
+                ) : (
+                  <>
+                    <button type="button" onClick={driveOAuth.connect}>
+                      重新授權
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void driveOAuth.disconnect()}
+                    >
+                      解除連結
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+
             <div className="field" style={{ marginTop: 10 }}>
               <label>{inspection?.parking_lots?.name || '目前停車場'}－Google Drive 資料夾網址</label>
               <input
@@ -1177,7 +1245,7 @@ export default function DisasterInspectionEditor({
                 type="button"
                 className="btn"
                 onClick={() => void exportPdf(true)}
-                disabled={!preview || exportingPdf || uploadingDrive}
+                disabled={!preview || exportingPdf || uploadingDrive || !driveOAuth.connected}
               >
                 {uploadingDrive ? 'Google Drive 上傳中…' : '直接上傳 Google Drive'}
               </button>

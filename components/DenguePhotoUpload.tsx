@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useGoogleDriveOAuth } from '@/components/useGoogleDriveOAuth'
 
 function today() {
   const d = new Date()
@@ -80,6 +81,7 @@ export default function DenguePhotoUpload({
   canDirectUploadToDrive?: boolean
 }) {
   const supabase = createClient()
+  const driveOAuth = useGoogleDriveOAuth(canDirectUploadToDrive)
 
   const [workDate, setWorkDate] = useState(today())
   const [workType, setWorkType] = useState<WorkType>('自主檢查')
@@ -369,6 +371,11 @@ export default function DenguePhotoUpload({
   async function uploadDayToDrive(date: string) {
     if (!canDirectUploadToDrive || !parkingLotId || uploadingDriveDate) return
 
+    if (!driveOAuth.connected) {
+      setMessage('請先按「連結 Google Drive」完成主管 Google 帳號授權。')
+      return
+    }
+
     const folderUrl = driveFolderUrl.trim()
     if (!folderUrl) {
       setMessage('請先貼上這間停車場要上傳的 Google Drive 資料夾網址。')
@@ -524,6 +531,64 @@ export default function DenguePhotoUpload({
           <h2 style={{ margin: 0 }}>主管｜Google Drive 直接上傳</h2>
           <div className="muted" style={{ marginTop: 6 }}>
             每一間停車場都可指定不同的 Google Drive 資料夾。貼上目前要使用的資料夾網址後，直接按每日資料夾的「直接上傳 Google Drive」，不需要先下載再人工上傳。
+          </div>
+
+          <div
+            style={{
+              marginTop: 12,
+              padding: 10,
+              borderRadius: 8,
+              background: driveOAuth.connected ? '#ecfdf5' : '#fff7ed',
+            }}
+          >
+            <strong>
+              {driveOAuth.loading
+                ? '正在檢查 Google Drive 連線…'
+                : driveOAuth.connected
+                  ? 'Google Drive 已連結'
+                  : 'Google Drive 尚未連結'}
+            </strong>
+            {!driveOAuth.configured && !driveOAuth.loading && (
+              <div style={{ marginTop: 5, color: '#b91c1c', fontWeight: 700 }}>
+                Vercel OAuth 三個環境變數尚未設定完整。
+              </div>
+            )}
+            {driveOAuth.error && (
+              <div style={{ marginTop: 5, color: '#b91c1c' }}>
+                {driveOAuth.error}
+              </div>
+            )}
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                flexWrap: 'wrap',
+                marginTop: 8,
+              }}
+            >
+              {!driveOAuth.connected ? (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={driveOAuth.connect}
+                  disabled={!driveOAuth.configured || driveOAuth.loading}
+                >
+                  連結 Google Drive
+                </button>
+              ) : (
+                <>
+                  <button type="button" onClick={driveOAuth.connect}>
+                    重新授權
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void driveOAuth.disconnect()}
+                  >
+                    解除連結
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
           <div className="field" style={{ marginTop: 12 }}>
@@ -721,7 +786,7 @@ export default function DenguePhotoUpload({
                       <button
                         type="button"
                         className="btn"
-                        disabled={Boolean(uploadingDriveDate)}
+                        disabled={Boolean(uploadingDriveDate) || !driveOAuth.connected}
                         onClick={() => void uploadDayToDrive(folder.date)}
                       >
                         {uploadingDriveDate === folder.date

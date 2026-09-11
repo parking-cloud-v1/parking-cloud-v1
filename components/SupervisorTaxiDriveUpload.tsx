@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useGoogleDriveOAuth } from '@/components/useGoogleDriveOAuth'
 
 function storageKey(parkingLotId: string) {
   return `direct-google-drive-folder:taxi:${parkingLotId}`
@@ -21,11 +22,10 @@ export default function SupervisorTaxiDriveUpload({
 }) {
   const [allowed, setAllowed] = useState(false)
   const [checked, setChecked] = useState(false)
-  const [credentialsConfigured, setCredentialsConfigured] = useState(true)
-  const [serviceAccountEmail, setServiceAccountEmail] = useState('')
   const [folderUrl, setFolderUrl] = useState('')
   const [uploading, setUploading] = useState(false)
   const [message, setMessage] = useState('')
+  const driveOAuth = useGoogleDriveOAuth(allowed)
 
   useEffect(() => {
     setFolderUrl(
@@ -49,8 +49,6 @@ export default function SupervisorTaxiDriveUpload({
       const json = await response.json()
       if (!response.ok) throw new Error(json?.error || 'Drive 狀態讀取失敗')
       setAllowed(true)
-      setCredentialsConfigured(Boolean(json?.credentialsConfigured))
-      setServiceAccountEmail(String(json?.serviceAccountEmail || ''))
     } catch (error: any) {
       setAllowed(false)
       setMessage(error?.message || 'Drive 狀態讀取失敗')
@@ -73,6 +71,10 @@ export default function SupervisorTaxiDriveUpload({
 
   async function upload() {
     const value = folderUrl.trim()
+    if (!driveOAuth.connected) {
+      setMessage('請先按「連結 Google Drive」完成主管 Google 帳號授權。')
+      return
+    }
     if (!value || !isDriveFolderUrl(value)) {
       setMessage('請先貼上這間停車場要使用的 Google Drive 資料夾網址。')
       return
@@ -131,15 +133,54 @@ export default function SupervisorTaxiDriveUpload({
         主管｜此停車場直接上傳 Google Drive
       </div>
       <div className="muted" style={{ marginTop: 5 }}>
-        每間停車場可使用不同資料夾；更換公司資料夾時直接修改下方網址即可。
+        主管只要先連結一次 Google 帳號；之後每間停車場貼自己的資料夾網址即可直接上傳。
       </div>
 
-      {!credentialsConfigured && (
-        <div style={{ marginTop: 8, color: '#b91c1c', fontWeight: 800 }}>
-          Vercel 尚未完成 Google Drive 服務帳號設定。
-          {serviceAccountEmail ? ` 服務帳號：${serviceAccountEmail}` : ''}
+      <div
+        style={{
+          marginTop: 10,
+          padding: 10,
+          borderRadius: 8,
+          background: driveOAuth.connected ? '#ecfdf5' : '#fff7ed',
+        }}
+      >
+        <strong>
+          {driveOAuth.loading
+            ? '正在檢查 Google Drive 連線…'
+            : driveOAuth.connected
+              ? 'Google Drive 已連結'
+              : 'Google Drive 尚未連結'}
+        </strong>
+        {!driveOAuth.configured && !driveOAuth.loading && (
+          <div style={{ marginTop: 5, color: '#b91c1c', fontWeight: 700 }}>
+            Vercel OAuth 三個環境變數尚未設定完整。
+          </div>
+        )}
+        {driveOAuth.error && (
+          <div style={{ marginTop: 5, color: '#b91c1c' }}>{driveOAuth.error}</div>
+        )}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+          {!driveOAuth.connected ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={driveOAuth.connect}
+              disabled={!driveOAuth.configured || driveOAuth.loading}
+            >
+              連結 Google Drive
+            </button>
+          ) : (
+            <>
+              <button type="button" onClick={driveOAuth.connect}>
+                重新授權
+              </button>
+              <button type="button" onClick={() => void driveOAuth.disconnect()}>
+                解除連結
+              </button>
+            </>
+          )}
         </div>
-      )}
+      </div>
 
       <div className="field" style={{ marginTop: 10 }}>
         <label>{parkingLotName || '目前停車場'}－Google Drive 資料夾網址</label>
@@ -158,25 +199,23 @@ export default function SupervisorTaxiDriveUpload({
           type="button"
           className="btn"
           onClick={() => void upload()}
-          disabled={uploading || !credentialsConfigured}
+          disabled={uploading || !driveOAuth.connected}
         >
           {uploading ? 'Google Drive 上傳中…' : '直接上傳 Google Drive'}
         </button>
         {folderUrl.trim() && isDriveFolderUrl(folderUrl) && (
           <button
             type="button"
-            onClick={() => window.open(folderUrl.trim(), '_blank', 'noopener,noreferrer')}
+            onClick={() =>
+              window.open(folderUrl.trim(), '_blank', 'noopener,noreferrer')
+            }
           >
             開啟資料夾
           </button>
         )}
       </div>
 
-      {message && (
-        <div style={{ marginTop: 8, fontWeight: 700 }}>
-          {message}
-        </div>
-      )}
+      {message && <div style={{ marginTop: 8, fontWeight: 700 }}>{message}</div>}
     </div>
   )
 }

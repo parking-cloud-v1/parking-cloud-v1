@@ -3,12 +3,14 @@ import { createClient as createAdminClient } from '@supabase/supabase-js'
 
 import { createClient } from '@/lib/supabase/server'
 import {
-  configuredDriveCredentials,
-  configuredDriveServiceAccountEmail,
   extractDriveFolderId,
   uploadToGoogleDrive,
   verifyDriveFolderAccess,
 } from '@/lib/google-drive'
+import {
+  configuredGoogleDriveOAuth,
+  hasGoogleDriveOAuthConnection,
+} from '@/lib/google-drive-oauth'
 
 export const dynamic = 'force-dynamic'
 
@@ -51,9 +53,10 @@ export async function GET() {
   }
 
   return NextResponse.json({
-    credentialsConfigured: configuredDriveCredentials(),
-    serviceAccountEmail: configuredDriveServiceAccountEmail(),
+    oauthConfigured: configuredGoogleDriveOAuth(),
+    oauthConnected: await hasGoogleDriveOAuthConnection(),
     directFolderMode: true,
+    authMode: 'oauth',
   })
 }
 
@@ -70,10 +73,17 @@ export async function POST(
       )
     }
 
-    if (!configuredDriveCredentials()) {
+    if (!configuredGoogleDriveOAuth()) {
       return NextResponse.json(
-        { error: 'Vercel 尚未設定 Google Drive 服務帳號 email / private key。' },
+        { error: 'Vercel 尚未設定 Google Drive OAuth Client ID / Client Secret / Redirect URI。' },
         { status: 400 }
+      )
+    }
+
+    if (!(await hasGoogleDriveOAuthConnection())) {
+      return NextResponse.json(
+        { error: '尚未連結 Google Drive，請主管先按「連結 Google Drive」。' },
+        { status: 401 }
       )
     }
 
