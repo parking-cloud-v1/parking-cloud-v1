@@ -1,0 +1,39 @@
+智驛停車平台｜第5段最終整合檢查報告
+日期：2026-09-09
+
+【已完成】
+1. app / components / lib 與設定檔合併成單一完整專案。
+2. 第1段「結班未匯款跨班累積」正式檔逐檔比對一致。
+3. 第2段「簽到表上傳＋主管資料維護」正式檔逐檔比對一致。
+4. 第3段「違規停車照片＋主管即時通知」正式檔逐檔比對一致。
+5. 第4段「Google Drive＋報表中心」正式檔逐檔比對一致。
+6. 第5段角色整合：正式程式只使用 supervisor / manager；accountant 舊角色不再出現在執行程式。
+7. TypeScript / TSX 語法解析：186 支，0 syntax error。
+8. @/ 與相對 import 檢查：0 缺檔。
+9. package.json 外部 import 對照：0 缺少 dependency（crypto 為 Node 內建模組）。
+10. Client Component / Server-only import 邊界掃描：0 違規。
+11. package.json 與 package-lock.json 根依賴一致。
+12. 已明確指定 Node >=22.0.0；目前 lockfile 的 @supabase/supabase-js 2.112.4 要求 Node >=22。
+13. 修正第5段 SQL：where role::text='accountant'，可同時相容 role 為 enum 或 text 的既有資料庫。
+14. 新增 .env.local.example（不含任何秘密值）。
+15. 新增 Windows BUILD_正式檢查.ps1。
+
+【實際 npm / Next Build 狀態】
+已嘗試 npm ci，但本工作環境無法連線 registry.npmjs.org；離線 npm cache 又不完整，缺少 xlsx@0.18.5 等 tarball，因此無法在此環境完成真實 node_modules 安裝，也就不能誠實宣稱 npm run build 已通過。
+這是目前執行環境的套件下載限制，不是專案程式的 npm 錯誤。
+
+【你在 Windows / Vercel 的最終驗證】
+Node 請使用 22 以上。
+Windows：在專案根目錄執行 BUILD_正式檢查.ps1。
+等同：
+  npm ci
+  npm run build
+
+【SQL】
+既有正式資料庫：執行 sql/phase5_final_build_cleanup.sql。
+不要在既有正式資料庫重新執行 supabase/initial_schema.sql；該檔只供全新空資料庫初始化參考。
+sql/migrations/ 內保留第1～5段 migration 供版本追蹤。
+
+【資料保護】
+最終整合 SQL 不刪除月租、電子合約、簽名或正式 PDF。
+舊 accountant 若存在，會轉為 manager 並停用，不會自動取得場站管理權限。

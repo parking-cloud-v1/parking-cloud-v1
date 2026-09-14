@@ -1,13 +1,13 @@
 'use client'
 
+// PHASE36_SMS_DUE_DATE_ONLY_FIX
+
 import {
   useEffect,
   useMemo,
   useState,
 } from 'react'
-
 import { createClient } from '@/lib/supabase/client'
-import { getSavedWorkParkingLotId } from '@/components/useWorkParkingLot'
 
 type ParkingLot = {
   id: string
@@ -57,18 +57,9 @@ function vehicleTypeText(
 function normalizePhone(
   value: string
 ) {
-  return String(
-    value ||
-      ''
-  )
-    .replace(
-      /\s/g,
-      ''
-    )
-    .replace(
-      /-/g,
-      ''
-    )
+  return String(value || '')
+    .replace(/\s/g, '')
+    .replace(/-/g, '')
 }
 
 function todayText() {
@@ -80,20 +71,13 @@ function todayText() {
 
   const month =
     String(
-      now.getMonth() +
-        1
-    ).padStart(
-      2,
-      '0'
-    )
+      now.getMonth() + 1
+    ).padStart(2, '0')
 
   const day =
     String(
       now.getDate()
-    ).padStart(
-      2,
-      '0'
-    )
+    ).padStart(2, '0')
 
   return `${year}-${month}-${day}`
 }
@@ -118,10 +102,7 @@ function daysBetween(
 
   return Math.floor(
     diff /
-      (24 *
-        60 *
-        60 *
-        1000)
+      (24 * 60 * 60 * 1000)
   )
 }
 
@@ -140,9 +121,7 @@ function dueText(
   if (
     days < 0
   ) {
-    return `已到期 ${Math.abs(
-      days
-    )} 天`
+    return `已到期 ${Math.abs(days)} 天`
   }
 
   if (
@@ -165,20 +144,13 @@ function escapeCsv(
 ) {
   const text =
     String(
-      value ??
-        ''
+      value ?? ''
     )
 
   if (
-    text.includes(
-      ','
-    ) ||
-    text.includes(
-      '"'
-    ) ||
-    text.includes(
-      '\n'
-    )
+    text.includes(',') ||
+    text.includes('"') ||
+    text.includes('\n')
   ) {
     return `"${text.replace(
       /"/g,
@@ -213,7 +185,9 @@ export default function SmsListPage() {
     selectedLotId,
     setSelectedLotId,
   ] =
-    useState('')
+    useState(
+      'all'
+    )
 
   const [
     search,
@@ -246,13 +220,8 @@ export default function SmsListPage() {
   }, [])
 
   async function loadData() {
-    setLoading(
-      true
-    )
-
-    setMessage(
-      ''
-    )
+    setLoading(true)
+    setMessage('')
 
     try {
       const {
@@ -315,10 +284,8 @@ export default function SmsListPage() {
             'rental_status',
             'active'
           )
-          .eq(
-            'payment_status',
-            'unpaid'
-          )
+          // 到期簡訊是「正式租期提醒」，不可用 payment_status 過濾。
+          // 已繳代表目前這一期已付款，不代表下一期不用續租提醒。
           .order(
             'end_date',
             {
@@ -338,47 +305,13 @@ export default function SmsListPage() {
         return
       }
 
-      const lots =
-        (
-          lotData ||
-          []
-        ) as ParkingLot[]
-
       setParkingLots(
-        lots
+        lotData || []
       )
 
-      const workLotId =
-        getSavedWorkParkingLotId()
-
-      if (
-        workLotId &&
-        lots.some(
-          (
-            lot
-          ) =>
-            lot.id ===
-            workLotId
-        )
-      ) {
-        setSelectedLotId(
-          workLotId
-        )
-      } else {
-        setSelectedLotId(
-          ''
-        )
-
-        setMessage(
-          '請先在左側「目前工作停車場」選擇停車場。'
-        )
-      }
-
       setRentals(
-        (
-          rentalData ||
-          []
-        ) as Rental[]
+        (rentalData ||
+          []) as Rental[]
       )
     } catch (
       error: any
@@ -388,187 +321,121 @@ export default function SmsListPage() {
           '資料讀取失敗'
       )
     } finally {
-      setLoading(
-        false
-      )
+      setLoading(false)
     }
   }
 
   const lotMap =
-    useMemo(
-      () => {
-        return new Map(
-          parkingLots.map(
-            (
-              lot
-            ) => [
-              lot.id,
-              lot.name,
-            ]
-          )
+    useMemo(() => {
+      return new Map(
+        parkingLots.map(
+          (lot) => [
+            lot.id,
+            lot.name,
+          ]
         )
-      },
-      [
-        parkingLots,
-      ]
-    )
-
-  const currentLot =
-    useMemo(
-      () =>
-        parkingLots.find(
-          (
-            lot
-          ) =>
-            lot.id ===
-            selectedLotId
-        ),
-      [
-        parkingLots,
-        selectedLotId,
-      ]
-    )
+      )
+    }, [
+      parkingLots,
+    ])
 
   const filteredRows =
-    useMemo(
-      () => {
-        const keyword =
-          search
-            .trim()
-            .toLowerCase()
+    useMemo(() => {
+      const keyword =
+        search
+          .trim()
+          .toLowerCase()
 
-        const today =
-          todayText()
+      const today =
+        todayText()
 
-        return rentals.filter(
-          (
-            row
-          ) => {
-            /*
-             * 未選目前工作停車場：
-             * 不顯示任何資料。
-             */
-            if (
-              !selectedLotId
-            ) {
-              return false
-            }
-
-            /*
-             * 只允許目前工作停車場。
-             */
-            if (
-              row.parking_lot_id !==
+      return rentals.filter(
+        (row) => {
+          if (
+            selectedLotId !==
+              'all' &&
+            row.parking_lot_id !==
               selectedLotId
+          ) {
+            return false
+          }
+
+          if (
+            keyword
+          ) {
+            const text = [
+              row.customer_name,
+              row.phone || '',
+              row.vehicle_plate,
+              row.rental_type || '',
+              lotMap.get(
+                row.parking_lot_id
+              ) || '',
+            ]
+              .join(' ')
+              .toLowerCase()
+
+            if (
+              !text.includes(
+                keyword
+              )
             ) {
               return false
             }
-
-            if (
-              keyword
-            ) {
-              const text =
-                [
-                  row.customer_name,
-                  row.phone ||
-                    '',
-                  row.vehicle_plate,
-                  row.rental_type ||
-                    '',
-                  lotMap.get(
-                    row.parking_lot_id
-                  ) ||
-                    '',
-                ]
-                  .join(
-                    ' '
-                  )
-                  .toLowerCase()
-
-              if (
-                !text.includes(
-                  keyword
-                )
-              ) {
-                return false
-              }
-            }
-
-            if (
-              dueFilter ===
-              'all'
-            ) {
-              return true
-            }
-
-            const days =
-              daysBetween(
-                today,
-                row.end_date
-              )
-
-            if (
-              dueFilter ===
-              'expired'
-            ) {
-              return (
-                days <
-                0
-              )
-            }
-
-            const maxDays =
-              Number(
-                dueFilter
-              )
-
-            return (
-              days >=
-                0 &&
-              days <=
-                maxDays
-            )
           }
-        )
-      },
-      [
-        rentals,
-        selectedLotId,
-        search,
-        dueFilter,
-        lotMap,
-      ]
-    )
+
+          if (
+            dueFilter ===
+            'all'
+          ) {
+            return true
+          }
+
+          const days =
+            daysBetween(
+              today,
+              row.end_date
+            )
+
+          if (
+            dueFilter ===
+            'expired'
+          ) {
+            return days < 0
+          }
+
+          const maxDays =
+            Number(
+              dueFilter
+            )
+
+          return (
+            days >= 0 &&
+            days <= maxDays
+          )
+        }
+      )
+    }, [
+      rentals,
+      selectedLotId,
+      search,
+      dueFilter,
+      lotMap,
+    ])
 
   const missingPhoneCount =
-    useMemo(
-      () => {
-        return filteredRows.filter(
-          (
-            row
-          ) =>
-            !normalizePhone(
-              row.phone ||
-                ''
-            )
-        ).length
-      },
-      [
-        filteredRows,
-      ]
-    )
+    useMemo(() => {
+      return filteredRows.filter(
+        (row) =>
+          !normalizePhone(
+            row.phone || ''
+          )
+      ).length
+    }, [
+      filteredRows,
+    ])
 
   function exportCsv() {
-    if (
-      !selectedLotId
-    ) {
-      alert(
-        '請先選擇目前工作停車場'
-      )
-
-      return
-    }
-
     if (
       filteredRows.length ===
       0
@@ -580,71 +447,52 @@ export default function SmsListPage() {
       return
     }
 
-    const headers =
-      [
-        '停車場',
-        '姓名',
-        '電話',
-        '車牌',
-        '車種',
-        '月租類型',
-        '到期日',
-        '月租金額',
-        '到期狀態',
-      ]
+    const headers = [
+      '停車場',
+      '姓名',
+      '電話',
+      '車牌',
+      '車種',
+      '月租類型',
+      '到期日',
+      '月租金額',
+      '到期狀態',
+    ]
 
-    const lines =
-      [
-        headers
-          .map(
-            escapeCsv
-          )
-          .join(
-            ','
-          ),
-
-        ...filteredRows.map(
-          (
-            row
-          ) =>
-            [
-              lotMap.get(
-                row.parking_lot_id
-              ) ||
-                '',
-
-              row.customer_name,
-
-              normalizePhone(
-                row.phone ||
-                  ''
-              ),
-
-              row.vehicle_plate,
-
-              vehicleTypeText(
-                row.vehicle_type
-              ),
-
-              row.rental_type ||
-                '',
-
-              row.end_date,
-
-              row.monthly_fee,
-
-              dueText(
-                row.end_date
-              ),
-            ]
-              .map(
-                escapeCsv
-              )
-              .join(
-                ','
-              )
-        ),
-      ]
+    const lines = [
+      headers
+        .map(
+          escapeCsv
+        )
+        .join(','),
+      ...filteredRows.map(
+        (row) =>
+          [
+            lotMap.get(
+              row.parking_lot_id
+            ) || '',
+            row.customer_name,
+            normalizePhone(
+              row.phone || ''
+            ),
+            row.vehicle_plate,
+            vehicleTypeText(
+              row.vehicle_type
+            ),
+            row.rental_type ||
+              '',
+            row.end_date,
+            row.monthly_fee,
+            dueText(
+              row.end_date
+            ),
+          ]
+            .map(
+              escapeCsv
+            )
+            .join(',')
+      ),
+    ]
 
     const csvText =
       '\uFEFF' +
@@ -654,9 +502,7 @@ export default function SmsListPage() {
 
     const blob =
       new Blob(
-        [
-          csvText,
-        ],
+        [csvText],
         {
           type:
             'text/csv;charset=utf-8;',
@@ -674,14 +520,15 @@ export default function SmsListPage() {
       )
 
     const selectedLotName =
-      lotMap.get(
-        selectedLotId
-      ) ||
-      '停車場'
+      selectedLotId ===
+      'all'
+        ? '全部停車場'
+        : lotMap.get(
+            selectedLotId
+          ) ||
+          '停車場'
 
-    a.href =
-      url
-
+    a.href = url
     a.download =
       `${selectedLotName}_簡訊名單_${todayText()}.csv`
 
@@ -715,8 +562,7 @@ export default function SmsListPage() {
             'space-between',
           alignItems:
             'flex-start',
-          gap:
-            16,
+          gap: 16,
           flexWrap:
             'wrap',
         }}
@@ -736,7 +582,7 @@ export default function SmsListPage() {
           <div
             className="muted"
           >
-            顯示目前工作停車場「未繳費＋在租中」的月租戶，預設以到期前 20 天內為提醒範圍。
+            顯示目前「未繳費＋在租中」的月租戶，預設以到期前 20 天內為提醒範圍。
           </div>
         </div>
 
@@ -746,67 +592,10 @@ export default function SmsListPage() {
           onClick={
             exportCsv
           }
-          disabled={
-            !selectedLotId
-          }
         >
           匯出目前名單 CSV
         </button>
       </div>
-
-      {!selectedLotId && (
-        <div
-          className="card"
-          style={{
-            marginTop:
-              20,
-            background:
-              '#fffbeb',
-            color:
-              '#b45309',
-            fontWeight:
-              700,
-          }}
-        >
-          請先在左側「目前工作停車場」選擇停車場。
-          簡訊名單不會顯示其他停車場資料。
-        </div>
-      )}
-
-      {currentLot && (
-        <div
-          className="card"
-          style={{
-            marginTop:
-              20,
-            background:
-              '#f8fafc',
-          }}
-        >
-          <div
-            className="muted"
-            style={{
-              fontSize:
-                13,
-              marginBottom:
-                4,
-            }}
-          >
-            目前工作停車場
-          </div>
-
-          <strong
-            style={{
-              fontSize:
-                18,
-            }}
-          >
-            {
-              currentLot.name
-            }
-          </strong>
-        </div>
-      )}
 
       <div
         className="card"
@@ -821,8 +610,7 @@ export default function SmsListPage() {
               'grid',
             gridTemplateColumns:
               'minmax(220px,1fr) minmax(220px,1fr) 190px',
-            gap:
-              12,
+            gap: 12,
           }}
         >
           <div
@@ -836,18 +624,22 @@ export default function SmsListPage() {
               value={
                 selectedLotId
               }
-              disabled
+              onChange={(
+                event
+              ) =>
+                setSelectedLotId(
+                  event
+                    .target
+                    .value
+                )
+              }
             >
-              {!selectedLotId && (
-                <option value="">
-                  尚未選擇工作停車場
-                </option>
-              )}
+              <option value="all">
+                全部停車場
+              </option>
 
               {parkingLots.map(
-                (
-                  lot
-                ) => (
+                (lot) => (
                   <option
                     key={
                       lot.id
@@ -935,17 +727,9 @@ export default function SmsListPage() {
               borderRadius:
                 8,
               background:
-                message.includes(
-                  '成功'
-                )
-                  ? '#ecfdf5'
-                  : '#fee2e2',
+                '#fee2e2',
               color:
-                message.includes(
-                  '成功'
-                )
-                  ? '#166534'
-                  : '#b91c1c',
+                '#b91c1c',
             }}
           >
             {
@@ -961,8 +745,7 @@ export default function SmsListPage() {
             'grid',
           gridTemplateColumns:
             'repeat(auto-fit, minmax(180px, 1fr))',
-          gap:
-            12,
+          gap: 12,
           marginTop:
             20,
         }}
@@ -1030,58 +813,6 @@ export default function SmsListPage() {
             20,
         }}
       >
-        <div
-          style={{
-            display:
-              'flex',
-            justifyContent:
-              'space-between',
-            alignItems:
-              'center',
-            gap:
-              12,
-            flexWrap:
-              'wrap',
-            marginBottom:
-              12,
-          }}
-        >
-          <div>
-            <h2
-              style={{
-                margin:
-                  0,
-              }}
-            >
-              簡訊提醒名單
-            </h2>
-
-            {currentLot && (
-              <div
-                className="muted"
-                style={{
-                  marginTop:
-                    4,
-                }}
-              >
-                {
-                  currentLot.name
-                }
-              </div>
-            )}
-          </div>
-
-          <span
-            className="muted"
-          >
-            共{' '}
-            {
-              filteredRows.length
-            }{' '}
-            筆
-          </span>
-        </div>
-
         <div
           style={{
             overflowX:
@@ -1156,24 +887,6 @@ export default function SmsListPage() {
                     }}
                   >
                     讀取中…
-                  </td>
-                </tr>
-              ) : !selectedLotId ? (
-                <tr>
-                  <td
-                    colSpan={
-                      9
-                    }
-                    style={{
-                      padding:
-                        30,
-                      textAlign:
-                        'center',
-                      color:
-                        '#64748b',
-                    }}
-                  >
-                    請先選擇目前工作停車場。
                   </td>
                 </tr>
               ) : filteredRows.length ===
