@@ -687,6 +687,31 @@ export default async function MonthlyRentalsPage({
               </>
           )}
 
+          {profile.role ===
+            'supervisor' && (
+            <Link
+              href="/dashboard/settings/monthly-rental-types"
+              style={{
+                padding:
+                  '9px 14px',
+                border:
+                  '1px solid #cbd5e1',
+                borderRadius:
+                  8,
+                background:
+                  '#fff',
+                color:
+                  '#334155',
+                textDecoration:
+                  'none',
+                fontWeight:
+                  600,
+              }}
+            >
+              月租類型設定
+            </Link>
+          )}
+
           <CsvImportButton
             parkingLots={
               parkingLotOptions
@@ -1106,6 +1131,7 @@ export default async function MonthlyRentalsPage({
           >
             <table
               style={{
+                fontSize: 16,
                 width:
                   '100%',
                 minWidth:
@@ -1263,10 +1289,6 @@ export default async function MonthlyRentalsPage({
                     }}
                   >
                     類型
-                  </th>
-
-                  <th style={{ padding: 8 }}>
-                    正式租期
                   </th>
 
                   <th style={{ padding: 8 }}>繳費月份</th>
@@ -1442,25 +1464,6 @@ export default async function MonthlyRentalsPage({
 
                         {/* 正式租期：直接依主管目前租期設定顯示 */}
 
-                        <td
-                          style={{
-                            padding:
-                              8,
-                            whiteSpace:
-                              'nowrap',
-                            fontSize:
-                              13,
-                          }}
-                          title={activeRentalTerm?.term_name || ''}
-                        >
-                          {activeRentalTerm
-                            ? formatRentalPeriod(
-                                activeRentalTerm.start_date,
-                                activeRentalTerm.end_date
-                              )
-                            : '未設定'}
-                        </td>
-
                         {/* 月租名單只顯示最近一個繳費月份；完整歷史留在繳費紀錄 */}
                         <td style={{ padding: 8, fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap' }}>
                           {item._payment_month !== '-'
@@ -1591,3 +1594,4 @@ export default async function MonthlyRentalsPage({
     </div>
   )
 }
+
