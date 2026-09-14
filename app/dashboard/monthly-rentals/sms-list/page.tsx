@@ -1,7 +1,6 @@
 'use client'
 
-// PHASE36_SMS_DUE_DATE_ONLY_FIX
-
+// PHASE40_MONTHLY_CYCLE_EVENTS
 import {
   useEffect,
   useMemo,
@@ -14,210 +13,80 @@ type ParkingLot = {
   name: string
 }
 
-type Rental = {
+type CycleEvent = {
   id: string
   parking_lot_id: string
+  monthly_rental_id: string | null
   customer_name: string
   phone: string | null
   vehicle_plate: string
-  vehicle_type: string
+  vehicle_type: string | null
   rental_type: string | null
-  start_date: string
-  end_date: string
-  monthly_fee: number
-  payment_status: string
-  rental_status: string
+  previous_end_date: string | null
+  current_end_date: string | null
+  cycle_month: string
+  sms_required: boolean
+  sms_status: 'pending' | 'exported' | 'completed'
+  sms_exported_at: string | null
+  trigger_reason: string | null
+  created_at: string
 }
 
-type DueFilter =
-  | 'all'
-  | 'expired'
-  | '20'
-
-function vehicleTypeText(
-  value: string
-) {
-  if (
-    value ===
-    'motorcycle'
-  ) {
-    return '機車'
-  }
-
-  if (
-    value ===
-    'heavy_motorcycle'
-  ) {
-    return '重機'
-  }
-
-  return '汽車'
-}
-
-function normalizePhone(
-  value: string
-) {
+function normalizePhone(value: string) {
   return String(value || '')
     .replace(/\s/g, '')
     .replace(/-/g, '')
 }
 
-function todayText() {
-  const now =
-    new Date()
-
-  const year =
-    now.getFullYear()
-
-  const month =
-    String(
-      now.getMonth() + 1
-    ).padStart(2, '0')
-
-  const day =
-    String(
-      now.getDate()
-    ).padStart(2, '0')
-
-  return `${year}-${month}-${day}`
+function vehicleTypeText(value?: string | null) {
+  if (value === 'motorcycle') return '機車'
+  if (value === 'heavy_motorcycle') return '重機'
+  return '汽車'
 }
 
-function daysBetween(
-  fromDate: string,
-  toDate: string
-) {
-  const from =
-    new Date(
-      `${fromDate}T00:00:00`
-    )
-
-  const to =
-    new Date(
-      `${toDate}T00:00:00`
-    )
-
-  const diff =
-    to.getTime() -
-    from.getTime()
-
-  return Math.floor(
-    diff /
-      (24 * 60 * 60 * 1000)
-  )
+function monthText(value?: string | null) {
+  if (!value) return '-'
+  const match = String(value).match(/^(\d{4})-(\d{2})/)
+  return match ? `${match[1]}/${match[2]}` : value
 }
 
-function dueText(
-  endDate: string
-) {
-  const today =
-    todayText()
-
-  const days =
-    daysBetween(
-      today,
-      endDate
-    )
-
-  if (
-    days < 0
-  ) {
-    return `已到期 ${Math.abs(days)} 天`
-  }
-
-  if (
-    days === 0
-  ) {
-    return '今天到期'
-  }
-
-  if (
-    days <= 20
-  ) {
-    return `${days} 天後到期`
-  }
-
-  return '超過 20 天'
+function escapeCsv(value: unknown) {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`
 }
 
-function escapeCsv(
-  value: unknown
-) {
-  const text =
-    String(
-      value ?? ''
-    )
+function currentMonthValue() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+}
 
-  if (
-    text.includes(',') ||
-    text.includes('"') ||
-    text.includes('\n')
-  ) {
-    return `"${text.replace(
-      /"/g,
-      '""'
-    )}"`
-  }
-
-  return text
+function statusText(value: CycleEvent['sms_status']) {
+  if (value === 'exported') return '已匯出'
+  if (value === 'completed') return '已完成'
+  return '待發送'
 }
 
 export default function SmsListPage() {
-  const supabase =
-    createClient()
+  const supabase = useMemo(
+    () => createClient(),
+    []
+  )
 
-  const [
-    parkingLots,
-    setParkingLots,
-  ] =
-    useState<
-      ParkingLot[]
-    >([])
-
-  const [
-    rentals,
-    setRentals,
-  ] =
-    useState<
-      Rental[]
-    >([])
-
-  const [
-    selectedLotId,
-    setSelectedLotId,
-  ] =
-    useState(
-      'all'
-    )
-
-  const [
-    search,
-    setSearch,
-  ] =
+  const [parkingLots, setParkingLots] =
+    useState<ParkingLot[]>([])
+  const [rows, setRows] =
+    useState<CycleEvent[]>([])
+  const [selectedLotId, setSelectedLotId] =
+    useState('all')
+  const [selectedMonth, setSelectedMonth] =
+    useState(currentMonthValue())
+  const [statusFilter, setStatusFilter] =
+    useState<'all' | 'pending' | 'exported' | 'completed'>('all')
+  const [search, setSearch] =
     useState('')
-
-  const [
-    dueFilter,
-    setDueFilter,
-  ] =
-    useState<DueFilter>(
-      '20'
-    )
-
-  const [
-    loading,
-    setLoading,
-  ] =
+  const [loading, setLoading] =
     useState(true)
-
-  const [
-    message,
-    setMessage,
-  ] =
+  const [message, setMessage] =
     useState('')
-
-  useEffect(() => {
-    loadData()
-  }, [])
 
   async function loadData() {
     setLoading(true)
@@ -225,252 +94,196 @@ export default function SmsListPage() {
 
     try {
       const {
-        data:
-          lotData,
-        error:
-          lotError,
+        data: lotData,
+        error: lotError,
       } =
         await supabase
-          .from(
-            'parking_lots'
-          )
-          .select(
-            'id, name'
-          )
-          .eq(
-            'status',
-            'active'
-          )
-          .order(
-            'name'
-          )
+          .from('parking_lots')
+          .select('id,name')
+          .eq('status', 'active')
+          .order('name')
 
-      if (
-        lotError
-      ) {
-        setMessage(
-          '停車場讀取失敗：' +
-            lotError.message
-        )
+      if (lotError) throw lotError
 
-        return
-      }
+      const start = `${selectedMonth}-01`
+      const [year, month] =
+        selectedMonth.split('-').map(Number)
+      const next = new Date(year, month, 1)
+      const nextText =
+        `${next.getFullYear()}-${String(
+          next.getMonth() + 1
+        ).padStart(2, '0')}-01`
 
-      const {
-        data:
-          rentalData,
-        error:
-          rentalError,
-      } =
-        await supabase
-          .from(
-            'monthly_rentals'
-          )
+      let query =
+        supabase
+          .from('monthly_cycle_events')
           .select(`
             id,
             parking_lot_id,
+            monthly_rental_id,
             customer_name,
             phone,
             vehicle_plate,
             vehicle_type,
             rental_type,
-            start_date,
-            end_date,
-            monthly_fee,
-            payment_status,
-            rental_status
+            previous_end_date,
+            current_end_date,
+            cycle_month,
+            sms_required,
+            sms_status,
+            sms_exported_at,
+            trigger_reason,
+            created_at
           `)
-          .eq(
-            'rental_status',
-            'active'
-          )
-          // 到期簡訊是「正式租期提醒」，不可用 payment_status 過濾。
-          // 已繳代表目前這一期已付款，不代表下一期不用續租提醒。
-          .order(
-            'end_date',
-            {
-              ascending:
-                true,
-            }
-          )
+          .eq('sms_required', true)
+          .gte('cycle_month', start)
+          .lt('cycle_month', nextText)
+          .order('customer_name', {
+            ascending: true,
+          })
 
-      if (
-        rentalError
-      ) {
-        setMessage(
-          '月租資料讀取失敗：' +
-            rentalError.message
-        )
-
-        return
+      if (selectedLotId !== 'all') {
+        query =
+          query.eq(
+            'parking_lot_id',
+            selectedLotId
+          )
       }
 
-      setParkingLots(
-        lotData || []
-      )
+      if (statusFilter !== 'all') {
+        query =
+          query.eq(
+            'sms_status',
+            statusFilter
+          )
+      }
 
-      setRentals(
-        (rentalData ||
-          []) as Rental[]
+      const { data, error } =
+        await query
+
+      if (error) throw error
+
+      setParkingLots(
+        (lotData || []) as ParkingLot[]
       )
-    } catch (
-      error: any
-    ) {
+      setRows(
+        (data || []) as CycleEvent[]
+      )
+    } catch (error: any) {
       setMessage(
         error?.message ||
-          '資料讀取失敗'
+          '簡訊名單讀取失敗'
       )
     } finally {
       setLoading(false)
     }
   }
 
+  useEffect(() => {
+    void loadData()
+  }, [
+    selectedLotId,
+    selectedMonth,
+    statusFilter,
+  ])
+
   const lotMap =
-    useMemo(() => {
-      return new Map(
-        parkingLots.map(
-          (lot) => [
-            lot.id,
-            lot.name,
-          ]
-        )
-      )
-    }, [
-      parkingLots,
-    ])
+    useMemo(
+      () =>
+        new Map(
+          parkingLots.map(
+            (lot) => [lot.id, lot.name]
+          )
+        ),
+      [parkingLots]
+    )
 
   const filteredRows =
     useMemo(() => {
       const keyword =
-        search
-          .trim()
-          .toLowerCase()
+        search.trim().toLowerCase()
 
-      const today =
-        todayText()
+      if (!keyword) return rows
 
-      return rentals.filter(
-        (row) => {
-          if (
-            selectedLotId !==
-              'all' &&
-            row.parking_lot_id !==
-              selectedLotId
-          ) {
-            return false
-          }
-
-          if (
-            keyword
-          ) {
-            const text = [
-              row.customer_name,
-              row.phone || '',
-              row.vehicle_plate,
-              row.rental_type || '',
-              lotMap.get(
-                row.parking_lot_id
-              ) || '',
-            ]
-              .join(' ')
-              .toLowerCase()
-
-            if (
-              !text.includes(
-                keyword
-              )
-            ) {
-              return false
-            }
-          }
-
-          if (
-            dueFilter ===
-            'all'
-          ) {
-            return true
-          }
-
-          const days =
-            daysBetween(
-              today,
-              row.end_date
-            )
-
-          if (
-            dueFilter ===
-            'expired'
-          ) {
-            return days < 0
-          }
-
-          const maxDays =
-            Number(
-              dueFilter
-            )
-
-          return (
-            days >= 0 &&
-            days <= maxDays
-          )
-        }
+      return rows.filter(
+        (row) =>
+          [
+            row.customer_name,
+            row.phone || '',
+            row.vehicle_plate,
+            row.rental_type || '',
+            lotMap.get(row.parking_lot_id) || '',
+          ]
+            .join(' ')
+            .toLowerCase()
+            .includes(keyword)
       )
-    }, [
-      rentals,
-      selectedLotId,
-      search,
-      dueFilter,
-      lotMap,
-    ])
+    }, [rows, search, lotMap])
+
+  const pendingCount =
+    rows.filter(
+      (row) => row.sms_status === 'pending'
+    ).length
+
+  const exportedCount =
+    rows.filter(
+      (row) => row.sms_status === 'exported'
+    ).length
+
+  const completedCount =
+    rows.filter(
+      (row) => row.sms_status === 'completed'
+    ).length
 
   const missingPhoneCount =
-    useMemo(() => {
-      return filteredRows.filter(
-        (row) =>
-          !normalizePhone(
-            row.phone || ''
-          )
-      ).length
-    }, [
-      filteredRows,
-    ])
+    filteredRows.filter(
+      (row) =>
+        !normalizePhone(row.phone || '')
+    ).length
 
-  function exportCsv() {
-    if (
-      filteredRows.length ===
-      0
-    ) {
-      alert(
-        '目前沒有可匯出的簡訊名單'
+  async function exportCsv() {
+    if (!filteredRows.length) {
+      alert('目前沒有可匯出的簡訊名單')
+      return
+    }
+
+    const exportable =
+      filteredRows.filter(
+        (row) =>
+          Boolean(
+            normalizePhone(row.phone || '')
+          )
       )
 
+    if (!exportable.length) {
+      alert('目前名單全部缺少電話，無法匯出')
       return
     }
 
     const headers = [
       '停車場',
+      '簡訊月份',
       '姓名',
       '電話',
       '車牌',
       '車種',
       '月租類型',
-      '到期日',
-      '月租金額',
-      '到期狀態',
+      '上次到期日',
+      '本次到期日',
+      '判定原因',
     ]
 
     const lines = [
-      headers
-        .map(
-          escapeCsv
-        )
-        .join(','),
-      ...filteredRows.map(
+      headers.map(escapeCsv).join(','),
+      ...exportable.map(
         (row) =>
           [
             lotMap.get(
               row.parking_lot_id
             ) || '',
+            monthText(
+              row.cycle_month
+            ),
             row.customer_name,
             normalizePhone(
               row.phone || ''
@@ -479,30 +292,22 @@ export default function SmsListPage() {
             vehicleTypeText(
               row.vehicle_type
             ),
-            row.rental_type ||
-              '',
-            row.end_date,
-            row.monthly_fee,
-            dueText(
-              row.end_date
-            ),
+            row.rental_type || '',
+            row.previous_end_date || '',
+            row.current_end_date || '',
+            row.trigger_reason || '',
           ]
-            .map(
-              escapeCsv
-            )
+            .map(escapeCsv)
             .join(',')
       ),
     ]
 
-    const csvText =
-      '\uFEFF' +
-      lines.join(
-        '\r\n'
-      )
-
     const blob =
       new Blob(
-        [csvText],
+        [
+          '\uFEFF' +
+            lines.join('\r\n'),
+        ],
         {
           type:
             'text/csv;charset=utf-8;',
@@ -510,87 +315,126 @@ export default function SmsListPage() {
       )
 
     const url =
-      URL.createObjectURL(
-        blob
-      )
+      URL.createObjectURL(blob)
 
     const a =
-      document.createElement(
-        'a'
-      )
+      document.createElement('a')
 
-    const selectedLotName =
-      selectedLotId ===
-      'all'
+    const lotName =
+      selectedLotId === 'all'
         ? '全部停車場'
-        : lotMap.get(
-            selectedLotId
-          ) ||
-          '停車場'
+        : (
+            lotMap.get(
+              selectedLotId
+            ) ||
+            '停車場'
+          )
 
     a.href = url
     a.download =
-      `${selectedLotName}_簡訊名單_${todayText()}.csv`
+      `${lotName}_每月簡訊名單_${selectedMonth}.csv`
 
-    document.body.appendChild(
-      a
-    )
-
+    document.body.appendChild(a)
     a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
 
-    document.body.removeChild(
-      a
-    )
+    const ids =
+      exportable
+        .filter(
+          (row) =>
+            row.sms_status === 'pending'
+        )
+        .map((row) => row.id)
 
-    URL.revokeObjectURL(
-      url
-    )
+    if (ids.length) {
+      const { error } =
+        await supabase
+          .from(
+            'monthly_cycle_events'
+          )
+          .update({
+            sms_status:
+              'exported',
+            sms_exported_at:
+              new Date()
+                .toISOString(),
+          })
+          .in('id', ids)
+
+      if (error) {
+        setMessage(
+          `CSV 已下載，但更新「已匯出」狀態失敗：${error.message}`
+        )
+      } else {
+        setMessage(
+          `已匯出 ${exportable.length} 筆；其中 ${ids.length} 筆已標記為「已匯出」。`
+        )
+        await loadData()
+      }
+    }
+  }
+
+  async function markCompleted(id: string) {
+    const { error } =
+      await supabase
+        .from(
+          'monthly_cycle_events'
+        )
+        .update({
+          sms_status:
+            'completed',
+          sms_completed_at:
+            new Date()
+              .toISOString(),
+        })
+        .eq('id', id)
+
+    if (error) {
+      alert(error.message)
+      return
+    }
+
+    await loadData()
   }
 
   return (
     <div
       style={{
-        paddingBottom:
-          40,
+        paddingBottom: 40,
       }}
     >
       <div
         style={{
-          display:
-            'flex',
+          display: 'flex',
           justifyContent:
             'space-between',
           alignItems:
             'flex-start',
           gap: 16,
-          flexWrap:
-            'wrap',
+          flexWrap: 'wrap',
         }}
       >
         <div>
           <h1
             style={{
-              marginTop:
-                0,
-              marginBottom:
-                6,
+              marginTop: 0,
+              marginBottom: 6,
             }}
           >
             每月簡訊名單
           </h1>
 
-          <div
-            className="muted"
-          >
-            顯示目前「未繳費＋在租中」的月租戶，預設以到期前 20 天內為提醒範圍。
+          <div className="muted">
+            名單由舊系統匯入時建立的「月份事件」固定保存；後續付款或月租資料變動，不會讓已產生的名單突然消失。
           </div>
         </div>
 
         <button
           type="button"
           className="btn"
-          onClick={
-            exportCsv
+          onClick={() =>
+            void exportCsv()
           }
         >
           匯出目前名單 CSV
@@ -600,231 +444,173 @@ export default function SmsListPage() {
       <div
         className="card"
         style={{
-          marginTop:
-            20,
+          marginTop: 20,
+          display: 'grid',
+          gridTemplateColumns:
+            'minmax(220px,1fr) 180px 170px minmax(220px,1fr)',
+          gap: 12,
         }}
       >
-        <div
-          style={{
-            display:
-              'grid',
-            gridTemplateColumns:
-              'minmax(220px,1fr) minmax(220px,1fr) 190px',
-            gap: 12,
-          }}
-        >
-          <div
-            className="field"
+        <div className="field">
+          <label>停車場</label>
+          <select
+            value={selectedLotId}
+            onChange={(event) =>
+              setSelectedLotId(
+                event.target.value
+              )
+            }
           >
-            <label>
-              停車場
-            </label>
-
-            <select
-              value={
-                selectedLotId
-              }
-              onChange={(
-                event
-              ) =>
-                setSelectedLotId(
-                  event
-                    .target
-                    .value
-                )
-              }
-            >
-              <option value="all">
-                全部停車場
-              </option>
-
-              {parkingLots.map(
-                (lot) => (
-                  <option
-                    key={
-                      lot.id
-                    }
-                    value={
-                      lot.id
-                    }
-                  >
-                    {
-                      lot.name
-                    }
-                  </option>
-                )
-              )}
-            </select>
-          </div>
-
-          <div
-            className="field"
-          >
-            <label>
-              搜尋
-            </label>
-
-            <input
-              value={
-                search
-              }
-              onChange={(
-                event
-              ) =>
-                setSearch(
-                  event
-                    .target
-                    .value
-                )
-              }
-              placeholder="姓名、電話、車牌、月租類型"
-            />
-          </div>
-
-          <div
-            className="field"
-          >
-            <label>
-              到期範圍
-            </label>
-
-            <select
-              value={
-                dueFilter
-              }
-              onChange={(
-                event
-              ) =>
-                setDueFilter(
-                  event
-                    .target
-                    .value as DueFilter
-                )
-              }
-            >
-              <option value="20">
-                20 天內到期
-              </option>
-
-              <option value="expired">
-                已到期
-              </option>
-
-              <option value="all">
-                全部未繳
-              </option>
-            </select>
-          </div>
+            <option value="all">
+              全部停車場
+            </option>
+            {parkingLots.map(
+              (lot) => (
+                <option
+                  key={lot.id}
+                  value={lot.id}
+                >
+                  {lot.name}
+                </option>
+              )
+            )}
+          </select>
         </div>
 
-        {message && (
-          <div
-            style={{
-              marginTop:
-                14,
-              padding:
-                12,
-              borderRadius:
-                8,
-              background:
-                '#fee2e2',
-              color:
-                '#b91c1c',
-            }}
-          >
-            {
-              message
+        <div className="field">
+          <label>簡訊月份</label>
+          <input
+            type="month"
+            value={selectedMonth}
+            onChange={(event) =>
+              setSelectedMonth(
+                event.target.value
+              )
             }
-          </div>
-        )}
+          />
+        </div>
+
+        <div className="field">
+          <label>發送狀態</label>
+          <select
+            value={statusFilter}
+            onChange={(event) =>
+              setStatusFilter(
+                event.target.value as
+                  | 'all'
+                  | 'pending'
+                  | 'exported'
+                  | 'completed'
+              )
+            }
+          >
+            <option value="all">
+              全部
+            </option>
+            <option value="pending">
+              待發送
+            </option>
+            <option value="exported">
+              已匯出
+            </option>
+            <option value="completed">
+              已完成
+            </option>
+          </select>
+        </div>
+
+        <div className="field">
+          <label>搜尋</label>
+          <input
+            value={search}
+            onChange={(event) =>
+              setSearch(
+                event.target.value
+              )
+            }
+            placeholder="姓名、電話、車牌、月租類型"
+          />
+        </div>
       </div>
 
       <div
         style={{
-          display:
-            'grid',
+          display: 'grid',
           gridTemplateColumns:
-            'repeat(auto-fit, minmax(180px, 1fr))',
+            'repeat(4,minmax(140px,1fr))',
           gap: 12,
-          marginTop:
-            20,
+          marginTop: 16,
         }}
       >
-        <div
-          className="card"
-        >
-          <div
-            className="muted"
-          >
-            目前名單
+        <div className="card">
+          <div className="muted">
+            本月名單
           </div>
-
-          <div
-            style={{
-              fontSize:
-                28,
-              fontWeight:
-                800,
-              marginTop:
-                6,
-            }}
-          >
-            {
-              filteredRows.length
-            }
-          </div>
+          <h2>{rows.length} 筆</h2>
         </div>
-
-        <div
-          className="card"
-        >
-          <div
-            className="muted"
-          >
-            缺少電話
+        <div className="card">
+          <div className="muted">
+            待發送
           </div>
-
-          <div
-            style={{
-              fontSize:
-                28,
-              fontWeight:
-                800,
-              marginTop:
-                6,
-              color:
-                missingPhoneCount >
-                0
-                  ? '#b91c1c'
-                  : '#15803d',
-            }}
-          >
-            {
-              missingPhoneCount
-            }
+          <h2>{pendingCount} 筆</h2>
+        </div>
+        <div className="card">
+          <div className="muted">
+            已匯出
           </div>
+          <h2>{exportedCount} 筆</h2>
+        </div>
+        <div className="card">
+          <div className="muted">
+            已完成
+          </div>
+          <h2>{completedCount} 筆</h2>
         </div>
       </div>
+
+      {missingPhoneCount > 0 && (
+        <div
+          className="card"
+          style={{
+            marginTop: 16,
+            color: '#b45309',
+          }}
+        >
+          目前篩選結果有 {missingPhoneCount} 筆缺少電話；匯出 CSV 時會自動略過，避免送簡訊失敗。
+        </div>
+      )}
+
+      {message && (
+        <div
+          className="card"
+          style={{
+            marginTop: 16,
+          }}
+        >
+          {message}
+        </div>
+      )}
 
       <div
         className="card"
         style={{
-          marginTop:
-            20,
+          marginTop: 16,
+          overflowX: 'auto',
         }}
       >
-        <div
-          style={{
-            overflowX:
-              'auto',
-          }}
-        >
+        {loading ? (
+          <div style={{ padding: 20 }}>
+            讀取中…
+          </div>
+        ) : filteredRows.length ===
+          0 ? (
+          <div style={{ padding: 20 }}>
+            目前這個月份沒有簡訊事件。
+          </div>
+        ) : (
           <table
             style={{
-              width:
-                '100%',
-              minWidth:
-                1150,
+              width: '100%',
               borderCollapse:
                 'collapse',
             }}
@@ -832,243 +618,124 @@ export default function SmsListPage() {
             <thead>
               <tr
                 style={{
-                  textAlign:
-                    'left',
+                  textAlign: 'left',
+                  borderBottom:
+                    '1px solid #e5e7eb',
                 }}
               >
-                <th>
+                <th style={{ padding: 10 }}>
                   停車場
                 </th>
-
-                <th>
+                <th style={{ padding: 10 }}>
                   姓名
                 </th>
-
-                <th>
+                <th style={{ padding: 10 }}>
                   電話
                 </th>
-
-                <th>
+                <th style={{ padding: 10 }}>
                   車牌
                 </th>
-
-                <th>
-                  車種
+                <th style={{ padding: 10 }}>
+                  類型
                 </th>
-
-                <th>
-                  月租類型
+                <th style={{ padding: 10 }}>
+                  上次到期日
                 </th>
-
-                <th>
-                  到期日
+                <th style={{ padding: 10 }}>
+                  本次到期日
                 </th>
-
-                <th>
-                  月租金額
+                <th style={{ padding: 10 }}>
+                  月份
                 </th>
-
-                <th>
-                  到期狀態
+                <th style={{ padding: 10 }}>
+                  簡訊狀態
+                </th>
+                <th style={{ padding: 10 }}>
+                  操作
                 </th>
               </tr>
             </thead>
 
             <tbody>
-              {loading ? (
-                <tr>
-                  <td
-                    colSpan={
-                      9
-                    }
+              {filteredRows.map(
+                (row) => (
+                  <tr
+                    key={row.id}
                     style={{
-                      padding:
-                        20,
+                      borderBottom:
+                        '1px solid #f1f5f9',
                     }}
                   >
-                    讀取中…
-                  </td>
-                </tr>
-              ) : filteredRows.length ===
-                0 ? (
-                <tr>
-                  <td
-                    colSpan={
-                      9
-                    }
-                    style={{
-                      padding:
-                        20,
-                      color:
-                        '#64748b',
-                    }}
-                  >
-                    目前沒有符合條件的簡訊名單
-                  </td>
-                </tr>
-              ) : (
-                filteredRows.map(
-                  (
-                    row
-                  ) => {
-                    const phoneText =
-                      normalizePhone(
-                        row.phone ||
-                          ''
-                      )
-
-                    const expired =
-                      daysBetween(
-                        todayText(),
-                        row.end_date
-                      ) <
-                      0
-
-                    return (
-                      <tr
-                        key={
-                          row.id
-                        }
-                        style={{
-                          borderTop:
-                            '1px solid #e5e7eb',
-                        }}
-                      >
-                        <td
+                    <td style={{ padding: 10 }}>
+                      {lotMap.get(
+                        row.parking_lot_id
+                      ) || '-'}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {row.customer_name}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {normalizePhone(
+                        row.phone || ''
+                      ) || (
+                        <span
                           style={{
-                            padding:
-                              10,
-                            minWidth:
-                              190,
-                          }}
-                        >
-                          {lotMap.get(
-                            row.parking_lot_id
-                          ) ||
-                            '-'}
-                        </td>
-
-                        <td
-                          style={{
-                            padding:
-                              10,
-                            fontWeight:
-                              700,
-                          }}
-                        >
-                          {
-                            row.customer_name
-                          }
-                        </td>
-
-                        <td
-                          style={{
-                            padding:
-                              10,
                             color:
-                              phoneText
-                                ? undefined
-                                : '#b91c1c',
-                            fontWeight:
-                              phoneText
-                                ? 500
-                                : 700,
+                              '#b45309',
                           }}
                         >
-                          {phoneText ||
-                            '缺少電話'}
-                        </td>
-
-                        <td
-                          style={{
-                            padding:
-                              10,
-                            fontWeight:
-                              700,
-                          }}
-                        >
-                          {
-                            row.vehicle_plate
+                          缺少電話
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {row.vehicle_plate}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {row.rental_type || '-'}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {row.previous_end_date || '-'}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {row.current_end_date || '-'}
+                    </td>
+                    <td
+                      style={{
+                        padding: 10,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {monthText(
+                        row.cycle_month
+                      )}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {statusText(
+                        row.sms_status
+                      )}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {row.sms_status !==
+                        'completed' && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void markCompleted(
+                              row.id
+                            )
                           }
-                        </td>
-
-                        <td
-                          style={{
-                            padding:
-                              10,
-                          }}
                         >
-                          {vehicleTypeText(
-                            row.vehicle_type
-                          )}
-                        </td>
-
-                        <td
-                          style={{
-                            padding:
-                              10,
-                          }}
-                        >
-                          {row.rental_type ||
-                            '-'}
-                        </td>
-
-                        <td
-                          style={{
-                            padding:
-                              10,
-                            whiteSpace:
-                              'nowrap',
-                          }}
-                        >
-                          {
-                            row.end_date
-                          }
-                        </td>
-
-                        <td
-                          style={{
-                            padding:
-                              10,
-                            whiteSpace:
-                              'nowrap',
-                          }}
-                        >
-                          NT${' '}
-                          {Number(
-                            row.monthly_fee ||
-                              0
-                          ).toLocaleString(
-                            'zh-TW'
-                          )}
-                        </td>
-
-                        <td
-                          style={{
-                            padding:
-                              10,
-                            whiteSpace:
-                              'nowrap',
-                            color:
-                              expired
-                                ? '#b91c1c'
-                                : '#d97706',
-                            fontWeight:
-                              700,
-                          }}
-                        >
-                          {dueText(
-                            row.end_date
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  }
+                          標記完成
+                        </button>
+                      )}
+                    </td>
+                  </tr>
                 )
               )}
             </tbody>
           </table>
-        </div>
+        )}
       </div>
     </div>
   )

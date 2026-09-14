@@ -1,6 +1,6 @@
 'use client'
 
-// PHASE36_PAYMENT_CYCLE_RESET_FIX
+// PHASE40_MONTHLY_CYCLE_EVENTS
 
 import { useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -1749,6 +1749,23 @@ async function parseLegacyFile(
   )
 }
 
+
+function monthKey(
+  value?: string | null
+) {
+  const text =
+    String(value || '').trim()
+
+  const match =
+    text.match(
+      /^(\d{4})-(\d{2})/
+    )
+
+  return match
+    ? `${match[1]}-${match[2]}`
+    : ''
+}
+
 function sameValue(
   a: any,
   b: any
@@ -2961,6 +2978,8 @@ export default function LegacyMonthlyImport({
             .filter(Boolean)
             .join(' / ')
 
+        // 第40階段：付款狀態與月份事件完全分離，不再用到期日/租期變更重設付款。
+
         if (!previous) {
           if (!currentRental) {
             const {
@@ -3304,14 +3323,14 @@ export default function LegacyMonthlyImport({
                   ? {
                       payment_status:
                         newRow.payment_status,
-
                       payment_date:
-                        newRow.payment_date ||
-                        null,
-
+                        newRow.payment_status === 'paid'
+                          ? (newRow.payment_date || null)
+                          : null,
                       invoice_number:
-                        newRow.invoice_number ||
-                        null,
+                        newRow.payment_status === 'paid'
+                          ? (newRow.invoice_number || null)
+                          : null,
                     }
                   : isZeroPaidRow(newRow)
                     ? {
@@ -3424,6 +3443,29 @@ export default function LegacyMonthlyImport({
           !sameValue(
             previous.end_date,
             newRow.end_date
+          )
+
+        /*
+         * 第39階段簡訊名單：
+         * 只比較「上一份舊系統總表」與「本次總表」的到期月份。
+         * 日期在同一月份內變動不列入；月份跨到新月份才建立簡訊候選。
+         */
+        const previousDueMonth =
+          monthKey(
+            previous.end_date
+          )
+
+        const currentDueMonth =
+          monthKey(
+            newRow.end_date
+          )
+
+        const smsMonthChanged =
+          Boolean(
+            previousDueMonth &&
+            currentDueMonth &&
+            previousDueMonth !==
+              currentDueMonth
           )
 
         const paymentChanged =
@@ -3593,23 +3635,12 @@ export default function LegacyMonthlyImport({
                         ? (newRow.invoice_number || null)
                         : null,
                   }
-                : isPaidShortRow(newRow)
+                : isZeroPaidRow(newRow)
                   ? {
                       payment_status:
                         'paid',
                     }
-                  : dateChanged
-                    ? {
-                        // 舊系統總表進入新的租期時，代表要重新繳下一期。
-                        // 不能沿用上一期 paid，否則簡訊/待繳名單會漏掉。
-                        payment_status:
-                          'unpaid',
-                        payment_date:
-                          null,
-                        invoice_number:
-                          null,
-                      }
-                    : {}),
+                  : {}),
 
               notes:
                 importedNotes ||
@@ -3632,6 +3663,84 @@ export default function LegacyMonthlyImport({
         ) {
           failed++
           continue
+        }
+
+        if (
+          smsMonthChanged
+        ) {
+          const {
+            error:
+              smsCandidateError,
+          } =
+            await supabase
+              .from(
+                'monthly_cycle_events'
+              )
+              .upsert(
+                {
+                  parking_lot_id:
+                    parkingLotId,
+
+                  monthly_rental_id:
+                    currentRental.id,
+
+                  import_batch_id:
+                    batchId,
+
+                  customer_name:
+                    newRow.customer_name,
+
+                  phone:
+                    newRow.phone ||
+                    null,
+
+                  vehicle_plate:
+                    newRow.vehicle_plate,
+
+                  vehicle_type:
+                    newRow.vehicle_type,
+
+                  rental_type:
+                    newRow.rental_type ||
+                    null,
+
+                  previous_end_date:
+                    previous.end_date ||
+                    null,
+
+                  current_end_date:
+                    newRow.end_date ||
+                    null,
+
+                  cycle_month:
+                    `${currentDueMonth}-01`,
+
+                  sms_required:
+                    true,
+
+                  sms_status:
+                    'pending',
+
+                  trigger_reason:
+                    '舊系統到期月份由上一期跨到本期',
+
+                  source:
+                    'legacy_due_month_change',
+                },
+                {
+                  onConflict:
+                    'parking_lot_id,monthly_rental_id,cycle_month',
+                }
+              )
+
+          if (
+            smsCandidateError
+          ) {
+            console.error(
+              '建立月份事件失敗',
+              smsCandidateError
+            )
+          }
         }
 
         if (
