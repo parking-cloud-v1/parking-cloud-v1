@@ -1,6 +1,6 @@
 'use client'
 
-// PHASE40_MONTHLY_CYCLE_EVENTS
+// PHASE41_AMOUNT_BASED_SMS_SCHEDULE
 import {
   useEffect,
   useMemo,
@@ -13,23 +13,24 @@ type ParkingLot = {
   name: string
 }
 
-type CycleEvent = {
+type ScheduleRow = {
   id: string
+  monthly_rental_id: string
   parking_lot_id: string
-  monthly_rental_id: string | null
   customer_name: string
   phone: string | null
   vehicle_plate: string
   vehicle_type: string | null
   rental_type: string | null
-  previous_end_date: string | null
-  current_end_date: string | null
-  cycle_month: string
-  sms_required: boolean
-  sms_status: 'pending' | 'exported' | 'completed'
-  sms_exported_at: string | null
-  trigger_reason: string | null
-  created_at: string
+  billing_cycle_months: number | null
+  cycle_source: 'auto' | 'manual' | 'unknown'
+  needs_review: boolean
+  cycle_anchor_month: string
+  next_sms_month: string
+  last_exported_month: string | null
+  active: boolean
+  source_amount: number | null
+  standard_monthly_fee: number | null
 }
 
 function normalizePhone(value: string) {
@@ -38,55 +39,91 @@ function normalizePhone(value: string) {
     .replace(/-/g, '')
 }
 
-function vehicleTypeText(value?: string | null) {
-  if (value === 'motorcycle') return '機車'
-  if (value === 'heavy_motorcycle') return '重機'
-  return '汽車'
-}
-
 function monthText(value?: string | null) {
   if (!value) return '-'
-  const match = String(value).match(/^(\d{4})-(\d{2})/)
-  return match ? `${match[1]}/${match[2]}` : value
-}
-
-function escapeCsv(value: unknown) {
-  return `"${String(value ?? '').replace(/"/g, '""')}"`
+  const match =
+    String(value).match(
+      /^(\d{4})-(\d{2})/
+    )
+  return match
+    ? `${match[1]}/${match[2]}`
+    : value
 }
 
 function currentMonthValue() {
   const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  return `${now.getFullYear()}-${String(
+    now.getMonth() + 1
+  ).padStart(2, '0')}`
 }
 
-function statusText(value: CycleEvent['sms_status']) {
-  if (value === 'exported') return '已匯出'
-  if (value === 'completed') return '已完成'
-  return '待發送'
+function escapeCsv(value: unknown) {
+  return `"${String(value ?? '')
+    .replace(/"/g, '""')}"`
 }
 
 export default function SmsListPage() {
-  const supabase = useMemo(
-    () => createClient(),
-    []
-  )
+  const supabase =
+    useMemo(
+      () => createClient(),
+      []
+    )
 
-  const [parkingLots, setParkingLots] =
-    useState<ParkingLot[]>([])
-  const [rows, setRows] =
-    useState<CycleEvent[]>([])
-  const [selectedLotId, setSelectedLotId] =
+  const [
+    parkingLots,
+    setParkingLots,
+  ] =
+    useState<ParkingLot[]>(
+      []
+    )
+
+  const [
+    rows,
+    setRows,
+  ] =
+    useState<ScheduleRow[]>(
+      []
+    )
+
+  const [
+    selectedLotId,
+    setSelectedLotId,
+  ] =
     useState('all')
-  const [selectedMonth, setSelectedMonth] =
-    useState(currentMonthValue())
-  const [statusFilter, setStatusFilter] =
-    useState<'all' | 'pending' | 'exported' | 'completed'>('all')
-  const [search, setSearch] =
+
+  const [
+    selectedMonth,
+    setSelectedMonth,
+  ] =
+    useState(
+      currentMonthValue()
+    )
+
+  const [
+    search,
+    setSearch,
+  ] =
     useState('')
-  const [loading, setLoading] =
+
+  const [
+    loading,
+    setLoading,
+  ] =
     useState(true)
-  const [message, setMessage] =
+
+  const [
+    message,
+    setMessage,
+  ] =
     useState('')
+
+  const [
+    manualMonths,
+    setManualMonths,
+  ] =
+    useState<Record<string,string>>(
+      {}
+    )
 
   async function loadData() {
     setLoading(true)
@@ -94,55 +131,80 @@ export default function SmsListPage() {
 
     try {
       const {
-        data: lotData,
-        error: lotError,
+        data:
+          lotData,
+        error:
+          lotError,
       } =
         await supabase
-          .from('parking_lots')
-          .select('id,name')
-          .eq('status', 'active')
+          .from(
+            'parking_lots'
+          )
+          .select(
+            'id,name'
+          )
+          .eq(
+            'status',
+            'active'
+          )
           .order('name')
 
-      if (lotError) throw lotError
+      if (lotError) {
+        throw lotError
+      }
 
-      const start = `${selectedMonth}-01`
-      const [year, month] =
-        selectedMonth.split('-').map(Number)
-      const next = new Date(year, month, 1)
-      const nextText =
-        `${next.getFullYear()}-${String(
-          next.getMonth() + 1
-        ).padStart(2, '0')}-01`
+      const selectedMonthDate =
+        `${selectedMonth}-01`
 
       let query =
         supabase
-          .from('monthly_cycle_events')
+          .from(
+            'monthly_sms_schedules'
+          )
           .select(`
             id,
-            parking_lot_id,
             monthly_rental_id,
+            parking_lot_id,
             customer_name,
             phone,
             vehicle_plate,
             vehicle_type,
             rental_type,
-            previous_end_date,
-            current_end_date,
-            cycle_month,
-            sms_required,
-            sms_status,
-            sms_exported_at,
-            trigger_reason,
-            created_at
+            billing_cycle_months,
+            cycle_source,
+            needs_review,
+            cycle_anchor_month,
+            next_sms_month,
+            last_exported_month,
+            active,
+            source_amount,
+            standard_monthly_fee
           `)
-          .eq('sms_required', true)
-          .gte('cycle_month', start)
-          .lt('cycle_month', nextText)
-          .order('customer_name', {
-            ascending: true,
-          })
+          .eq(
+            'active',
+            true
+          )
+          .lte(
+            'next_sms_month',
+            selectedMonthDate
+          )
+          .order(
+            'next_sms_month',
+            {
+              ascending: true,
+            }
+          )
+          .order(
+            'customer_name',
+            {
+              ascending: true,
+            }
+          )
 
-      if (selectedLotId !== 'all') {
+      if (
+        selectedLotId !==
+        'all'
+      ) {
         query =
           query.eq(
             'parking_lot_id',
@@ -150,29 +212,31 @@ export default function SmsListPage() {
           )
       }
 
-      if (statusFilter !== 'all') {
-        query =
-          query.eq(
-            'sms_status',
-            statusFilter
-          )
-      }
-
-      const { data, error } =
+      const {
+        data,
+        error,
+      } =
         await query
 
-      if (error) throw error
+      if (error) {
+        throw error
+      }
 
       setParkingLots(
-        (lotData || []) as ParkingLot[]
+        (lotData ||
+          []) as ParkingLot[]
       )
+
       setRows(
-        (data || []) as CycleEvent[]
+        (data ||
+          []) as ScheduleRow[]
       )
-    } catch (error: any) {
+    } catch (
+      error: any
+    ) {
       setMessage(
         error?.message ||
-          '簡訊名單讀取失敗'
+          '簡訊排程讀取失敗'
       )
     } finally {
       setLoading(false)
@@ -184,7 +248,6 @@ export default function SmsListPage() {
   }, [
     selectedLotId,
     selectedMonth,
-    statusFilter,
   ])
 
   const lotMap =
@@ -192,18 +255,27 @@ export default function SmsListPage() {
       () =>
         new Map(
           parkingLots.map(
-            (lot) => [lot.id, lot.name]
+            (lot) => [
+              lot.id,
+              lot.name,
+            ]
           )
         ),
-      [parkingLots]
+      [
+        parkingLots,
+      ]
     )
 
   const filteredRows =
     useMemo(() => {
       const keyword =
-        search.trim().toLowerCase()
+        search
+          .trim()
+          .toLowerCase()
 
-      if (!keyword) return rows
+      if (!keyword) {
+        return rows
+      }
 
       return rows.filter(
         (row) =>
@@ -212,90 +284,156 @@ export default function SmsListPage() {
             row.phone || '',
             row.vehicle_plate,
             row.rental_type || '',
-            lotMap.get(row.parking_lot_id) || '',
+            lotMap.get(
+              row.parking_lot_id
+            ) || '',
           ]
             .join(' ')
             .toLowerCase()
-            .includes(keyword)
+            .includes(
+              keyword
+            )
       )
-    }, [rows, search, lotMap])
+    }, [
+      rows,
+      search,
+      lotMap,
+    ])
 
-  const pendingCount =
-    rows.filter(
-      (row) => row.sms_status === 'pending'
-    ).length
-
-  const exportedCount =
-    rows.filter(
-      (row) => row.sms_status === 'exported'
-    ).length
-
-  const completedCount =
-    rows.filter(
-      (row) => row.sms_status === 'completed'
-    ).length
-
-  const missingPhoneCount =
+  const reviewRows =
     filteredRows.filter(
       (row) =>
-        !normalizePhone(row.phone || '')
+        row.needs_review
+    )
+
+  const readyRows =
+    filteredRows.filter(
+      (row) =>
+        !row.needs_review &&
+        Boolean(
+          row.billing_cycle_months
+        )
+    )
+
+  const missingPhoneCount =
+    readyRows.filter(
+      (row) =>
+        !normalizePhone(
+          row.phone || ''
+        )
     ).length
 
-  async function exportCsv() {
-    if (!filteredRows.length) {
-      alert('目前沒有可匯出的簡訊名單')
+  async function confirmCycle(
+    row: ScheduleRow
+  ) {
+    const months =
+      Number(
+        manualMonths[
+          row.id
+        ] || '1'
+      )
+
+    if (
+      !Number.isInteger(
+        months
+      ) ||
+      months < 1 ||
+      months > 12
+    ) {
+      alert(
+        '請選擇 1～12 個月'
+      )
       return
     }
 
+    const {
+      error,
+    } =
+      await supabase
+        .rpc(
+          'set_monthly_sms_cycle',
+          {
+            p_schedule_id:
+              row.id,
+            p_cycle_months:
+              months,
+          }
+        )
+
+    if (error) {
+      alert(
+        `設定失敗：${error.message}`
+      )
+      return
+    }
+
+    setMessage(
+      `${row.customer_name} 已設定為 ${months} 個月週期。`
+    )
+
+    await loadData()
+  }
+
+  async function exportCsv() {
     const exportable =
-      filteredRows.filter(
+      readyRows.filter(
         (row) =>
           Boolean(
-            normalizePhone(row.phone || '')
+            normalizePhone(
+              row.phone || ''
+            )
           )
       )
 
-    if (!exportable.length) {
-      alert('目前名單全部缺少電話，無法匯出')
+    if (
+      exportable.length ===
+      0
+    ) {
+      alert(
+        '目前沒有可匯出的簡訊名單。若有「需確認月數」，請先完成確認。'
+      )
       return
     }
 
     const headers = [
       '停車場',
-      '簡訊月份',
+      '本次簡訊月份',
+      '原應提醒月份',
       '姓名',
       '電話',
       '車牌',
-      '車種',
       '月租類型',
-      '上次到期日',
-      '本次到期日',
-      '判定原因',
+      '繳費週期(月)',
+      '本次辨識金額',
+      '標準單月金額',
     ]
 
     const lines = [
-      headers.map(escapeCsv).join(','),
+      headers
+        .map(escapeCsv)
+        .join(','),
       ...exportable.map(
         (row) =>
           [
             lotMap.get(
               row.parking_lot_id
             ) || '',
+            selectedMonth,
             monthText(
-              row.cycle_month
+              row.next_sms_month
             ),
             row.customer_name,
             normalizePhone(
               row.phone || ''
             ),
             row.vehicle_plate,
-            vehicleTypeText(
-              row.vehicle_type
-            ),
             row.rental_type || '',
-            row.previous_end_date || '',
-            row.current_end_date || '',
-            row.trigger_reason || '',
+            row.billing_cycle_months ||
+              '',
+            row.source_amount ??
+              '',
+            row.standard_monthly_fee ??
+              '',
           ]
             .map(escapeCsv)
             .join(',')
@@ -306,7 +444,9 @@ export default function SmsListPage() {
       new Blob(
         [
           '\uFEFF' +
-            lines.join('\r\n'),
+            lines.join(
+              '\r\n'
+            ),
         ],
         {
           type:
@@ -315,85 +455,64 @@ export default function SmsListPage() {
       )
 
     const url =
-      URL.createObjectURL(blob)
+      URL.createObjectURL(
+        blob
+      )
 
     const a =
-      document.createElement('a')
+      document.createElement(
+        'a'
+      )
 
     const lotName =
-      selectedLotId === 'all'
+      selectedLotId ===
+      'all'
         ? '全部停車場'
-        : (
-            lotMap.get(
-              selectedLotId
-            ) ||
-            '停車場'
-          )
+        : lotMap.get(
+            selectedLotId
+          ) ||
+          '停車場'
 
     a.href = url
     a.download =
       `${lotName}_每月簡訊名單_${selectedMonth}.csv`
 
-    document.body.appendChild(a)
+    document.body.appendChild(
+      a
+    )
     a.click()
     a.remove()
-    URL.revokeObjectURL(url)
+    URL.revokeObjectURL(
+      url
+    )
 
-    const ids =
-      exportable
-        .filter(
-          (row) =>
-            row.sms_status === 'pending'
-        )
-        .map((row) => row.id)
-
-    if (ids.length) {
-      const { error } =
-        await supabase
-          .from(
-            'monthly_cycle_events'
-          )
-          .update({
-            sms_status:
-              'exported',
-            sms_exported_at:
-              new Date()
-                .toISOString(),
-          })
-          .in('id', ids)
-
-      if (error) {
-        setMessage(
-          `CSV 已下載，但更新「已匯出」狀態失敗：${error.message}`
-        )
-      } else {
-        setMessage(
-          `已匯出 ${exportable.length} 筆；其中 ${ids.length} 筆已標記為「已匯出」。`
-        )
-        await loadData()
-      }
-    }
-  }
-
-  async function markCompleted(id: string) {
-    const { error } =
+    const {
+      error,
+    } =
       await supabase
-        .from(
-          'monthly_cycle_events'
+        .rpc(
+          'export_monthly_sms_schedules',
+          {
+            p_schedule_ids:
+              exportable.map(
+                (row) =>
+                  row.id
+              ),
+            p_export_month:
+              `${selectedMonth}-01`,
+          }
         )
-        .update({
-          sms_status:
-            'completed',
-          sms_completed_at:
-            new Date()
-              .toISOString(),
-        })
-        .eq('id', id)
 
     if (error) {
-      alert(error.message)
+      setMessage(
+        `CSV 已下載，但簡訊排程未能往後更新：${error.message}`
+      )
       return
     }
+
+    setMessage(
+      `已匯出 ${exportable.length} 筆。系統已依每人的 1／2／3…個月週期，自動安排下一次簡訊月份。`
+    )
 
     await loadData()
   }
@@ -401,32 +520,39 @@ export default function SmsListPage() {
   return (
     <div
       style={{
-        paddingBottom: 40,
+        paddingBottom:
+          40,
       }}
     >
       <div
         style={{
-          display: 'flex',
+          display:
+            'flex',
           justifyContent:
             'space-between',
           alignItems:
             'flex-start',
           gap: 16,
-          flexWrap: 'wrap',
+          flexWrap:
+            'wrap',
         }}
       >
         <div>
           <h1
             style={{
-              marginTop: 0,
-              marginBottom: 6,
+              marginTop:
+                0,
+              marginBottom:
+                6,
             }}
           >
             每月簡訊名單
           </h1>
 
-          <div className="muted">
-            名單由舊系統匯入時建立的「月份事件」固定保存；後續付款或月租資料變動，不會讓已產生的名單突然消失。
+          <div
+            className="muted"
+          >
+            不再依賴舊系統先匯入。系統會依每位月租戶的「下次簡訊月份」自動出現；1 個月、2 個月或更多月份，會依月租金額自動辨識。
           </div>
         </div>
 
@@ -437,95 +563,103 @@ export default function SmsListPage() {
             void exportCsv()
           }
         >
-          匯出目前名單 CSV
+          匯出本月簡訊 CSV
         </button>
       </div>
 
       <div
         className="card"
         style={{
-          marginTop: 20,
-          display: 'grid',
+          marginTop:
+            20,
+          display:
+            'grid',
           gridTemplateColumns:
-            'minmax(220px,1fr) 180px 170px minmax(220px,1fr)',
+            'minmax(220px,1fr) 180px minmax(220px,1fr)',
           gap: 12,
         }}
       >
-        <div className="field">
-          <label>停車場</label>
+        <div
+          className="field"
+        >
+          <label>
+            停車場
+          </label>
+
           <select
-            value={selectedLotId}
-            onChange={(event) =>
+            value={
+              selectedLotId
+            }
+            onChange={(
+              event
+            ) =>
               setSelectedLotId(
-                event.target.value
+                event.target
+                  .value
               )
             }
           >
             <option value="all">
               全部停車場
             </option>
+
             {parkingLots.map(
               (lot) => (
                 <option
-                  key={lot.id}
-                  value={lot.id}
+                  key={
+                    lot.id
+                  }
+                  value={
+                    lot.id
+                  }
                 >
-                  {lot.name}
+                  {
+                    lot.name
+                  }
                 </option>
               )
             )}
           </select>
         </div>
 
-        <div className="field">
-          <label>簡訊月份</label>
+        <div
+          className="field"
+        >
+          <label>
+            名單月份
+          </label>
+
           <input
             type="month"
-            value={selectedMonth}
-            onChange={(event) =>
+            value={
+              selectedMonth
+            }
+            onChange={(
+              event
+            ) =>
               setSelectedMonth(
-                event.target.value
+                event.target
+                  .value
               )
             }
           />
         </div>
 
-        <div className="field">
-          <label>發送狀態</label>
-          <select
-            value={statusFilter}
-            onChange={(event) =>
-              setStatusFilter(
-                event.target.value as
-                  | 'all'
-                  | 'pending'
-                  | 'exported'
-                  | 'completed'
-              )
-            }
-          >
-            <option value="all">
-              全部
-            </option>
-            <option value="pending">
-              待發送
-            </option>
-            <option value="exported">
-              已匯出
-            </option>
-            <option value="completed">
-              已完成
-            </option>
-          </select>
-        </div>
+        <div
+          className="field"
+        >
+          <label>
+            搜尋
+          </label>
 
-        <div className="field">
-          <label>搜尋</label>
           <input
             value={search}
-            onChange={(event) =>
+            onChange={(
+              event
+            ) =>
               setSearch(
-                event.target.value
+                event.target
+                  .value
               )
             }
             placeholder="姓名、電話、車牌、月租類型"
@@ -535,48 +669,61 @@ export default function SmsListPage() {
 
       <div
         style={{
-          display: 'grid',
+          display:
+            'grid',
           gridTemplateColumns:
-            'repeat(4,minmax(140px,1fr))',
+            'repeat(3,minmax(150px,1fr))',
           gap: 12,
-          marginTop: 16,
+          marginTop:
+            16,
         }}
       >
         <div className="card">
           <div className="muted">
-            本月名單
+            本月應列入
           </div>
-          <h2>{rows.length} 筆</h2>
+          <h2>
+            {
+              filteredRows.length
+            } 筆
+          </h2>
         </div>
+
         <div className="card">
           <div className="muted">
-            待發送
+            可直接匯出
           </div>
-          <h2>{pendingCount} 筆</h2>
+          <h2>
+            {
+              readyRows.length
+            } 筆
+          </h2>
         </div>
+
         <div className="card">
           <div className="muted">
-            已匯出
+            特殊金額需確認
           </div>
-          <h2>{exportedCount} 筆</h2>
-        </div>
-        <div className="card">
-          <div className="muted">
-            已完成
-          </div>
-          <h2>{completedCount} 筆</h2>
+          <h2>
+            {
+              reviewRows.length
+            } 筆
+          </h2>
         </div>
       </div>
 
-      {missingPhoneCount > 0 && (
+      {missingPhoneCount >
+        0 && (
         <div
           className="card"
           style={{
-            marginTop: 16,
-            color: '#b45309',
+            marginTop:
+              16,
+            color:
+              '#b45309',
           }}
         >
-          目前篩選結果有 {missingPhoneCount} 筆缺少電話；匯出 CSV 時會自動略過，避免送簡訊失敗。
+          可匯出名單中有 {missingPhoneCount} 筆缺少電話，CSV 會自動略過。
         </div>
       )}
 
@@ -584,151 +731,301 @@ export default function SmsListPage() {
         <div
           className="card"
           style={{
-            marginTop: 16,
+            marginTop:
+              16,
           }}
         >
           {message}
         </div>
       )}
 
+      {reviewRows.length >
+        0 && (
+        <div
+          className="card"
+          style={{
+            marginTop:
+              16,
+            border:
+              '1px solid #f59e0b',
+          }}
+        >
+          <h2
+            style={{
+              marginTop:
+                0,
+            }}
+          >
+            特殊金額／新增月租：確認本次涵蓋月數
+          </h2>
+
+          <div
+            className="muted"
+            style={{
+              marginBottom:
+                12,
+            }}
+          >
+            只有系統無法用標準單月金額整除時才需要人工確認。確認一次後，此人的簡訊排程就會依選定月數自動往後。
+          </div>
+
+          <div
+            style={{
+              overflowX:
+                'auto',
+            }}
+          >
+            <table
+              style={{
+                width:
+                  '100%',
+                borderCollapse:
+                  'collapse',
+              }}
+            >
+              <thead>
+                <tr>
+                  <th>
+                    姓名
+                  </th>
+                  <th>
+                    車牌
+                  </th>
+                  <th>
+                    類型
+                  </th>
+                  <th>
+                    金額
+                  </th>
+                  <th>
+                    標準單月
+                  </th>
+                  <th>
+                    本次涵蓋
+                  </th>
+                  <th>
+                    操作
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {reviewRows.map(
+                  (row) => (
+                    <tr
+                      key={
+                        row.id
+                      }
+                    >
+                      <td>
+                        {
+                          row.customer_name
+                        }
+                      </td>
+                      <td>
+                        {
+                          row.vehicle_plate
+                        }
+                      </td>
+                      <td>
+                        {
+                          row.rental_type ||
+                          '-'
+                        }
+                      </td>
+                      <td>
+                        $
+                        {Number(
+                          row.source_amount ||
+                            0
+                        ).toLocaleString()}
+                      </td>
+                      <td>
+                        {row.standard_monthly_fee
+                          ? `$${Number(
+                              row.standard_monthly_fee
+                            ).toLocaleString()}`
+                          : '尚未設定'}
+                      </td>
+                      <td>
+                        <select
+                          value={
+                            manualMonths[
+                              row.id
+                            ] ||
+                            '1'
+                          }
+                          onChange={(
+                            e
+                          ) =>
+                            setManualMonths({
+                              ...manualMonths,
+                              [row.id]:
+                                e.target
+                                  .value,
+                            })
+                          }
+                        >
+                          {[
+                            1,2,3,4,5,6,
+                            7,8,9,10,11,12,
+                          ].map(
+                            (
+                              months
+                            ) => (
+                              <option
+                                key={
+                                  months
+                                }
+                                value={
+                                  months
+                                }
+                              >
+                                {months} 個月
+                              </option>
+                            )
+                          )}
+                        </select>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void confirmCycle(
+                              row
+                            )
+                          }
+                        >
+                          確認
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div
         className="card"
         style={{
-          marginTop: 16,
-          overflowX: 'auto',
+          marginTop:
+            16,
+          overflowX:
+            'auto',
         }}
       >
         {loading ? (
-          <div style={{ padding: 20 }}>
+          <div
+            style={{
+              padding:
+                20,
+            }}
+          >
             讀取中…
           </div>
-        ) : filteredRows.length ===
+        ) : readyRows.length ===
           0 ? (
-          <div style={{ padding: 20 }}>
-            目前這個月份沒有簡訊事件。
+          <div
+            style={{
+              padding:
+                20,
+            }}
+          >
+            這個月份目前沒有可直接匯出的簡訊名單。
           </div>
         ) : (
           <table
             style={{
-              width: '100%',
+              width:
+                '100%',
               borderCollapse:
                 'collapse',
             }}
           >
             <thead>
-              <tr
-                style={{
-                  textAlign: 'left',
-                  borderBottom:
-                    '1px solid #e5e7eb',
-                }}
-              >
-                <th style={{ padding: 10 }}>
+              <tr>
+                <th>
                   停車場
                 </th>
-                <th style={{ padding: 10 }}>
+                <th>
                   姓名
                 </th>
-                <th style={{ padding: 10 }}>
+                <th>
                   電話
                 </th>
-                <th style={{ padding: 10 }}>
+                <th>
                   車牌
                 </th>
-                <th style={{ padding: 10 }}>
+                <th>
                   類型
                 </th>
-                <th style={{ padding: 10 }}>
-                  上次到期日
+                <th>
+                  繳費週期
                 </th>
-                <th style={{ padding: 10 }}>
-                  本次到期日
+                <th>
+                  應提醒月份
                 </th>
-                <th style={{ padding: 10 }}>
-                  月份
-                </th>
-                <th style={{ padding: 10 }}>
-                  簡訊狀態
-                </th>
-                <th style={{ padding: 10 }}>
-                  操作
+                <th>
+                  辨識金額
                 </th>
               </tr>
             </thead>
 
             <tbody>
-              {filteredRows.map(
+              {readyRows.map(
                 (row) => (
                   <tr
-                    key={row.id}
-                    style={{
-                      borderBottom:
-                        '1px solid #f1f5f9',
-                    }}
+                    key={
+                      row.id
+                    }
                   >
-                    <td style={{ padding: 10 }}>
+                    <td>
                       {lotMap.get(
                         row.parking_lot_id
                       ) || '-'}
                     </td>
-                    <td style={{ padding: 10 }}>
-                      {row.customer_name}
+                    <td>
+                      {
+                        row.customer_name
+                      }
                     </td>
-                    <td style={{ padding: 10 }}>
+                    <td>
                       {normalizePhone(
-                        row.phone || ''
-                      ) || (
-                        <span
-                          style={{
-                            color:
-                              '#b45309',
-                          }}
-                        >
-                          缺少電話
-                        </span>
-                      )}
+                        row.phone ||
+                          ''
+                      ) ||
+                        '缺少電話'}
                     </td>
-                    <td style={{ padding: 10 }}>
-                      {row.vehicle_plate}
+                    <td>
+                      {
+                        row.vehicle_plate
+                      }
                     </td>
-                    <td style={{ padding: 10 }}>
-                      {row.rental_type || '-'}
+                    <td>
+                      {
+                        row.rental_type ||
+                        '-'
+                      }
                     </td>
-                    <td style={{ padding: 10 }}>
-                      {row.previous_end_date || '-'}
+                    <td>
+                      {
+                        row.billing_cycle_months
+                      } 個月
                     </td>
-                    <td style={{ padding: 10 }}>
-                      {row.current_end_date || '-'}
-                    </td>
-                    <td
-                      style={{
-                        padding: 10,
-                        fontWeight: 700,
-                      }}
-                    >
+                    <td>
                       {monthText(
-                        row.cycle_month
+                        row.next_sms_month
                       )}
                     </td>
-                    <td style={{ padding: 10 }}>
-                      {statusText(
-                        row.sms_status
-                      )}
-                    </td>
-                    <td style={{ padding: 10 }}>
-                      {row.sms_status !==
-                        'completed' && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void markCompleted(
-                              row.id
-                            )
-                          }
-                        >
-                          標記完成
-                        </button>
-                      )}
+                    <td>
+                      $
+                      {Number(
+                        row.source_amount ||
+                          0
+                      ).toLocaleString()}
                     </td>
                   </tr>
                 )

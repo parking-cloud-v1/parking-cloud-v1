@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -1814,57 +1814,7 @@ export default function CsvImportButton({
       )
     }
   }
-
-  useEffect(() => {
-    if (
-      autoFolderCheckStarted
-        .current
-    ) {
-      return
-    }
-
-    autoFolderCheckStarted
-      .current = true
-
-    async function autoCheck() {
-      try {
-        const handle =
-          await loadFolderHandle()
-
-        if (!handle) {
-          return
-        }
-
-        setFolderName(
-          handle.name ||
-            '已設定資料夾'
-        )
-
-        /*
-         * 開啟月租系統時：
-         * 如果瀏覽器仍保有讀取權限，就自動掃描並詢問是否分析。
-         * 若權限需要重新確認，不會強制跳出瀏覽器權限視窗，
-         * 改由使用者按「檢查新報表」。
-         */
-        await scanPaymentFolder(
-          handle,
-          false,
-          true
-        )
-      } catch (
-        error
-      ) {
-        console.error(
-          '自動檢查繳費報表資料夾失敗',
-          error
-        )
-      }
-    }
-
-    autoCheck()
-  }, [])
-
-  async function readFiles(
+async function readFiles(
     files: File[]
   ) {
     setReading(true)
@@ -2627,34 +2577,6 @@ export default function CsvImportButton({
         }}
       >
         匯入繳費報表
-      </button>
-
-      <button
-        type="button"
-        onClick={
-          choosePaymentFolder
-        }
-        disabled={
-          folderChecking
-        }
-        style={{
-          marginLeft: 8,
-          padding:
-            '9px 14px',
-          borderRadius: 8,
-          border:
-            '1px solid #cbd5e1',
-          background:
-            '#fff',
-          cursor:
-            folderChecking
-              ? 'not-allowed'
-              : 'pointer',
-        }}
-      >
-        {folderName
-          ? `報表資料夾：${folderName}`
-          : '設定報表資料夾'}
       </button>
 
       {folderName && (

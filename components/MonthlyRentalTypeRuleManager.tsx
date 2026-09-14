@@ -24,6 +24,7 @@ type Rule = {
     | 'motorcycle'
     | 'heavy_motorcycle'
   match_amounts: string
+  base_monthly_fee: number
   keywords: string
   keyword_mode:
     | 'any'
@@ -40,6 +41,7 @@ type FormData = {
     | 'motorcycle'
     | 'heavy_motorcycle'
   match_amounts: string
+  base_monthly_fee: string
   keywords: string
   keyword_mode:
     | 'any'
@@ -54,6 +56,7 @@ const EMPTY_FORM: FormData = {
   vehicle_type:
     'car',
   match_amounts: '',
+  base_monthly_fee: '',
   keywords: '',
   keyword_mode:
     'any',
@@ -174,6 +177,7 @@ export default function MonthlyRentalTypeRuleManager({
             type_name,
             vehicle_type,
             match_amounts,
+            base_monthly_fee,
             keywords,
             keyword_mode,
             priority,
@@ -243,6 +247,11 @@ export default function MonthlyRentalTypeRuleManager({
         rule.match_amounts ||
         '',
 
+      base_monthly_fee:
+        rule.base_monthly_fee
+          ? String(rule.base_monthly_fee)
+          : '',
+
       keywords:
         rule.keywords ||
         '',
@@ -302,6 +311,23 @@ export default function MonthlyRentalTypeRuleManager({
       return
     }
 
+    const baseMonthlyFee =
+      Number(
+        form.base_monthly_fee
+      )
+
+    if (
+      !Number.isFinite(
+        baseMonthlyFee
+      ) ||
+      baseMonthlyFee <= 0
+    ) {
+      setMessage(
+        '請設定大於 0 的「標準單月金額」，系統會用它自動判斷本次繳幾個月。'
+      )
+      return
+    }
+
     const priority =
       Number(
         form.priority
@@ -354,6 +380,9 @@ export default function MonthlyRentalTypeRuleManager({
         match_amounts:
           form.match_amounts
             .trim(),
+
+        base_monthly_fee:
+          baseMonthlyFee,
 
         keywords:
           form.keywords
@@ -583,7 +612,7 @@ export default function MonthlyRentalTypeRuleManager({
                 10,
             }}
           >
-            每個停車場獨立設定。場站管理員不會看到這個設定頁，只會在匯入月租總表時自動套用。
+            每個停車場獨立設定。請設定「標準單月金額」；系統會以實際月租金額 ÷ 標準單月金額，自動判斷 1、2、3…個月的簡訊週期。特殊首期金額才需要現場人工確認。
           </div>
         </div>
       </div>
@@ -673,6 +702,37 @@ export default function MonthlyRentalTypeRuleManager({
 
           <div className="field">
             <label>
+              標準單月金額 *
+            </label>
+
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={
+                form.base_monthly_fee
+              }
+              onChange={(
+                e
+              ) =>
+                setForm({
+                  ...form,
+                  base_monthly_fee:
+                    e.target.value,
+                })
+              }
+              placeholder="例如：1800"
+            />
+
+            <small
+              className="muted"
+            >
+              用來判斷繳費月數。例如單月 1800，匯入 3600 就自動判斷為 2 個月。
+            </small>
+          </div>
+
+          <div className="field">
+            <label>
               可辨識金額 *
             </label>
 
@@ -696,7 +756,7 @@ export default function MonthlyRentalTypeRuleManager({
             <small
               className="muted"
             >
-              多個金額用逗號分開。金額是主要判斷條件，至少要設定一個。
+              多個金額用逗號分開，仍作為月租類型辨識使用；「繳幾個月」改由上方標準單月金額計算。
             </small>
           </div>
 

@@ -1,4 +1,4 @@
-import Link from 'next/link'
+﻿import Link from 'next/link'
 import { redirect } from 'next/navigation'
 
 import { createClient } from '@/lib/supabase/server'
@@ -684,13 +684,7 @@ export default async function MonthlyRentalsPage({
               >
                 租期設定
               </Link>
-              <Link
-                href="/dashboard/monthly-rentals/legacy-new"
-                style={{ padding: '9px 14px', border: '1px solid #cbd5e1', borderRadius: 8, background: '#fff', color: '#334155', textDecoration: 'none', fontWeight: 600 }}
-              >
-                ＋新增舊資料
-              </Link>
-            </>
+              </>
           )}
 
           <CsvImportButton
@@ -719,28 +713,6 @@ export default async function MonthlyRentalsPage({
             }}
           >
             繳費紀錄
-          </Link>
-
-          <Link
-            href="/dashboard/monthly-rentals/annual-rosters"
-            style={{
-              padding:
-                '9px 14px',
-              border:
-                '1px solid #cbd5e1',
-              borderRadius:
-                8,
-              background:
-                '#fff',
-              color:
-                '#334155',
-              textDecoration:
-                'none',
-              fontWeight:
-                600,
-            }}
-          >
-            年度抽籤總表
           </Link>
 
           <Link
