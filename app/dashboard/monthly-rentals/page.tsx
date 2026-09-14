@@ -1170,6 +1170,81 @@ export default async function MonthlyRentalsPage({
           }
         }
       `}</style>
+      {/* PHASE45_COLUMN_WIDTH_FIX */}
+      <style>{`
+        .monthly-rental-readable-table {
+          min-width: 1480px !important;
+          width: 100% !important;
+          table-layout: auto !important;
+        }
+
+        .monthly-rental-readable-table th,
+        .monthly-rental-readable-table td {
+          white-space: nowrap !important;
+        }
+
+        .monthly-rental-readable-table th:nth-child(1),
+        .monthly-rental-readable-table td:nth-child(1) {
+          min-width: 155px !important;
+        }
+
+        .monthly-rental-readable-table th:nth-child(2),
+        .monthly-rental-readable-table td:nth-child(2) {
+          min-width: 82px !important;
+        }
+
+        .monthly-rental-readable-table th:nth-child(3),
+        .monthly-rental-readable-table td:nth-child(3) {
+          min-width: 135px !important;
+        }
+
+        .monthly-rental-readable-table th:nth-child(4),
+        .monthly-rental-readable-table td:nth-child(4) {
+          min-width: 130px !important;
+        }
+
+        .monthly-rental-readable-table th:nth-child(5),
+        .monthly-rental-readable-table td:nth-child(5) {
+          min-width: 100px !important;
+        }
+
+        .monthly-rental-readable-table th:nth-child(6),
+        .monthly-rental-readable-table td:nth-child(6) {
+          min-width: 76px !important;
+        }
+
+        .monthly-rental-readable-table th:nth-child(7),
+        .monthly-rental-readable-table td:nth-child(7) {
+          min-width: 90px !important;
+        }
+
+        .monthly-rental-readable-table th:nth-child(8),
+        .monthly-rental-readable-table td:nth-child(8) {
+          min-width: 115px !important;
+        }
+
+        .monthly-rental-readable-table th:nth-child(9),
+        .monthly-rental-readable-table td:nth-child(9) {
+          min-width: 105px !important;
+        }
+
+        .monthly-rental-readable-table th:nth-child(10),
+        .monthly-rental-readable-table td:nth-child(10) {
+          min-width: 72px !important;
+        }
+
+        .monthly-rental-readable-table th:nth-child(11),
+        .monthly-rental-readable-table td:nth-child(11) {
+          min-width: 78px !important;
+        }
+
+        .monthly-rental-readable-table th:nth-child(12),
+        .monthly-rental-readable-table td:nth-child(12) {
+          width: 138px !important;
+          min-width: 138px !important;
+          max-width: 138px !important;
+        }
+      `}</style>
 <h2
             style={{
               margin: 0,
@@ -1677,5 +1752,6 @@ export default async function MonthlyRentalsPage({
     </div>
   )
 }
+
 
 

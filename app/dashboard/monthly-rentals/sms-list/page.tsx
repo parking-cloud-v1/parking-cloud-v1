@@ -1,6 +1,6 @@
 'use client'
 
-// PHASE41_AMOUNT_BASED_SMS_SCHEDULE
+// PHASE45_SMS_FIXED_WORK_LOT
 import {
   useEffect,
   useMemo,
@@ -41,10 +41,12 @@ function normalizePhone(value: string) {
 
 function monthText(value?: string | null) {
   if (!value) return '-'
+
   const match =
     String(value).match(
       /^(\d{4})-(\d{2})/
     )
+
   return match
     ? `${match[1]}/${match[2]}`
     : value
@@ -52,6 +54,7 @@ function monthText(value?: string | null) {
 
 function currentMonthValue() {
   const now = new Date()
+
   return `${now.getFullYear()}-${String(
     now.getMonth() + 1
   ).padStart(2, '0')}`
@@ -60,6 +63,21 @@ function currentMonthValue() {
 function escapeCsv(value: unknown) {
   return `"${String(value ?? '')
     .replace(/"/g, '""')}"`
+}
+
+function getSavedWorkParkingLotId() {
+  if (
+    typeof window ===
+    'undefined'
+  ) {
+    return ''
+  }
+
+  return (
+    window.localStorage.getItem(
+      'current-work-parking-lot-id'
+    ) || ''
+  )
 }
 
 export default function SmsListPage() {
@@ -78,18 +96,18 @@ export default function SmsListPage() {
     )
 
   const [
+    currentLotId,
+    setCurrentLotId,
+  ] =
+    useState('')
+
+  const [
     rows,
     setRows,
   ] =
     useState<ScheduleRow[]>(
       []
     )
-
-  const [
-    selectedLotId,
-    setSelectedLotId,
-  ] =
-    useState('all')
 
   const [
     selectedMonth,
@@ -125,6 +143,20 @@ export default function SmsListPage() {
       {}
     )
 
+  const currentLot =
+    useMemo(
+      () =>
+        parkingLots.find(
+          (lot) =>
+            lot.id ===
+            currentLotId
+        ),
+      [
+        parkingLots,
+        currentLotId,
+      ]
+    )
+
   async function loadData() {
     setLoading(true)
     setMessage('')
@@ -153,11 +185,45 @@ export default function SmsListPage() {
         throw lotError
       }
 
+      const lots =
+        (lotData ||
+          []) as ParkingLot[]
+
+      setParkingLots(
+        lots
+      )
+
+      const workLotId =
+        getSavedWorkParkingLotId()
+
+      if (
+        !workLotId ||
+        !lots.some(
+          (lot) =>
+            lot.id ===
+            workLotId
+        )
+      ) {
+        setCurrentLotId('')
+        setRows([])
+        setMessage(
+          '請先在左側「目前工作停車場」選擇停車場。簡訊名單不再跨停車場混合顯示。'
+        )
+        return
+      }
+
+      setCurrentLotId(
+        workLotId
+      )
+
       const selectedMonthDate =
         `${selectedMonth}-01`
 
-      let query =
-        supabase
+      const {
+        data,
+        error,
+      } =
+        await supabase
           .from(
             'monthly_sms_schedules'
           )
@@ -184,6 +250,10 @@ export default function SmsListPage() {
             'active',
             true
           )
+          .eq(
+            'parking_lot_id',
+            workLotId
+          )
           .lte(
             'next_sms_month',
             selectedMonthDate
@@ -201,31 +271,9 @@ export default function SmsListPage() {
             }
           )
 
-      if (
-        selectedLotId !==
-        'all'
-      ) {
-        query =
-          query.eq(
-            'parking_lot_id',
-            selectedLotId
-          )
-      }
-
-      const {
-        data,
-        error,
-      } =
-        await query
-
       if (error) {
         throw error
       }
-
-      setParkingLots(
-        (lotData ||
-          []) as ParkingLot[]
-      )
 
       setRows(
         (data ||
@@ -246,25 +294,8 @@ export default function SmsListPage() {
   useEffect(() => {
     void loadData()
   }, [
-    selectedLotId,
     selectedMonth,
   ])
-
-  const lotMap =
-    useMemo(
-      () =>
-        new Map(
-          parkingLots.map(
-            (lot) => [
-              lot.id,
-              lot.name,
-            ]
-          )
-        ),
-      [
-        parkingLots,
-      ]
-    )
 
   const filteredRows =
     useMemo(() => {
@@ -284,9 +315,6 @@ export default function SmsListPage() {
             row.phone || '',
             row.vehicle_plate,
             row.rental_type || '',
-            lotMap.get(
-              row.parking_lot_id
-            ) || '',
           ]
             .join(' ')
             .toLowerCase()
@@ -297,7 +325,6 @@ export default function SmsListPage() {
     }, [
       rows,
       search,
-      lotMap,
     ])
 
   const reviewRows =
@@ -375,6 +402,13 @@ export default function SmsListPage() {
   }
 
   async function exportCsv() {
+    if (!currentLotId) {
+      alert(
+        '請先在左側選擇目前工作停車場'
+      )
+      return
+    }
+
     const exportable =
       readyRows.filter(
         (row) =>
@@ -415,9 +449,8 @@ export default function SmsListPage() {
       ...exportable.map(
         (row) =>
           [
-            lotMap.get(
-              row.parking_lot_id
-            ) || '',
+            currentLot?.name ||
+              '',
             selectedMonth,
             monthText(
               row.next_sms_month
@@ -464,24 +497,16 @@ export default function SmsListPage() {
         'a'
       )
 
-    const lotName =
-      selectedLotId ===
-      'all'
-        ? '全部停車場'
-        : lotMap.get(
-            selectedLotId
-          ) ||
-          '停車場'
-
     a.href = url
     a.download =
-      `${lotName}_每月簡訊名單_${selectedMonth}.csv`
+      `${currentLot?.name || '停車場'}_每月簡訊名單_${selectedMonth}.csv`
 
     document.body.appendChild(
       a
     )
     a.click()
     a.remove()
+
     URL.revokeObjectURL(
       url
     )
@@ -511,7 +536,7 @@ export default function SmsListPage() {
     }
 
     setMessage(
-      `已匯出 ${exportable.length} 筆。系統已依每人的 1／2／3…個月週期，自動安排下一次簡訊月份。`
+      `已匯出 ${exportable.length} 筆。系統已依目前月租類型與繳費週期安排下一次簡訊月份。`
     )
 
     await loadData()
@@ -552,13 +577,16 @@ export default function SmsListPage() {
           <div
             className="muted"
           >
-            不再依賴舊系統先匯入。系統會依每位月租戶的「下次簡訊月份」自動出現；1 個月、2 個月或更多月份，會依月租金額自動辨識。
+            簡訊名單固定依左側「目前工作停車場」顯示，不會混入其他停車場。
           </div>
         </div>
 
         <button
           type="button"
           className="btn"
+          disabled={
+            !currentLotId
+          }
           onClick={() =>
             void exportCsv()
           }
@@ -572,56 +600,48 @@ export default function SmsListPage() {
         style={{
           marginTop:
             20,
-          display:
-            'grid',
-          gridTemplateColumns:
-            'minmax(220px,1fr) 180px minmax(220px,1fr)',
-          gap: 12,
+          padding:
+            16,
+          background:
+            '#f8fafc',
         }}
       >
         <div
-          className="field"
+          style={{
+            fontSize:
+              13,
+            color:
+              '#64748b',
+            marginBottom:
+              4,
+          }}
         >
-          <label>
-            停車場
-          </label>
-
-          <select
-            value={
-              selectedLotId
-            }
-            onChange={(
-              event
-            ) =>
-              setSelectedLotId(
-                event.target
-                  .value
-              )
-            }
-          >
-            <option value="all">
-              全部停車場
-            </option>
-
-            {parkingLots.map(
-              (lot) => (
-                <option
-                  key={
-                    lot.id
-                  }
-                  value={
-                    lot.id
-                  }
-                >
-                  {
-                    lot.name
-                  }
-                </option>
-              )
-            )}
-          </select>
+          目前工作停車場
         </div>
 
+        <strong
+          style={{
+            fontSize:
+              19,
+          }}
+        >
+          {currentLot?.name ||
+            '尚未選擇'}
+        </strong>
+      </div>
+
+      <div
+        className="card"
+        style={{
+          marginTop:
+            16,
+          display:
+            'grid',
+          gridTemplateColumns:
+            '180px minmax(260px,1fr)',
+          gap: 12,
+        }}
+      >
         <div
           className="field"
         >
@@ -766,7 +786,7 @@ export default function SmsListPage() {
                 12,
             }}
           >
-            只有系統無法用標準單月金額整除時才需要人工確認。確認一次後，此人的簡訊排程就會依選定月數自動往後。
+            只有系統無法用目前設定的標準單月金額整除時，才需要人工確認。
           </div>
 
           <div
@@ -785,27 +805,13 @@ export default function SmsListPage() {
             >
               <thead>
                 <tr>
-                  <th>
-                    姓名
-                  </th>
-                  <th>
-                    車牌
-                  </th>
-                  <th>
-                    類型
-                  </th>
-                  <th>
-                    金額
-                  </th>
-                  <th>
-                    標準單月
-                  </th>
-                  <th>
-                    本次涵蓋
-                  </th>
-                  <th>
-                    操作
-                  </th>
+                  <th>姓名</th>
+                  <th>車牌</th>
+                  <th>類型</th>
+                  <th>金額</th>
+                  <th>標準單月</th>
+                  <th>本次涵蓋</th>
+                  <th>操作</th>
                 </tr>
               </thead>
 
@@ -947,30 +953,13 @@ export default function SmsListPage() {
           >
             <thead>
               <tr>
-                <th>
-                  停車場
-                </th>
-                <th>
-                  姓名
-                </th>
-                <th>
-                  電話
-                </th>
-                <th>
-                  車牌
-                </th>
-                <th>
-                  類型
-                </th>
-                <th>
-                  繳費週期
-                </th>
-                <th>
-                  應提醒月份
-                </th>
-                <th>
-                  辨識金額
-                </th>
+                <th>姓名</th>
+                <th>電話</th>
+                <th>車牌</th>
+                <th>類型</th>
+                <th>繳費週期</th>
+                <th>應提醒月份</th>
+                <th>辨識金額</th>
               </tr>
             </thead>
 
@@ -982,11 +971,6 @@ export default function SmsListPage() {
                       row.id
                     }
                   >
-                    <td>
-                      {lotMap.get(
-                        row.parking_lot_id
-                      ) || '-'}
-                    </td>
                     <td>
                       {
                         row.customer_name
