@@ -1087,7 +1087,90 @@ export default async function MonthlyRentalsPage({
               'center',
           }}
         >
-          <h2
+                {/* PHASE44_MONTHLY_RENTAL_READABILITY */}
+      <style>{`
+        .monthly-rental-readable-table {
+          width: 100%;
+          border-collapse: separate;
+          border-spacing: 0;
+          table-layout: auto;
+        }
+
+        .monthly-rental-readable-table thead th {
+          font-size: 17px !important;
+          font-weight: 800 !important;
+          line-height: 1.35 !important;
+          padding: 14px 10px !important;
+          white-space: nowrap;
+          color: #334155;
+          background: #f8fafc;
+          border-bottom: 2px solid #dbe3ec;
+          vertical-align: middle;
+        }
+
+        .monthly-rental-readable-table tbody td {
+          font-size: 18px !important;
+          line-height: 1.55 !important;
+          padding: 18px 10px !important;
+          vertical-align: middle !important;
+          border-bottom: 1px solid #e7edf4;
+          color: #0f172a;
+        }
+
+        .monthly-rental-readable-table tbody tr {
+          background: #ffffff;
+        }
+
+        .monthly-rental-readable-table tbody tr:nth-child(even) {
+          background: #fbfdff;
+        }
+
+        .monthly-rental-readable-table tbody tr:hover {
+          background: #f3f7fb;
+        }
+
+        .monthly-rental-readable-table tbody td:nth-last-child(1),
+        .monthly-rental-readable-table thead th:nth-last-child(1) {
+          width: 150px;
+          min-width: 150px;
+          max-width: 150px;
+          text-align: center;
+        }
+
+        .monthly-rental-readable-table .monthly-rental-actions {
+          display: flex !important;
+          flex-wrap: wrap !important;
+          justify-content: center !important;
+          align-items: center !important;
+          gap: 5px !important;
+          width: 140px !important;
+          margin: 0 auto !important;
+        }
+
+        .monthly-rental-readable-table .monthly-rental-actions button {
+          font-size: 13px !important;
+          font-weight: 700 !important;
+          line-height: 1.2 !important;
+          padding: 6px 8px !important;
+          min-height: 30px !important;
+          border-radius: 7px !important;
+          width: auto !important;
+          min-width: 54px !important;
+          white-space: nowrap !important;
+          margin: 0 !important;
+        }
+
+        @media (max-width: 1200px) {
+          .monthly-rental-readable-table thead th {
+            font-size: 16px !important;
+          }
+
+          .monthly-rental-readable-table tbody td {
+            font-size: 17px !important;
+          }
+        }
+      `}</style>
+<h2
             style={{
               margin: 0,
             }}
@@ -1146,7 +1229,7 @@ export default async function MonthlyRentalsPage({
                 tableLayout:
                   'fixed',
               }}
-            >
+             className="monthly-rental-readable-table">
               <colgroup>
                 <col
                   style={{
@@ -1594,4 +1677,5 @@ export default async function MonthlyRentalsPage({
     </div>
   )
 }
+
 

@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -64,7 +64,8 @@ export default function MonthlyRentalActions({
   return (
     <>
       <div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="monthly-rental-actions" style={{
+            display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {/* 月租是逐月付款，因此即使上一個月份已繳，仍必須可以繼續收下一個月。 */}
           <button type="button" onClick={() => setModalMode('payment')} disabled={loading} style={{ padding: '6px 10px', border: 0, borderRadius: 6, background: '#0f172a', color: '#fff', cursor: 'pointer' }}>
             收款
@@ -89,3 +90,4 @@ export default function MonthlyRentalActions({
     </>
   )
 }
+
