@@ -143,6 +143,48 @@ type PreviewRow = {
  */
 const IMPORT_EXPIRY_RETENTION_MONTHS = 4
 
+/*
+ * 已繳／未繳統一以「本次匯入總表的到期日」判斷。
+ * 到期日仍在今天或之後：已繳；到期日早於今天：未繳。
+ * 到期當天仍視為有效，避免尚未到期的月租戶被誤列未繳與簡訊名單。
+ */
+function paymentStatusFromImportedEndDate(
+  endDate?: string | null
+): 'paid' | 'unpaid' {
+  const normalized = normalizeDate(
+    String(endDate || '')
+  )
+
+  if (!normalized) {
+    return 'unpaid'
+  }
+
+  const now = new Date()
+  const today = `${now.getFullYear()}-${String(
+    now.getMonth() + 1
+  ).padStart(2, '0')}-${String(
+    now.getDate()
+  ).padStart(2, '0')}`
+
+  return normalized >= today
+    ? 'paid'
+    : 'unpaid'
+}
+
+function applyImportedEndDatePaymentStatus(
+  rows: PreviewRow[]
+) {
+  return rows.map((row) => ({
+    ...row,
+    payment_status:
+      isZeroPaidRow(row)
+        ? 'paid'
+        : paymentStatusFromImportedEndDate(
+            row.end_date
+          ),
+  }))
+}
+
 function importExpiryCutoffDateText() {
   const now = new Date()
 
@@ -2408,12 +2450,17 @@ export default function LegacyMonthlyImport({
             parkingLotId
           )
 
+        const statusRows408 =
+          applyImportedEndDatePaymentStatus(
+            ruled408.rows
+          )
+
         setRows(
-          ruled408.rows
+          statusRows408
         )
 
         const paidCount =
-          ruled408.rows.filter(
+          statusRows408.filter(
             (
               item
             ) =>
@@ -2422,11 +2469,11 @@ export default function LegacyMonthlyImport({
           ).length
 
         const unpaidCount =
-          ruled408.rows.length -
+          statusRows408.length -
           paidCount
 
         setMessage(
-          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，租期 ${parsed408.period}；月租 ${ruled408.rows.length} 筆，已繳 ${paidCount} 筆，未繳 ${unpaidCount} 筆；到期超過 ${IMPORT_EXPIRY_RETENTION_MONTHS} 個月排除 ${expiryFiltered408.excludedCount} 筆（門檻 ${expiryFiltered408.cutoff}）；主管類型規則 ${ruled408.ruleCount} 條，本次自動分類 ${ruled408.matchedCount} 筆。`
+          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，租期 ${parsed408.period}；月租 ${statusRows408.length} 筆，已繳 ${paidCount} 筆，未繳 ${unpaidCount} 筆（依匯入到期日判斷）；到期超過 ${IMPORT_EXPIRY_RETENTION_MONTHS} 個月排除 ${expiryFiltered408.excludedCount} 筆（門檻 ${expiryFiltered408.cutoff}）；主管類型規則 ${ruled408.ruleCount} 條，本次自動分類 ${ruled408.matchedCount} 筆。`
         )
 
         return
@@ -2448,22 +2495,27 @@ export default function LegacyMonthlyImport({
           parkingLotId
         )
 
+      const statusRows =
+        applyImportedEndDatePaymentStatus(
+          ruled.rows
+        )
+
       setRows(
-        ruled.rows
+        statusRows
       )
 
       const valid =
-        ruled.rows.filter(
+        statusRows.filter(
           (item) =>
             item.valid
         ).length
 
       const invalid =
-        ruled.rows.length -
+        statusRows.length -
         valid
 
       setMessage(
-        `已辨識 ${ruled.rows.length} 筆，可匯入 ${valid} 筆，格式異常 ${invalid} 筆；到期超過 ${IMPORT_EXPIRY_RETENTION_MONTHS} 個月排除 ${expiryFiltered.excludedCount} 筆（門檻 ${expiryFiltered.cutoff}）；主管類型規則 ${ruled.ruleCount} 條，本次自動分類 ${ruled.matchedCount} 筆。`
+        `已辨識 ${statusRows.length} 筆，可匯入 ${valid} 筆，格式異常 ${invalid} 筆；已繳／未繳依匯入到期日判斷；到期超過 ${IMPORT_EXPIRY_RETENTION_MONTHS} 個月排除 ${expiryFiltered.excludedCount} 筆（門檻 ${expiryFiltered.cutoff}）；主管類型規則 ${ruled.ruleCount} 條，本次自動分類 ${ruled.matchedCount} 筆。`
       )
     } catch (
       error: any
@@ -3698,6 +3750,13 @@ export default function LegacyMonthlyImport({
             newRow
           )
 
+        const importedPaymentStatus =
+          isZeroPaidRow(newRow)
+            ? 'paid'
+            : paymentStatusFromImportedEndDate(
+                newRow.end_date
+              )
+
         const inferredPaymentMonths =
           previous
             ? inferPaymentMonthsFromLegacyDiff(
@@ -3783,12 +3842,7 @@ export default function LegacyMonthlyImport({
                     newRow.monthly_fee,
 
                   payment_status:
-                    newRow.payment_status ||
-                    (
-                      isZeroPaidRow(newRow)
-                        ? 'paid'
-                        : 'unpaid'
-                    ),
+                    importedPaymentStatus,
 
                   rental_status:
                     'active',
@@ -3802,8 +3856,8 @@ export default function LegacyMonthlyImport({
                     null,
 
                   last_payment_source:
-                    (newRow.payment_status === 'paid' || isZeroPaidRow(newRow))
-                      ? 'legacy_import_unassigned'
+                    importedPaymentStatus === 'paid'
+                      ? 'legacy_import_end_date'
                       : null,
 
                   notes:
@@ -3878,9 +3932,7 @@ export default function LegacyMonthlyImport({
                   newRow.monthly_fee,
 
                 payment_status:
-                  isZeroPaidRow(newRow)
-                      ? 'paid'
-                      : 'unpaid',
+                  importedPaymentStatus,
 
                 rental_status:
                   'active',
@@ -4082,8 +4134,9 @@ export default function LegacyMonthlyImport({
                 rental_status:
                   'active',
 
-
-                // 繳費狀態／月份改由繳費紀錄匯入處理，不由月租總表覆蓋。
+                // 已繳／未繳改由本次匯入總表的到期日直接轉換。
+                payment_status:
+                  importedPaymentStatus,
 
                 notes:
                   importedNotes ||
@@ -4192,24 +4245,9 @@ export default function LegacyMonthlyImport({
           )
 
         const paymentChanged =
-          Boolean(
-            newRow.payment_status
-          ) &&
-          (
-            !sameValue(
-              currentRental?.payment_status,
-              newRow.payment_status
-            ) ||
-            !sameValue(
-              currentRental?.payment_date,
-              newRow.payment_date ||
-                ''
-            ) ||
-            !sameValue(
-              currentRental?.invoice_number,
-              newRow.invoice_number ||
-                ''
-            )
+          !sameValue(
+            currentRental?.payment_status,
+            importedPaymentStatus
           )
 
         const anyMainDataChanged =
@@ -4342,6 +4380,9 @@ export default function LegacyMonthlyImport({
               rental_status:
                 'active',
 
+              // 已繳／未繳統一依本次匯入總表到期日轉換。
+              payment_status:
+                importedPaymentStatus,
 
               /*
                * 正式租期仍完全不被總表覆蓋。
@@ -4578,6 +4619,8 @@ export default function LegacyMonthlyImport({
           updated++
         } else if (dateChanged) {
           dateOnlyChanged++
+        } else if (paymentChanged) {
+          updated++
         } else if (isPaidShortRow(newRow)) {
           paidShortUpdated++
         } else if (isOfficialVehicleRow(newRow)) {
@@ -5008,7 +5051,7 @@ export default function LegacyMonthlyImport({
         </h2>
 
         <p className="muted">
-          先分析與上一份舊系統總表的差異，確認後才正式匯入。固定匯入參數：到期日超過 {IMPORT_EXPIRY_RETENTION_MONTHS} 個月的資料不列入名單；辨識完成後會顯示本次排除筆數與門檻日期。正式租期仍以主管設定為準，不會被舊系統日期覆蓋；繳費月份改用「本期報表結束日期 − 上一期報表結束日期」判斷，只有完整延長 1 個月以上才自動記入，避免只多幾天卻誤算一整個月。月租總表內金額為 0 元的資料會自動略過，不會匯入。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
+          先分析與上一份舊系統總表的差異，確認後才正式匯入。固定匯入參數：到期日超過 {IMPORT_EXPIRY_RETENTION_MONTHS} 個月的資料不列入名單；辨識完成後會顯示本次排除筆數與門檻日期。正式租期仍以主管設定為準，不會被舊系統日期覆蓋；「已繳／未繳」固定依本次匯入總表的到期日判斷：到期日為今天或之後＝已繳，到期日早於今天＝未繳。繳費月份歷史仍保留原本差異辨識，不再拿來決定目前已繳／未繳狀態。月租總表內金額為 0 元的資料會自動略過，不會匯入。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
         </p>
 
         <div

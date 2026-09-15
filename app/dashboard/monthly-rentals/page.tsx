@@ -512,16 +512,21 @@ export default async function MonthlyRentalsPage({
   const totalCount =
     enrichedRentals.length
 
+  /*
+   * 已繳／未繳由月租總表匯入時，依「匯入到期日」統一轉換後
+   * 寫回 payment_status。這裡不可再用繳費月份推算，否則尚未到期
+   * 但沒有 payment_month 紀錄的資料會被誤算成未繳。
+   */
   const paidCount =
     enrichedRentals.filter(
       (item: any) =>
-        (item._paid_months?.length || 0) > 0 || item.payment_status === 'paid'
+        item.payment_status === 'paid'
     ).length
 
   const unpaidCount =
     enrichedRentals.filter(
       (item: any) =>
-        item._next_payment_month !== '本租期已繳清'
+        item.payment_status === 'unpaid'
     ).length
 
   const activeCount =
