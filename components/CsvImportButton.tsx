@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -2221,7 +2221,7 @@ async function readFiles(
           )
 
       const existingReferences =
-        new Set<string>()
+        new Map<string, string | null>()
 
       /*
        * 分批查詢，避免 URL 太長
@@ -2256,7 +2256,7 @@ async function readFiles(
               'monthly_payments'
             )
             .select(
-              'source_reference'
+              'source_reference,cycle_application_status'
             )
             .in(
               'source_reference',
@@ -2281,8 +2281,9 @@ async function readFiles(
           if (
             item.source_reference
           ) {
-            existingReferences.add(
-              item.source_reference
+            existingReferences.set(
+              item.source_reference,
+              item.cycle_application_status || null
             )
           }
         }
@@ -2301,13 +2302,33 @@ async function readFiles(
                 row.sourceReference
               )
             ) {
+              const existingStatus =
+                existingReferences.get(
+                  row.sourceReference
+                )
+
+              // 資料修復時會把「歷史上已保存、但尚未套用新週期」的
+              // payment_csv 標記為 failed。這種資料允許用同一份正式報表
+              // 重新套用週期，但 API 會沿用既有 monthly_payments，不會新增重複歷史。
+              if (
+                existingStatus !==
+                'failed'
+              ) {
+                return {
+                  ...row,
+
+                  duplicate: true,
+
+                  message:
+                    '此筆繳費已匯入過',
+                }
+              }
+
               return {
                 ...row,
-
-                duplicate: true,
-
+                duplicate: false,
                 message:
-                  '此筆繳費已匯入過',
+                  '既有繳費紀錄待重新套用本系統週期',
               }
             }
 

@@ -253,12 +253,18 @@ function normalizePlate(value: string) {
 function normalizeCustomerCode(
   value?: string | null
 ) {
-  return String(
+  const normalized = String(
     value || ''
   )
     .trim()
     .replace(/\s+/g, '')
     .toUpperCase()
+
+  // 舊系統有些場站用 0 代表「沒有客戶編號」。
+  // 0 不可當成真正識別碼，否則不同客戶會被誤認為同一人。
+  return normalized === '0'
+    ? ''
+    : normalized
 }
 
 function importIdentityKeys(
@@ -2342,43 +2348,37 @@ export default function LegacyMonthlyImport({
        * 新加入的月租戶一律使用主管為該場設定的目前共同租期；
        * 舊檔開始日、結束日、金額與付款欄位永遠不作為正式來源。
        */
-      const { data: activeRentalTerm, error: activeRentalTermError } =
+      const todayText = new Date().toISOString().slice(0, 10)
+      const { data: currentRentalTerms, error: activeRentalTermError } =
         await supabase
           .from('parking_lot_rental_terms')
           .select('id,start_date,end_date,term_name')
           .eq('parking_lot_id', parkingLotId)
-          .eq('is_active', true)
-          .maybeSingle()
+          .lte('start_date', todayText)
+          .gte('end_date', todayText)
+          .order('start_date', { ascending: false })
+          .limit(2)
 
       if (activeRentalTermError) {
         setMessage(`讀取目前場站租期失敗：${activeRentalTermError.message}`)
         return
       }
 
+      if ((currentRentalTerms || []).length !== 1) {
+        setMessage('目前日期必須剛好落在 1 個本系統租期內，才能匯入舊月票名單。請先修正「租期設定」；舊系統日期不會拿來補正式租期。')
+        return
+      }
+
+      const activeRentalTerm = currentRentalTerms![0]
       if (!activeRentalTerm?.id || !activeRentalTerm.start_date || !activeRentalTerm.end_date) {
-        setMessage('請先到「租期設定」建立目前有效租期，再匯入舊月票名單。舊系統日期不再作為正式租期來源。')
+        setMessage('請先到「租期設定」建立目前有效租期，再匯入舊月票名單。')
         return
       }
 
-      const { data: systemFeeRules, error: systemFeeRulesError } = await supabase
-        .from('monthly_rental_type_rules')
-        .select('type_name,base_monthly_fee,is_active')
-        .eq('parking_lot_id', parkingLotId)
-        .eq('is_active', true)
-
-      if (systemFeeRulesError) {
-        setMessage(`讀取本系統月租金設定失敗：${systemFeeRulesError.message}`)
-        return
-      }
-
-      const systemFeeByType = new Map<string, number>()
-      for (const rule of systemFeeRules || []) {
-        const key = String(rule.type_name || '').trim().toLowerCase()
-        const fee = Number(rule.base_monthly_fee || 0)
-        if (key && fee > 0) systemFeeByType.set(key, fee)
-      }
-
-      const todayText = new Date().toISOString().slice(0, 10)
+      /*
+       * 新架構調整：舊月票總表的「月租金額」可以同步成 monthly_fee，
+       * 只作為正式繳費報表換算繳費月數的基準；舊總表日期與付款狀態仍完全忽略。
+       */
       const initialPaidThroughDate = getInitialPaidThroughDate({
         today: todayText,
         termStartDate: activeRentalTerm.start_date,
@@ -2489,8 +2489,9 @@ export default function LegacyMonthlyImport({
               parkingLotId,
 
             customer_code:
-              row.customer_code ||
-              null,
+              normalizeCustomerCode(
+                row.customer_code
+              ) || null,
 
             customer_name:
               row.customer_name,
@@ -2914,8 +2915,9 @@ export default function LegacyMonthlyImport({
                     parkingLotId,
 
                   customer_code:
-                    newRow.customer_code ||
-                    null,
+                    normalizeCustomerCode(
+                      newRow.customer_code
+                    ) || null,
 
                   customer_name:
                     newRow.customer_name,
@@ -2950,7 +2952,7 @@ export default function LegacyMonthlyImport({
                     'legacy_import',
 
                   monthly_fee:
-                    systemFeeByType.get(String(newRow.rental_type || '').trim().toLowerCase()) || 0,
+                    Number(newRow.monthly_fee || 0),
 
                   payment_status:
                     'unpaid',
@@ -3048,7 +3050,7 @@ export default function LegacyMonthlyImport({
                  */
 
                 monthly_fee:
-                  systemFeeByType.get(String(newRow.rental_type || '').trim().toLowerCase()) || 0,
+                  Number(newRow.monthly_fee || 0),
 
                 payment_status:
                   'unpaid',
@@ -3086,8 +3088,9 @@ export default function LegacyMonthlyImport({
                       createdRental.id,
 
                     customer_code:
-                      newRow.customer_code ||
-                      null,
+                      normalizeCustomerCode(
+                        newRow.customer_code
+                      ) || null,
 
                     customer_name:
                       newRow.customer_name,
@@ -3222,7 +3225,7 @@ export default function LegacyMonthlyImport({
                 'monthly_rentals'
               )
               .update({
-                // 既有客戶：舊月票總表只更新姓名、電話與名冊狀態。
+                // 既有客戶：同步姓名、電話、名冊狀態，以及舊月票總表的標準月租金額。
                 customer_name:
                   newRow.customer_name,
 
@@ -3230,14 +3233,18 @@ export default function LegacyMonthlyImport({
                   newRow.phone ||
                   null,
 
+                // 月租金只用來讓正式繳費報表換算月數；不代表已繳，也不改租期日期。
+                monthly_fee:
+                  Number(newRow.monthly_fee || 0),
+
                 /*
-                 * 舊名單不再變更本系統車種／月租類型，避免間接影響系統月租金。
+                 * 舊名單不再變更本系統車種／月租類型、開始日、結束日或付款狀態。
                  */
 
                 rental_status:
                   'active',
 
-                // 舊名單只同步名冊；正式金額、租期與付款狀態完全不碰。
+                // 舊名單的日期與付款欄位仍完全不碰。
                 notes:
                   importedNotes ||
                   null,

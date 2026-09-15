@@ -2,6 +2,12 @@ function normalizeText(value?: string | null) {
   return String(value || '').trim().toLocaleLowerCase('zh-TW')
 }
 
+
+function normalizeCustomerCode(value?: string | null) {
+  const normalized = normalizeText(value)
+  return normalized === '0' ? '' : normalized
+}
+
 function normalizePlate(value?: string | null) {
   return String(value || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase()
 }
@@ -24,8 +30,8 @@ export function decideRosterIdentity({
   incoming: RosterIdentity
   current: RosterIdentity
 }): 'same' | 'replacement' | 'different' {
-  const incomingCode = normalizeText(incoming.customerCode)
-  const currentCode = normalizeText(current.customerCode)
+  const incomingCode = normalizeCustomerCode(incoming.customerCode)
+  const currentCode = normalizeCustomerCode(current.customerCode)
   const incomingPlate = normalizePlate(incoming.plate)
   const currentPlate = normalizePlate(current.plate)
 

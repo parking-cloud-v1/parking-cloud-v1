@@ -32,9 +32,13 @@ export default function RentalTermManager({
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
 
+  const todayText = new Date().toISOString().slice(0, 10)
   const activeTerm = useMemo(
-    () => terms.find((item) => item.is_active) || null,
-    [terms]
+    () =>
+      terms.find(
+        (item) => item.start_date <= todayText && item.end_date >= todayText
+      ) || null,
+    [terms, todayText]
   )
 
   async function reload() {
@@ -62,15 +66,18 @@ export default function RentalTermManager({
     setMessage('')
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
+    const isCurrentTerm = startDate <= todayText && endDate >= todayText
 
     try {
-      const { error: closeError } = await supabase
-        .from('parking_lot_rental_terms')
-        .update({ is_active: false, updated_by: user?.id || null })
-        .eq('parking_lot_id', lotId)
-        .eq('is_active', true)
+      if (isCurrentTerm) {
+        const { error: closeError } = await supabase
+          .from('parking_lot_rental_terms')
+          .update({ is_active: false, updated_by: user?.id || null })
+          .eq('parking_lot_id', lotId)
+          .eq('is_active', true)
 
-      if (closeError) throw closeError
+        if (closeError) throw closeError
+      }
 
       const { data: createdTerm, error } = await supabase
         .from('parking_lot_rental_terms')
@@ -79,7 +86,7 @@ export default function RentalTermManager({
           term_name: termName.trim(),
           start_date: startDate,
           end_date: endDate,
-          is_active: true,
+          is_active: isCurrentTerm,
           source: 'lottery',
           notes: notes.trim() || null,
           created_by: user?.id || null,
@@ -90,24 +97,26 @@ export default function RentalTermManager({
 
       if (error || !createdTerm) throw error || new Error('租期建立後讀取失敗')
 
-      const { error: rentalSyncError } = await supabase
-        .from('monthly_rentals')
-        .update({
-          system_term_id: createdTerm.id,
-          system_cycle_start_date: createdTerm.start_date,
-          system_cycle_end_date: createdTerm.end_date,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('parking_lot_id', lotId)
-        .neq('rental_status', 'cancelled')
+      if (isCurrentTerm) {
+        const { error: rentalSyncError } = await supabase
+          .from('monthly_rentals')
+          .update({
+            system_term_id: createdTerm.id,
+            system_cycle_start_date: createdTerm.start_date,
+            system_cycle_end_date: createdTerm.end_date,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('parking_lot_id', lotId)
+          .neq('rental_status', 'cancelled')
 
-      if (rentalSyncError) throw rentalSyncError
+        if (rentalSyncError) throw rentalSyncError
+      }
 
       setTermName('')
       setStartDate('')
       setEndDate('')
       setNotes('')
-      setMessage('租期已建立，並設為目前有效期別。')
+      setMessage(isCurrentTerm ? '租期已建立，並設為目前有效期別。' : '未來租期已建立；尚未到生效日，不會切換目前租期。')
       await reload()
     } catch (error: any) {
       setMessage('建立租期失敗：' + (error?.message || '未知錯誤'))
@@ -132,6 +141,9 @@ export default function RentalTermManager({
 
       const term = terms.find((item) => item.id === id)
       if (!term) throw new Error('找不到要啟用的租期')
+      if (!(term.start_date <= todayText && term.end_date >= todayText)) {
+        throw new Error('只有今天實際落在日期範圍內的租期才能設為目前使用。')
+      }
 
       const { error } = await supabase
         .from('parking_lot_rental_terms')

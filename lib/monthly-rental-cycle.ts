@@ -143,7 +143,8 @@ export function getMonthlyBillingState({
 
   return {
     status,
-    shouldRemind: renewal.isDue,
+    // 付款待確認期間先交由管理員判斷，不進簡訊催繳名單。
+    shouldRemind: paymentReviewStatus === 'pending' ? false : renewal.isDue,
     reminderStartDate: renewal.reminderStartDate,
     daysUntilDue: renewal.daysUntilDue,
   }
