@@ -1,17 +1,82 @@
 'use client'
 
-// PHASE40_MONTHLY_CYCLE_EVENTS
-
 import { useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 
-import LegacyImportComparison, {
-  LegacyComparisonResult,
-} from '@/components/LegacyImportComparison'
 
 type ParkingLot = {
   id: string
   name: string
+}
+
+
+type LegacyComparisonItem = {
+  type:
+    | 'joined'
+    | 'recreated'
+    | 'retired_protected'
+    | 'cancelled'
+    | 'updated'
+    | 'date_only'
+  customer_code: string
+  customer_name: string
+  vehicle_plate: string
+  detail: string
+}
+
+type LegacyComparisonResult = {
+  hasPreviousBatch: boolean
+  baselineCount: number
+  joinedCount: number
+  recreatedCount: number
+  retiredProtectedCount: number
+  cancelledCount: number
+  updatedCount: number
+  dateOnlyCount: number
+  unchangedCount: number
+  items: LegacyComparisonItem[]
+}
+
+function LegacyImportComparison({ result }: { result: LegacyComparisonResult | null }) {
+  if (!result) return null
+
+  return (
+    <div className="card" style={{ marginTop: 18 }}>
+      <h3 style={{ marginTop: 0 }}>與上一份總表比對</h3>
+      {!result.hasPreviousBatch ? (
+        <p className="muted">目前沒有上一份總表，本次資料會建立為新的比對基準。</p>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
+            <span>新增 {result.joinedCount}</span>
+            <span>刪除後待重新匯入 {result.recreatedCount}</span>
+            <span>正式退租保護 {result.retiredProtectedCount}</span>
+            <span>退租 {result.cancelledCount}</span>
+            <span>資料異動 {result.updatedCount}</span>
+            <span>租期差異 {result.dateOnlyCount}（主表已保護）</span>
+            <span>未異動 {result.unchangedCount}</span>
+          </div>
+          {result.items.length > 0 && (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead><tr><th>類型</th><th>客戶</th><th>車牌</th><th>差異</th></tr></thead>
+                <tbody>
+                  {result.items.slice(0, 200).map((item, index) => (
+                    <tr key={`${item.vehicle_plate}-${index}`}>
+                      <td>{item.type === 'joined' ? '新增' : item.type === 'recreated' ? '刪除後重匯' : item.type === 'retired_protected' ? '退租保護' : item.type === 'cancelled' ? '退租' : item.type === 'updated' ? '資料異動' : '租期差異'}</td>
+                      <td>{item.customer_code ? `${item.customer_code}／` : ''}{item.customer_name || '-'}</td>
+                      <td>{item.vehicle_plate || '-'}</td>
+                      <td>{item.detail}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
 }
 
 type MonthlyRentalTypeRule = {
@@ -72,6 +137,51 @@ type PreviewRow = {
   error: string
 }
 
+/*
+ * 舊系統月租總表匯入保留期限。
+ * 到期日早於「今天往前 4 個月」的資料，不進入預覽、比對或正式匯入。
+ */
+const IMPORT_EXPIRY_RETENTION_MONTHS = 4
+
+function importExpiryCutoffDateText() {
+  const now = new Date()
+
+  const cutoff = new Date(
+    now.getFullYear(),
+    now.getMonth() -
+      IMPORT_EXPIRY_RETENTION_MONTHS,
+    now.getDate()
+  )
+
+  return `${cutoff.getFullYear()}-${String(
+    cutoff.getMonth() + 1
+  ).padStart(2, '0')}-${String(
+    cutoff.getDate()
+  ).padStart(2, '0')}`
+}
+
+function filterExpiredImportRows(
+  sourceRows: PreviewRow[]
+) {
+  const cutoff =
+    importExpiryCutoffDateText()
+
+  const rows =
+    sourceRows.filter(
+      (row) =>
+        !row.end_date ||
+        row.end_date >= cutoff
+    )
+
+  return {
+    rows,
+    excludedCount:
+      sourceRows.length -
+      rows.length,
+    cutoff,
+  }
+}
+
 const TYPE_KEYWORDS = [
   '里民',
   '身障',
@@ -104,6 +214,272 @@ function normalizeDate(value: string) {
   )}-${match[3].padStart(2, '0')}`
 }
 
+
+function parseLegacyDateValue(
+  value?: string | null
+) {
+  const source =
+    String(value || '')
+      .trim()
+
+  const match =
+    source.match(
+      /^(\d{4})-(\d{1,2})-(\d{1,2})/
+    )
+
+  if (!match) {
+    return null
+  }
+
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+
+  const daysInMonth =
+    new Date(
+      Date.UTC(
+        year,
+        month,
+        0
+      )
+    ).getUTCDate()
+
+  if (
+    !Number.isInteger(year) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth
+  ) {
+    return null
+  }
+
+  return {
+    year,
+    month,
+    day,
+    isEndOfMonth:
+      day === daysInMonth,
+    utcTime:
+      Date.UTC(
+        year,
+        month - 1,
+        day
+      ),
+  }
+}
+
+function legacyDateAfterMonths(
+  anchor: NonNullable<
+    ReturnType<
+      typeof parseLegacyDateValue
+    >
+  >,
+  monthOffset: number
+) {
+  const monthIndex =
+    anchor.month - 1 +
+    monthOffset
+
+  const year =
+    anchor.year +
+    Math.floor(
+      monthIndex / 12
+    )
+
+  const zeroBasedMonth =
+    ((monthIndex % 12) +
+      12) %
+    12
+
+  const month =
+    zeroBasedMonth + 1
+
+  const daysInMonth =
+    new Date(
+      Date.UTC(
+        year,
+        month,
+        0
+      )
+    ).getUTCDate()
+
+  const day =
+    anchor.isEndOfMonth
+      ? daysInMonth
+      : Math.min(
+          anchor.day,
+          daysInMonth
+        )
+
+  return {
+    year,
+    month,
+    day,
+    utcTime:
+      Date.UTC(
+        year,
+        month - 1,
+        day
+      ),
+  }
+}
+
+function inferPaymentMonthsFromLegacyDiff(
+  previousEndDate?: string | null,
+  currentEndDate?: string | null
+) {
+  const previous =
+    parseLegacyDateValue(
+      previousEndDate
+    )
+
+  const current =
+    parseLegacyDateValue(
+      currentEndDate
+    )
+
+  if (
+    !previous ||
+    !current ||
+    current.utcTime <=
+      previous.utcTime
+  ) {
+    return [] as string[]
+  }
+
+  const result:
+    string[] = []
+
+  /*
+   * 第 29 階段：改用「本期結束日期 - 上一期結束日期」判斷。
+   *
+   * 不再只看 YYYY-MM 是否跨月，避免：
+   * 上期 09/30 → 本期 10/01 只有多 1 天，卻被誤判成已繳 10 月。
+   *
+   * 現在會以「上一期結束日」為基準，逐一往後加完整日曆月：
+   * 09/30 → 10/31 = 1 個完整月 => 10 月
+   * 09/30 → 11/30 = 2 個完整月 => 10、11 月
+   * 09/30 → 10/01 = 不足 1 個完整月 => 不自動記繳費月份
+   *
+   * 若上一期本身是月底，下一期也以各月月底計算，
+   * 可正確處理 1/31 → 2/28 → 3/31。
+   */
+  for (
+    let monthOffset = 1;
+    monthOffset <= 36;
+    monthOffset++
+  ) {
+    const boundary =
+      legacyDateAfterMonths(
+        previous,
+        monthOffset
+      )
+
+    if (
+      boundary.utcTime >
+      current.utcTime
+    ) {
+      break
+    }
+
+    result.push(
+      `${boundary.year}-${String(
+        boundary.month
+      ).padStart(2, '0')}-01`
+    )
+  }
+
+  return result
+}
+
+function legacyEndDateDiffSummary(
+  previousEndDate?: string | null,
+  currentEndDate?: string | null
+) {
+  const previous =
+    parseLegacyDateValue(
+      previousEndDate
+    )
+
+  const current =
+    parseLegacyDateValue(
+      currentEndDate
+    )
+
+  if (!previous || !current) {
+    return '結束日期格式不足，未自動判定繳費月份'
+  }
+
+  const addedDays =
+    Math.round(
+      (
+        current.utcTime -
+        previous.utcTime
+      ) /
+        86400000
+    )
+
+  if (addedDays <= 0) {
+    return addedDays === 0
+      ? '結束日期未變更，不新增繳費月份'
+      : `本期結束日期較上期提早 ${Math.abs(
+          addedDays
+        )} 天，不新增繳費月份`
+  }
+
+  const months =
+    inferPaymentMonthsFromLegacyDiff(
+      previousEndDate,
+      currentEndDate
+    )
+
+  if (months.length === 0) {
+    return `結束日期增加 ${addedDays} 天，但不足 1 個完整月，為避免誤記，不自動新增繳費月份`
+  }
+
+  const lastBoundary =
+    legacyDateAfterMonths(
+      previous,
+      months.length
+    )
+
+  const remainderDays =
+    Math.max(
+      0,
+      Math.round(
+        (
+          current.utcTime -
+          lastBoundary.utcTime
+        ) /
+          86400000
+      )
+    )
+
+  return [
+    `結束日期增加 ${addedDays} 天`,
+    `完整延長 ${months.length} 個月`,
+    remainderDays > 0
+      ? `另有 ${remainderDays} 天不自動計入`
+      : '',
+    `辨識繳費月份：${months
+      .map(paymentMonthLabel)
+      .join('、')}`,
+  ]
+    .filter(Boolean)
+    .join('；')
+}
+
+function paymentMonthLabel(
+  value: string
+) {
+  return value
+    ? value
+        .slice(0, 7)
+        .replace('-', '/')
+    : '-'
+}
+
 function normalizePlate(value: string) {
   return String(value || '')
     .trim()
@@ -122,6 +498,90 @@ function normalizeCustomerCode(
     .trim()
     .replace(/\s+/g, '')
     .toUpperCase()
+}
+
+function importIdentityKeys(
+  row: {
+    customer_code?: string | null
+    vehicle_plate?: string | null
+  }
+) {
+  const keys: string[] = []
+
+  const customerCode =
+    normalizeCustomerCode(
+      row.customer_code
+    )
+
+  if (customerCode) {
+    keys.push(
+      `customer:${customerCode}`
+    )
+  }
+
+  const plate =
+    normalizePlate(
+      row.vehicle_plate ||
+        ''
+    )
+
+  if (plate) {
+    keys.push(
+      `plate:${plate}`
+    )
+  }
+
+  return keys
+}
+
+function setImportIdentity<T>(
+  map: Map<string, T>,
+  row: {
+    customer_code?: string | null
+    vehicle_plate?: string | null
+  },
+  value: T
+) {
+  for (
+    const key of
+    importIdentityKeys(row)
+  ) {
+    if (!map.has(key)) {
+      map.set(key, value)
+    }
+  }
+}
+
+function getImportIdentity<T>(
+  map: Map<string, T>,
+  row: {
+    customer_code?: string | null
+    vehicle_plate?: string | null
+  }
+) {
+  for (
+    const key of
+    importIdentityKeys(row)
+  ) {
+    const value = map.get(key)
+
+    if (value) {
+      return value
+    }
+  }
+
+  return undefined
+}
+
+function hasImportIdentity<T>(
+  map: Map<string, T>,
+  row: {
+    customer_code?: string | null
+    vehicle_plate?: string | null
+  }
+) {
+  return importIdentityKeys(row)
+    .some((key) => map.has(key))
 }
 
 function extractPhone(value: string) {
@@ -1749,23 +2209,6 @@ async function parseLegacyFile(
   )
 }
 
-
-function monthKey(
-  value?: string | null
-) {
-  const text =
-    String(value || '').trim()
-
-  const match =
-    text.match(
-      /^(\d{4})-(\d{2})/
-    )
-
-  return match
-    ? `${match[1]}-${match[2]}`
-    : ''
-}
-
 function sameValue(
   a: any,
   b: any
@@ -1873,7 +2316,7 @@ export default function LegacyMonthlyImport({
   const [
     parkingLotId,
     setParkingLotId,
-  ] = useState('')
+  ] = useState(parkingLots.length === 1 ? parkingLots[0].id : '')
 
   const [
     fileName,
@@ -1954,9 +2397,14 @@ export default function LegacyMonthlyImport({
             file
           )
 
+        const expiryFiltered408 =
+          filterExpiredImportRows(
+            parsed408.rows
+          )
+
         const ruled408 =
           await applySupervisorTypeRules(
-            parsed408.rows,
+            expiryFiltered408.rows,
             parkingLotId
           )
 
@@ -1978,7 +2426,7 @@ export default function LegacyMonthlyImport({
           paidCount
 
         setMessage(
-          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，租期 ${parsed408.period}；月租 ${ruled408.rows.length} 筆，已繳 ${paidCount} 筆，未繳 ${unpaidCount} 筆；主管類型規則 ${ruled408.ruleCount} 條，本次自動分類 ${ruled408.matchedCount} 筆。`
+          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，租期 ${parsed408.period}；月租 ${ruled408.rows.length} 筆，已繳 ${paidCount} 筆，未繳 ${unpaidCount} 筆；到期超過 ${IMPORT_EXPIRY_RETENTION_MONTHS} 個月排除 ${expiryFiltered408.excludedCount} 筆（門檻 ${expiryFiltered408.cutoff}）；主管類型規則 ${ruled408.ruleCount} 條，本次自動分類 ${ruled408.matchedCount} 筆。`
         )
 
         return
@@ -1989,9 +2437,14 @@ export default function LegacyMonthlyImport({
           file
         )
 
+      const expiryFiltered =
+        filterExpiredImportRows(
+          parsed
+        )
+
       const ruled =
         await applySupervisorTypeRules(
-          parsed,
+          expiryFiltered.rows,
           parkingLotId
         )
 
@@ -2010,7 +2463,7 @@ export default function LegacyMonthlyImport({
         valid
 
       setMessage(
-        `已辨識 ${ruled.rows.length} 筆，可匯入 ${valid} 筆，格式異常 ${invalid} 筆；主管類型規則 ${ruled.ruleCount} 條，本次自動分類 ${ruled.matchedCount} 筆。`
+        `已辨識 ${ruled.rows.length} 筆，可匯入 ${valid} 筆，格式異常 ${invalid} 筆；到期超過 ${IMPORT_EXPIRY_RETENTION_MONTHS} 個月排除 ${expiryFiltered.excludedCount} 筆（門檻 ${expiryFiltered.cutoff}）；主管類型規則 ${ruled.ruleCount} 條，本次自動分類 ${ruled.matchedCount} 筆。`
       )
     } catch (
       error: any
@@ -2132,6 +2585,8 @@ export default function LegacyMonthlyImport({
             validRows.length,
 
           joinedCount: 0,
+          recreatedCount: 0,
+          retiredProtectedCount: 0,
           cancelledCount: 0,
           updatedCount: 0,
           dateOnlyCount: 0,
@@ -2183,6 +2638,123 @@ export default function LegacyMonthlyImport({
         return
       }
 
+      /*
+       * 除了比較兩份匯入檔，也必須核對目前 monthly_rentals 主檔。
+       * 否則主檔被永久刪除、但新舊 Excel 完全相同時，會被誤判為
+       * 「完全未異動」，使用者看不到可重新匯入的資料。
+       */
+      const {
+        data:
+          currentRentalRows,
+
+        error:
+          currentRentalRowsError,
+      } =
+        await supabase
+          .from(
+            'monthly_rentals'
+          )
+          .select(`
+            id,
+            customer_code,
+            vehicle_plate,
+            rental_status
+          `)
+          .eq(
+            'parking_lot_id',
+            parkingLotId
+          )
+
+      if (
+        currentRentalRowsError
+      ) {
+        setMessage(
+          `讀取目前月租主檔失敗：${currentRentalRowsError.message}`
+        )
+        return
+      }
+
+      const activeRentalMap =
+        new Map<
+          string,
+          any
+        >()
+
+      const cancelledCustomerCodes =
+        new Set<string>()
+
+      const cancelledPlates =
+        new Set<string>()
+
+      for (
+        const rental of
+        currentRentalRows || []
+      ) {
+        if (
+          rental.rental_status ===
+          'cancelled'
+        ) {
+          const cancelledCode =
+            normalizeCustomerCode(
+              rental.customer_code
+            )
+
+          const cancelledPlate =
+            normalizePlate(
+              rental.vehicle_plate
+            )
+
+          if (cancelledCode) {
+            cancelledCustomerCodes.add(
+              cancelledCode
+            )
+          }
+
+          if (cancelledPlate) {
+            cancelledPlates.add(
+              cancelledPlate
+            )
+          }
+
+          continue
+        }
+
+        setImportIdentity(
+          activeRentalMap,
+          rental,
+          rental
+        )
+      }
+
+      function isProtectedRetiredRow(
+        row: {
+          customer_code?: string | null
+          vehicle_plate?: string | null
+        }
+      ) {
+        const customerCode =
+          normalizeCustomerCode(
+            row.customer_code
+          )
+
+        if (customerCode) {
+          return cancelledCustomerCodes.has(
+            customerCode
+          )
+        }
+
+        const plate =
+          normalizePlate(
+            row.vehicle_plate ||
+              ''
+          )
+
+        return Boolean(
+          plate &&
+          cancelledPlates.has(plate)
+        )
+      }
+
       const previousMap =
         new Map<
           string,
@@ -2193,10 +2765,9 @@ export default function LegacyMonthlyImport({
         const item of
         previousMembers || []
       ) {
-        previousMap.set(
-          normalizePlate(
-            item.vehicle_plate
-          ),
+        setImportIdentity(
+          previousMap,
+          item,
           item
         )
       }
@@ -2211,15 +2782,16 @@ export default function LegacyMonthlyImport({
         const item of
         validRows
       ) {
-        currentMap.set(
-          normalizePlate(
-            item.vehicle_plate
-          ),
+        setImportIdentity(
+          currentMap,
+          item,
           item
         )
       }
 
       let joinedCount = 0
+      let recreatedCount = 0
+      let retiredProtectedCount = 0
       let cancelledCount = 0
       let updatedCount = 0
       let dateOnlyCount = 0
@@ -2233,13 +2805,70 @@ export default function LegacyMonthlyImport({
         const newRow of
         validRows
       ) {
-        const key =
-          normalizePlate(
-            newRow.vehicle_plate
+        const oldRow =
+          getImportIdentity(
+            previousMap,
+            newRow
           )
 
-        const oldRow =
-          previousMap.get(key)
+        if (
+          isProtectedRetiredRow(
+            newRow
+          )
+        ) {
+          retiredProtectedCount++
+
+          items.push({
+            type:
+              'retired_protected',
+
+            customer_code:
+              newRow.customer_code,
+
+            customer_name:
+              newRow.customer_name,
+
+            vehicle_plate:
+              newRow.vehicle_plate,
+
+            detail:
+              '此客戶已有正式退租紀錄，重新匯入時仍會略過',
+          })
+
+          continue
+        }
+
+        const currentRental =
+          getImportIdentity(
+            activeRentalMap,
+            newRow
+          )
+
+        if (
+          oldRow &&
+          !currentRental
+        ) {
+          recreatedCount++
+
+          items.push({
+            type:
+              'recreated',
+
+            customer_code:
+              newRow.customer_code,
+
+            customer_name:
+              newRow.customer_name,
+
+            vehicle_plate:
+              newRow.vehicle_plate,
+
+            detail:
+              '上一份匯入檔有此客戶，但目前月租主檔已被刪除；本次可重新建立',
+          })
+
+          continue
+        }
 
         if (!oldRow) {
           joinedCount++
@@ -2279,6 +2908,12 @@ export default function LegacyMonthlyImport({
             newRow.end_date
           )
 
+        const inferredPaymentMonths =
+          inferPaymentMonthsFromLegacyDiff(
+            oldRow.end_date,
+            newRow.end_date
+          )
+
         if (
           contractChanges.length >
           0
@@ -2298,9 +2933,17 @@ export default function LegacyMonthlyImport({
               newRow.vehicle_plate,
 
             detail:
-              contractChanges.join(
-                '；'
-              ),
+              [
+                ...contractChanges,
+                dateChanged
+                  ? legacyEndDateDiffSummary(
+                      oldRow.end_date,
+                      newRow.end_date
+                    )
+                  : '',
+              ]
+                .filter(Boolean)
+                .join('；'),
           })
 
           continue
@@ -2325,7 +2968,10 @@ export default function LegacyMonthlyImport({
               newRow.vehicle_plate,
 
             detail:
-              `${oldRow.start_date || '-'} 到 ${oldRow.end_date || '-'} → ${newRow.start_date || '-'} 到 ${newRow.end_date || '-'}`,
+              `${oldRow.start_date || '-'} 到 ${oldRow.end_date || '-'} → ${newRow.start_date || '-'} 到 ${newRow.end_date || '-'}；${legacyEndDateDiffSummary(
+                oldRow.end_date,
+                newRow.end_date
+              )}`,
           })
 
           continue
@@ -2338,13 +2984,16 @@ export default function LegacyMonthlyImport({
         const oldRow of
         previousMembers || []
       ) {
-        const key =
+        const oldPlateKey =
           normalizePlate(
             oldRow.vehicle_plate
           )
 
         if (
-          currentMap.has(key)
+          hasImportIdentity(
+            currentMap,
+            oldRow
+          )
         ) {
           continue
         }
@@ -2352,7 +3001,7 @@ export default function LegacyMonthlyImport({
         const explicitZeroCancel =
           zeroCancelledRows.some(
             (item) =>
-              normalizePlate(item.vehicle_plate) === key
+              normalizePlate(item.vehicle_plate) === oldPlateKey
           )
 
         cancelledCount++
@@ -2386,6 +3035,8 @@ export default function LegacyMonthlyImport({
         baselineCount: 0,
 
         joinedCount,
+        recreatedCount,
+        retiredProtectedCount,
         cancelledCount,
         updatedCount,
         dateOnlyCount,
@@ -2395,7 +3046,7 @@ export default function LegacyMonthlyImport({
       })
 
       setMessage(
-        `比對完成：新增 ${joinedCount} 筆、退租 ${cancelledCount} 筆、簽約資料異動 ${updatedCount} 筆、只有租期更新 ${dateOnlyCount} 筆、完全未異動 ${unchangedCount} 筆；0 元「找零不足但已繳」 ${validRows.filter((item) => isPaidShortRow(item)).length} 筆；公務車 ${validRows.filter((item) => isOfficialVehicleRow(item)).length} 筆。`
+        `比對完成：新增 ${joinedCount} 筆、刪除後待重新匯入 ${recreatedCount} 筆、正式退租保護 ${retiredProtectedCount} 筆、退租 ${cancelledCount} 筆、簽約資料異動 ${updatedCount} 筆、總表租期不同 ${dateOnlyCount} 筆（主表不覆蓋）、完全未異動 ${unchangedCount} 筆；0 元「找零不足但已繳」 ${validRows.filter((item) => isPaidShortRow(item)).length} 筆；公務車 ${validRows.filter((item) => isOfficialVehicleRow(item)).length} 筆。`
       )
     } catch (
       error: any
@@ -2466,7 +3117,7 @@ export default function LegacyMonthlyImport({
           `0 元人工退租：${zeroCancelledRows.length} 筆\n` +
           `0 元找零不足已繳：${validRows.filter((item) => isPaidShortRow(item)).length} 筆\n` +
           `0 元公務車：${validRows.filter((item) => isOfficialVehicleRow(item)).length} 筆\n\n` +
-          `正常續租造成的日期變更不會列入簽約異動。\n\n` +
+          `既有月租的正式租期不會被本次總表覆蓋；新戶優先套用目前場站租期。\n\n` +
           `確定正式匯入嗎？`
       )
 
@@ -2497,6 +3148,24 @@ export default function LegacyMonthlyImport({
         setMessage(
           '登入狀態失效，請重新登入'
         )
+        return
+      }
+
+      /*
+       * 第 23 階段：匯入總表不得決定既有月租的正式租期。
+       * 新加入的月租戶，優先使用主管為該場設定的目前抽籤／年度租期；
+       * 若尚未設定，才以舊檔內日期做第一次建立。
+       */
+      const { data: activeRentalTerm, error: activeRentalTermError } =
+        await supabase
+          .from('parking_lot_rental_terms')
+          .select('id,start_date,end_date,term_name')
+          .eq('parking_lot_id', parkingLotId)
+          .eq('is_active', true)
+          .maybeSingle()
+
+      if (activeRentalTermError) {
+        setMessage(`讀取目前場站租期失敗：${activeRentalTermError.message}`)
         return
       }
 
@@ -2735,10 +3404,9 @@ export default function LegacyMonthlyImport({
         const row of
         previousMembers
       ) {
-        previousMap.set(
-          normalizePlate(
-            row.vehicle_plate
-          ),
+        setImportIdentity(
+          previousMap,
+          row,
           row
         )
       }
@@ -2753,10 +3421,9 @@ export default function LegacyMonthlyImport({
         const row of
         validRows
       ) {
-        newMap.set(
-          normalizePlate(
-            row.vehicle_plate
-          ),
+        setImportIdentity(
+          newMap,
+          row,
           row
         )
       }
@@ -2891,15 +3558,20 @@ export default function LegacyMonthlyImport({
         const row of
         effectiveRows
       ) {
-        newMap.set(
-          normalizePlate(
-            row.vehicle_plate
-          ),
+        setImportIdentity(
+          newMap,
+          row,
           row
         )
       }
 
-      const rentalMap =
+      const rentalMapByPlate =
+        new Map<
+          string,
+          any
+        >()
+
+      const rentalMapByCustomerCode =
         new Map<
           string,
           any
@@ -2921,20 +3593,82 @@ export default function LegacyMonthlyImport({
           continue
         }
 
-        const key =
+        const plateKey =
           normalizePlate(
             rental.vehicle_plate
           )
 
-        const existing =
-          rentalMap.get(key)
+        const customerCodeKey =
+          normalizeCustomerCode(
+            rental.customer_code
+          )
 
-        if (!existing) {
-          rentalMap.set(
-            key,
+        if (
+          customerCodeKey &&
+          !rentalMapByCustomerCode.has(
+            customerCodeKey
+          )
+        ) {
+          rentalMapByCustomerCode.set(
+            customerCodeKey,
             rental
           )
         }
+
+        if (
+          plateKey &&
+          !rentalMapByPlate.has(
+            plateKey
+          )
+        ) {
+          rentalMapByPlate.set(
+            plateKey,
+            rental
+          )
+        }
+      }
+
+      /*
+       * 月租主檔比對規則：
+       * 1. 同停車場 + 客戶編號優先（車牌日後可能更換）。
+       * 2. 匯入列沒有客戶編號，或找不到編號時，才以車牌備援。
+       *
+       * 永久刪除的資料不會出現在這兩張 Map；若仍存在上一批
+       * 匯入名單，本次會在下方走「重新建立」而不是匯入失敗。
+       */
+      function findCurrentRental(
+        row: {
+          customer_code?: string | null
+          vehicle_plate?: string | null
+        }
+      ) {
+        const customerCodeKey =
+          normalizeCustomerCode(
+            row.customer_code
+          )
+
+        if (customerCodeKey) {
+          const byCustomerCode =
+            rentalMapByCustomerCode.get(
+              customerCodeKey
+            )
+
+          if (byCustomerCode) {
+            return byCustomerCode
+          }
+        }
+
+        const plateKey =
+          normalizePlate(
+            row.vehicle_plate ||
+              ''
+          )
+
+        return plateKey
+          ? rentalMapByPlate.get(
+              plateKey
+            )
+          : undefined
       }
 
       let inserted = 0
@@ -2944,22 +3678,33 @@ export default function LegacyMonthlyImport({
       let dateOnlyChanged = 0
       let paidShortUpdated = 0
       let officialVehicleUpdated = 0
+      let inferredPaymentMonthsSaved = 0
+      let paymentMonthInferenceFailed = 0
+      let recreatedAfterDelete = 0
       let failed = 0
 
       for (
         const newRow of
         effectiveRows
       ) {
-        const key =
-          normalizePlate(
-            newRow.vehicle_plate
+        const previous =
+          getImportIdentity(
+            previousMap,
+            newRow
           )
 
-        const previous =
-          previousMap.get(key)
-
         const currentRental =
-          rentalMap.get(key)
+          findCurrentRental(
+            newRow
+          )
+
+        const inferredPaymentMonths =
+          previous
+            ? inferPaymentMonthsFromLegacyDiff(
+                previous.end_date,
+                newRow.end_date
+              )
+            : []
 
         const importedNotes =
           [
@@ -2978,9 +3723,10 @@ export default function LegacyMonthlyImport({
             .filter(Boolean)
             .join(' / ')
 
-        // 第40階段：付款狀態與月份事件完全分離，不再用到期日/租期變更重設付款。
-
-        if (!previous) {
+        if (
+          !previous ||
+          !currentRental
+        ) {
           if (!currentRental) {
             const {
               data:
@@ -3019,10 +3765,19 @@ export default function LegacyMonthlyImport({
                     null,
 
                   start_date:
-                    newRow.start_date,
+                    activeRentalTerm?.start_date || newRow.start_date,
 
                   end_date:
-                    newRow.end_date,
+                    activeRentalTerm?.end_date || newRow.end_date,
+
+                  rental_term_id:
+                    activeRentalTerm?.id || null,
+
+                  rental_term_locked:
+                    Boolean(activeRentalTerm?.id),
+
+                  data_source:
+                    'legacy_import',
 
                   monthly_fee:
                     newRow.monthly_fee,
@@ -3045,6 +3800,11 @@ export default function LegacyMonthlyImport({
                   invoice_number:
                     newRow.invoice_number ||
                     null,
+
+                  last_payment_source:
+                    (newRow.payment_status === 'paid' || isZeroPaidRow(newRow))
+                      ? 'legacy_import_unassigned'
+                      : null,
 
                   notes:
                     importedNotes ||
@@ -3109,11 +3869,10 @@ export default function LegacyMonthlyImport({
                   newRow.rental_type ||
                   null,
 
-                start_date:
-                  newRow.start_date,
-
-                end_date:
-                  newRow.end_date,
+                /*
+                 * 正式租期保護：既有資料的 start_date / end_date
+                 * 不由匯入總表更新。
+                 */
 
                 monthly_fee:
                   newRow.monthly_fee,
@@ -3191,7 +3950,9 @@ export default function LegacyMonthlyImport({
                       '與上一次總表比較',
 
                     change_detail:
-                      '上一次總表無此月租戶，本次總表新增',
+                      previous
+                        ? '月租主檔曾被永久刪除，本次匯入已自動重新建立'
+                        : '上一次總表無此月租戶，本次總表新增',
 
                     source:
                       'legacy_import',
@@ -3213,6 +3974,11 @@ export default function LegacyMonthlyImport({
             }
 
             inserted++
+
+            if (previous) {
+              recreatedAfterDelete++
+            }
+
             continue
           }
 
@@ -3306,11 +4072,9 @@ export default function LegacyMonthlyImport({
                   newRow.rental_type ||
                   null,
 
-                start_date:
-                  newRow.start_date,
-
-                end_date:
-                  newRow.end_date,
+                /*
+                 * 第 23 階段正式租期保護：既有月租不接受總表覆蓋日期。
+                 */
 
                 monthly_fee:
                   newRow.monthly_fee,
@@ -3319,25 +4083,7 @@ export default function LegacyMonthlyImport({
                   'active',
 
 
-                ...(newRow.payment_status
-                  ? {
-                      payment_status:
-                        newRow.payment_status,
-                      payment_date:
-                        newRow.payment_status === 'paid'
-                          ? (newRow.payment_date || null)
-                          : null,
-                      invoice_number:
-                        newRow.payment_status === 'paid'
-                          ? (newRow.invoice_number || null)
-                          : null,
-                    }
-                  : isZeroPaidRow(newRow)
-                    ? {
-                        payment_status:
-                          'paid',
-                      }
-                    : {}),
+                // 繳費狀態／月份改由繳費紀錄匯入處理，不由月租總表覆蓋。
 
                 notes:
                   importedNotes ||
@@ -3443,29 +4189,6 @@ export default function LegacyMonthlyImport({
           !sameValue(
             previous.end_date,
             newRow.end_date
-          )
-
-        /*
-         * 第39階段簡訊名單：
-         * 只比較「上一份舊系統總表」與「本次總表」的到期月份。
-         * 日期在同一月份內變動不列入；月份跨到新月份才建立簡訊候選。
-         */
-        const previousDueMonth =
-          monthKey(
-            previous.end_date
-          )
-
-        const currentDueMonth =
-          monthKey(
-            newRow.end_date
-          )
-
-        const smsMonthChanged =
-          Boolean(
-            previousDueMonth &&
-            currentDueMonth &&
-            previousDueMonth !==
-              currentDueMonth
           )
 
         const paymentChanged =
@@ -3609,11 +4332,9 @@ export default function LegacyMonthlyImport({
                 newRow.rental_type ||
                 null,
 
-              start_date:
-                newRow.start_date,
-
-              end_date:
-                newRow.end_date,
+              /*
+               * 正式租期保護：即使新總表日期不同，也保留既有租期。
+               */
 
               monthly_fee:
                 newRow.monthly_fee,
@@ -3622,25 +4343,11 @@ export default function LegacyMonthlyImport({
                 'active',
 
 
-              ...(newRow.payment_status
-                ? {
-                    payment_status:
-                      newRow.payment_status,
-                    payment_date:
-                      newRow.payment_status === 'paid'
-                        ? (newRow.payment_date || null)
-                        : null,
-                    invoice_number:
-                      newRow.payment_status === 'paid'
-                        ? (newRow.invoice_number || null)
-                        : null,
-                  }
-                : isZeroPaidRow(newRow)
-                  ? {
-                      payment_status:
-                        'paid',
-                    }
-                  : {}),
+              /*
+               * 正式租期仍完全不被總表覆蓋。
+               * 繳費月份則於 update 成功後，以「上一期舊系統總表」
+               * 與「本期舊系統總表」的到期月份差異自動辨識。
+               */
 
               notes:
                 importedNotes ||
@@ -3665,81 +4372,130 @@ export default function LegacyMonthlyImport({
           continue
         }
 
+        /*
+         * 第 25 階段：
+         * 舊系統總表的日期只拿來辨識「新增繳費月份」，
+         * 不再拿來修改正式租期。
+         *
+         * 上一期到期 2026-09，本期到期 2026-10
+         * => 自動新增 2026/10 的 payment month。
+         */
         if (
-          smsMonthChanged
+          inferredPaymentMonths.length >
+          0
         ) {
+          const detectedAt =
+            new Date()
+              .toISOString()
+              .slice(0, 10)
+
+          const paymentMonthRows =
+            inferredPaymentMonths.map(
+              (
+                coverageMonth
+              ) => ({
+                monthly_rental_id:
+                  currentRental.id,
+
+                parking_lot_id:
+                  parkingLotId,
+
+                coverage_month:
+                  coverageMonth,
+
+                amount:
+                  Number(
+                    newRow.monthly_fee ||
+                    currentRental.monthly_fee ||
+                    0
+                  ),
+
+                payment_date:
+                  newRow.payment_date ||
+                  detectedAt,
+
+                invoice_number:
+                  newRow.invoice_number ||
+                  null,
+
+                source:
+                  'legacy_roster_diff',
+
+                source_reference:
+                  `legacy-roster-diff:${batchId}:${currentRental.id}:${coverageMonth}`,
+
+                notes:
+                  `由舊系統總表結束日期差異自動辨識：上一期 ${previous?.end_date || '-'}，本期 ${newRow.end_date || '-'}；${legacyEndDateDiffSummary(
+                    previous?.end_date,
+                    newRow.end_date
+                  )}。`,
+
+                created_by:
+                  user.id,
+              })
+            )
+
           const {
             error:
-              smsCandidateError,
+              paymentMonthError,
           } =
             await supabase
               .from(
-                'monthly_cycle_events'
+                'monthly_rental_payment_months'
               )
               .upsert(
-                {
-                  parking_lot_id:
-                    parkingLotId,
-
-                  monthly_rental_id:
-                    currentRental.id,
-
-                  import_batch_id:
-                    batchId,
-
-                  customer_name:
-                    newRow.customer_name,
-
-                  phone:
-                    newRow.phone ||
-                    null,
-
-                  vehicle_plate:
-                    newRow.vehicle_plate,
-
-                  vehicle_type:
-                    newRow.vehicle_type,
-
-                  rental_type:
-                    newRow.rental_type ||
-                    null,
-
-                  previous_end_date:
-                    previous.end_date ||
-                    null,
-
-                  current_end_date:
-                    newRow.end_date ||
-                    null,
-
-                  cycle_month:
-                    `${currentDueMonth}-01`,
-
-                  sms_required:
-                    true,
-
-                  sms_status:
-                    'pending',
-
-                  trigger_reason:
-                    '舊系統到期月份由上一期跨到本期',
-
-                  source:
-                    'legacy_due_month_change',
-                },
+                paymentMonthRows,
                 {
                   onConflict:
-                    'parking_lot_id,monthly_rental_id,cycle_month',
+                    'monthly_rental_id,coverage_month',
+                  ignoreDuplicates:
+                    true,
                 }
               )
 
           if (
-            smsCandidateError
+            paymentMonthError
           ) {
             console.error(
-              '建立月份事件失敗',
-              smsCandidateError
+              '自動辨識繳費月份失敗',
+              paymentMonthError
             )
+
+            paymentMonthInferenceFailed++
+          } else {
+            inferredPaymentMonthsSaved +=
+              inferredPaymentMonths.length
+
+            const latestMonth =
+              inferredPaymentMonths[
+                inferredPaymentMonths.length -
+                  1
+              ]
+
+            const existingLastPaidMonth =
+              String(
+                currentRental.last_paid_month ||
+                ''
+              )
+
+            if (
+              !existingLastPaidMonth ||
+              latestMonth >
+                existingLastPaidMonth
+            ) {
+              await supabase
+                .from(
+                  'monthly_rentals'
+                )
+                .update({
+                  last_paid_month:
+                    latestMonth,
+                })
+                .eq(
+                  'id',
+                  currentRental.id
+                )
+            }
           }
         }
 
@@ -3847,19 +4603,24 @@ export default function LegacyMonthlyImport({
             continue
           }
 
-          const key =
+          const oldPlateKey =
             normalizePlate(
               oldRow.vehicle_plate
             )
 
           if (
-            newMap.has(key)
+            hasImportIdentity(
+              newMap,
+              oldRow
+            )
           ) {
             continue
           }
 
           const currentRental =
-            rentalMap.get(key)
+            findCurrentRental(
+              oldRow
+            )
 
           if (currentRental) {
             const {
@@ -4011,7 +4772,7 @@ export default function LegacyMonthlyImport({
                   change_detail:
                     zeroCancelledRows.some(
                       (item) =>
-                        normalizePlate(item.vehicle_plate) === key
+                        normalizePlate(item.vehicle_plate) === oldPlateKey
                     )
                       ? '本次總表金額為 0，人工選擇「退租」'
                       : '上一次總表有此月租戶，本次總表已不存在',
@@ -4075,7 +4836,7 @@ export default function LegacyMonthlyImport({
                   change_detail:
                     zeroCancelledRows.some(
                       (item) =>
-                        normalizePlate(item.vehicle_plate) === key
+                        normalizePlate(item.vehicle_plate) === oldPlateKey
                     )
                       ? '本次總表金額為 0，人工選擇「退租」'
                       : '上一次總表有此月租戶，本次總表已不存在',
@@ -4125,7 +4886,7 @@ export default function LegacyMonthlyImport({
             finalStatus,
 
           notes:
-            `新加入 ${inserted} 筆；簽約資料異動 ${updated} 筆；退租 ${cancelled} 筆；已退租保護略過 ${retiredSkipped} 筆；只有租期更新 ${dateOnlyChanged} 筆；0元找零不足已繳 ${paidShortUpdated} 筆；公務車 ${officialVehicleUpdated} 筆；完全未異動 ${unchanged} 筆；失敗 ${failed} 筆`,
+            `新加入 ${inserted} 筆（其中刪除後重新匯入 ${recreatedAfterDelete} 筆）；簽約資料異動 ${updated} 筆；退租 ${cancelled} 筆；已退租保護略過 ${retiredSkipped} 筆；總表租期不同但已保護 ${dateOnlyChanged} 筆；自動辨識繳費月份 ${inferredPaymentMonthsSaved} 筆；繳費月份辨識失敗 ${paymentMonthInferenceFailed} 筆；0元找零不足已繳 ${paidShortUpdated} 筆；公務車 ${officialVehicleUpdated} 筆；完全未異動 ${unchanged} 筆；失敗 ${failed} 筆`,
         })
         .eq(
           'id',
@@ -4135,10 +4896,13 @@ export default function LegacyMonthlyImport({
       setMessage(
         `匯入完成：
 新增 ${inserted} 筆、
+其中刪除後重新匯入 ${recreatedAfterDelete} 筆、
 簽約資料異動 ${updated} 筆、
 退租 ${cancelled} 筆、
 已退租保護略過 ${retiredSkipped} 筆、
-只有租期更新 ${dateOnlyChanged} 筆、
+總表租期不同但已保護 ${dateOnlyChanged} 筆、
+自動辨識繳費月份 ${inferredPaymentMonthsSaved} 筆、
+繳費月份辨識失敗 ${paymentMonthInferenceFailed} 筆、
 0元找零不足已繳 ${paidShortUpdated} 筆、
 公務車 ${officialVehicleUpdated} 筆、
 完全未異動 ${unchanged} 筆、
@@ -4244,7 +5008,7 @@ export default function LegacyMonthlyImport({
         </h2>
 
         <p className="muted">
-          先分析與上一份總表的差異，確認後才正式匯入。正常續租造成的日期變更不會列入簽約異動。月租總表內金額為 0 元的資料會自動略過，不會匯入。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
+          先分析與上一份舊系統總表的差異，確認後才正式匯入。固定匯入參數：到期日超過 {IMPORT_EXPIRY_RETENTION_MONTHS} 個月的資料不列入名單；辨識完成後會顯示本次排除筆數與門檻日期。正式租期仍以主管設定為準，不會被舊系統日期覆蓋；繳費月份改用「本期報表結束日期 − 上一期報表結束日期」判斷，只有完整延長 1 個月以上才自動記入，避免只多幾天卻誤算一整個月。月租總表內金額為 0 元的資料會自動略過，不會匯入。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
         </p>
 
         <div
