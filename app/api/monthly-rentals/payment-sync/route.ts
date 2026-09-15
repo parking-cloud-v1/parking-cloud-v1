@@ -1,7 +1,11 @@
-import { randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
+import {
+  classifyPaymentAmount,
+  getNextCoverageStartDate,
+  nextPaidThroughDate,
+} from '@/lib/monthly-rental-cycle'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -17,11 +21,16 @@ type PaymentRow = {
   amountPaid?: number | null
   paymentMethod?: string | null
   invoiceNumber?: string | null
-  rentalStartDate?: string | null
-  rentalEndDate?: string | null
   sourceReference?: string | null
   notes?: string | null
 }
+
+type ReviewReason =
+  | 'zero_amount'
+  | 'non_multiple'
+  | 'invalid_monthly_fee'
+  | 'missing_system_term'
+  | 'term_overflow'
 
 function serviceClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -55,10 +64,14 @@ export async function POST(request: NextRequest) {
 
     const ids = [...new Set(rows.map((r) => safeText(r.rentalId, 80)).filter(Boolean))]
 
-    // 先以登入者本身的 RLS 權限確認可讀取的月租資料，避免 service role 越權。
     const { data: allowedRows, error: accessError } = await supabase
       .from('monthly_rentals')
-      .select('id,parking_lot_id,customer_code,customer_name,phone,vehicle_plate,start_date,end_date,monthly_fee')
+      .select(`
+        id,parking_lot_id,customer_code,customer_name,phone,vehicle_plate,
+        rental_type,monthly_fee,payment_status,payment_date,invoice_number,
+        system_term_id,system_cycle_start_date,system_cycle_end_date,
+        paid_through_date,payment_review_status
+      `)
       .in('id', ids)
 
     if (accessError) {
@@ -74,6 +87,7 @@ export async function POST(request: NextRequest) {
     let historySuccess = 0
     let historyDuplicate = 0
     let historyFailed = 0
+    let pendingReview = 0
     const errors: string[] = []
 
     for (const input of rows) {
@@ -87,31 +101,54 @@ export async function POST(request: NextRequest) {
 
       const paymentDate = validDate(input.paymentDate) || new Date().toISOString().slice(0, 10)
       const invoiceNumber = safeText(input.invoiceNumber, 100) || null
-
-      /*
-       * 付款狀態的唯一原則：
-       * 必須先有一筆真正的 monthly_payments 繳費紀錄，
-       * 才能把 monthly_rentals.payment_status 改成 paid。
-       *
-       * CSV 匯入沿用來源識別避免重複；
-       * 手動「收款」沒有來源識別時，建立獨立的 manual 繳費紀錄。
-       */
+      const amountPaid = Number(input.amountPaid || 0)
       const suppliedSourceReference = safeText(input.sourceReference, 300)
-      const paymentSource =
-        suppliedSourceReference
-          ? 'payment_csv'
-          : 'manual'
+      if (!suppliedSourceReference) {
+        failed++
+        errors.push(`${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：只能由正式繳費報表匯入付款；手動收款不會延長租期`)
+        continue
+      }
 
-      const sourceReference =
-        suppliedSourceReference ||
-        `manual:${rentalId}:${paymentDate}:${randomUUID()}`
+      const paymentSource = 'payment_csv'
+      const sourceReference = suppliedSourceReference
 
-      let historyExists = false
+      const amountDecision = classifyPaymentAmount(amountPaid, Number(rental.monthly_fee || 0))
+      const missingSystemTerm = !rental.system_term_id || !rental.system_cycle_start_date || !rental.system_cycle_end_date
+
+      let reviewReason: ReviewReason | null = missingSystemTerm
+        ? 'missing_system_term'
+        : amountDecision.kind === 'manual_review'
+          ? amountDecision.reason
+          : null
+
+      let newPaidThroughDate = ''
+      let appliedFromDate = ''
+
+      if (!reviewReason && amountDecision.kind === 'auto_apply') {
+        appliedFromDate = getNextCoverageStartDate({
+          currentPaidThroughDate: rental.paid_through_date,
+          termStartDate: rental.system_cycle_start_date,
+        })
+
+        newPaidThroughDate = nextPaidThroughDate({
+          currentPaidThroughDate: rental.paid_through_date,
+          termStartDate: rental.system_cycle_start_date,
+          termEndDate: rental.system_cycle_end_date,
+          months: amountDecision.months,
+        })
+
+        if (!newPaidThroughDate) {
+          reviewReason = 'term_overflow'
+        }
+      }
+
+      let paymentHistoryId = ''
+      let retryExistingFailedApplication = false
 
       if (suppliedSourceReference) {
         const { data: existing, error: duplicateCheckError } = await admin
           .from('monthly_payments')
-          .select('id')
+          .select('id,cycle_application_status')
           .eq('source_reference', suppliedSourceReference)
           .limit(1)
           .maybeSingle()
@@ -119,25 +156,27 @@ export async function POST(request: NextRequest) {
         if (duplicateCheckError) {
           failed++
           historyFailed++
-          console.error(
-            '[monthly-payment-sync] duplicate check failed',
-            rentalId,
-            duplicateCheckError.message
-          )
-          errors.push(
-            `${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：繳費紀錄重複檢查失敗`
-          )
+          errors.push(`${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：繳費紀錄重複檢查失敗`)
           continue
         }
 
         if (existing?.id) {
-          historyExists = true
+          paymentHistoryId = String(existing.id)
           historyDuplicate++
+
+          // 已成功套用、待確認、退款重繳或舊歷史資料，一律不重複延長月份。
+          // 只有本版明確標記 failed 的新流程資料才允許重試套用。
+          if (existing.cycle_application_status !== 'failed') {
+            success++
+            continue
+          }
+
+          retryExistingFailedApplication = true
         }
       }
 
-      if (!historyExists) {
-        const { error: historyError } = await admin
+      if (!paymentHistoryId) {
+        const { data: insertedHistory, error: historyError } = await admin
           .from('monthly_payments')
           .insert({
             parking_lot_id: input.parkingLotId || rental.parking_lot_id || null,
@@ -147,42 +186,115 @@ export async function POST(request: NextRequest) {
             phone: input.phone || rental.phone || null,
             vehicle_plate: input.vehiclePlate || rental.vehicle_plate || null,
             payment_date: paymentDate,
-            amount: Number(input.amountPaid || 0),
+            amount: amountPaid,
             payment_method: safeText(input.paymentMethod, 100) || null,
             invoice_number: invoiceNumber,
-            rental_start_date: input.rentalStartDate || rental.start_date || null,
-            rental_end_date: input.rentalEndDate || rental.end_date || null,
+            // 只保存本系統正式週期；完全不信任繳費 CSV 或舊月票總表的租期日期。
+            rental_start_date: rental.system_cycle_start_date || null,
+            rental_end_date: rental.system_cycle_end_date || null,
             source: paymentSource,
             source_reference: sourceReference,
             notes: safeText(input.notes, 1000) || null,
             created_by: user.id,
+            cycle_application_status: reviewReason ? 'pending_review' : 'processing',
           })
+          .select('id')
+          .single()
 
-        if (historyError) {
+        if (historyError || !insertedHistory?.id) {
           failed++
           historyFailed++
-          console.error(
-            '[monthly-payment-sync] history insert failed',
-            rentalId,
-            historyError.message
-          )
-          errors.push(
-            `${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：繳費紀錄建立失敗，因此未改成已繳`
-          )
+          errors.push(`${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：繳費紀錄建立失敗`)
           continue
         }
 
+        paymentHistoryId = String(insertedHistory.id)
         historySuccess++
+      } else if (retryExistingFailedApplication) {
+        await admin
+          .from('monthly_payments')
+          .update({
+            cycle_application_status: reviewReason ? 'pending_review' : 'processing',
+          })
+          .eq('id', paymentHistoryId)
       }
 
-      /*
-       * 只有確認繳費歷史已存在之後，才更新目前這一期的狀態。
-       * 若狀態更新失敗，繳費歷史仍會保留；再次同步同一 CSV 時，
-       * 系統會辨識為既有紀錄並重新嘗試更新狀態。
-       */
+      if (reviewReason) {
+        const { data: existingReview, error: existingReviewError } = await admin
+          .from('monthly_payment_reviews')
+          .select('id,status')
+          .eq('source_reference', sourceReference)
+          .maybeSingle()
+
+        if (existingReviewError) {
+          await admin
+            .from('monthly_payments')
+            .update({ cycle_application_status: 'failed' })
+            .eq('id', paymentHistoryId)
+          failed++
+          errors.push(`${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：付款已留存，但讀取待確認資料失敗`)
+          continue
+        }
+
+        if (!existingReview?.id) {
+          const { error: reviewError } = await admin
+            .from('monthly_payment_reviews')
+            .insert({
+              parking_lot_id: rental.parking_lot_id || null,
+              monthly_rental_id: rentalId,
+              monthly_payment_id: paymentHistoryId || null,
+              source_reference: sourceReference,
+              amount: amountPaid,
+              monthly_fee: Number(rental.monthly_fee || 0),
+              reason: reviewReason,
+              status: 'pending',
+              created_by: user.id,
+            })
+
+          if (reviewError) {
+            await admin
+              .from('monthly_payments')
+              .update({ cycle_application_status: 'failed' })
+              .eq('id', paymentHistoryId)
+            failed++
+            errors.push(`${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：付款已留存，但建立待確認資料失敗`)
+            continue
+          }
+        }
+
+        await admin
+          .from('monthly_payments')
+          .update({ cycle_application_status: 'pending_review' })
+          .eq('id', paymentHistoryId)
+
+        await admin
+          .from('monthly_rentals')
+          .update({
+            payment_review_status: 'pending',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', rentalId)
+
+        pendingReview++
+        success++
+        continue
+      }
+
+      if (amountDecision.kind !== 'auto_apply' || !newPaidThroughDate) {
+        await admin
+          .from('monthly_payments')
+          .update({ cycle_application_status: 'failed' })
+          .eq('id', paymentHistoryId)
+        failed++
+        errors.push(`${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：無法計算本系統到期日`)
+        continue
+      }
+
       const { data: updated, error: updateError } = await admin
         .from('monthly_rentals')
         .update({
+          paid_through_date: newPaidThroughDate,
+          // payment_status 僅為舊畫面相容欄位；新畫面不以此欄判斷是否續租。
           payment_status: 'paid',
           payment_date: paymentDate,
           invoice_number: invoiceNumber,
@@ -194,17 +306,42 @@ export async function POST(request: NextRequest) {
         .maybeSingle()
 
       if (updateError || !updated?.id) {
+        await admin
+          .from('monthly_payments')
+          .update({ cycle_application_status: 'failed' })
+          .eq('id', paymentHistoryId)
         failed++
-        console.error(
-          '[monthly-payment-sync] update failed',
-          rentalId,
-          updateError?.message
-        )
-        errors.push(
-          `${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：繳費紀錄已保存，但付款狀態更新失敗，可重新同步此筆`
-        )
+        errors.push(`${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：繳費紀錄已保存，但本系統租期延長失敗，可重新同步此筆`)
         continue
       }
+
+      await admin
+        .from('monthly_payments')
+        .update({
+          cycle_application_status: 'applied',
+          applied_months: amountDecision.months,
+          applied_from_date: appliedFromDate || null,
+          applied_to_date: newPaidThroughDate,
+        })
+        .eq('id', paymentHistoryId)
+
+      // 同一份繳費報表可能同一租戶有多筆正式交易；本批下一筆必須
+      // 從剛套用完成的已繳至日期繼續算，不能回到匯入前的舊日期。
+      rental.paid_through_date = newPaidThroughDate
+
+      // 自動核准付款不能清除其他尚未處理的異常付款。
+      const { count: remainingPendingReviews } = await admin
+        .from('monthly_payment_reviews')
+        .select('id', { count: 'exact', head: true })
+        .eq('monthly_rental_id', rentalId)
+        .eq('status', 'pending')
+
+      await admin
+        .from('monthly_rentals')
+        .update({
+          payment_review_status: remainingPendingReviews ? 'pending' : 'clear',
+        })
+        .eq('id', rentalId)
 
       success++
     }
@@ -216,13 +353,11 @@ export async function POST(request: NextRequest) {
       historySuccess,
       historyDuplicate,
       historyFailed,
+      pendingReview,
       errors: errors.slice(0, 10),
     })
   } catch (error: any) {
     console.error('[monthly-payment-sync] unexpected error', error)
-    return NextResponse.json(
-      { error: '繳費更新失敗，請稍後再試。' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: '繳費更新失敗，請稍後再試。' }, { status: 500 })
   }
 }

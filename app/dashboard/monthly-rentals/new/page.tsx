@@ -53,6 +53,13 @@ export default async function NewMonthlyRentalPage({
     .eq('is_active', true)
     .maybeSingle()
 
+  const { data: feeRules } = await supabase
+    .from('monthly_rental_type_rules')
+    .select('type_name, vehicle_type, base_monthly_fee')
+    .eq('parking_lot_id', lotId)
+    .eq('is_active', true)
+    .order('priority', { ascending: true })
+
   let initialData: any = { parkingLotId: lotId }
 
   if (params.waiting_id) {
@@ -96,6 +103,7 @@ export default async function NewMonthlyRentalPage({
           parkingLots={[lot]}
           initialData={initialData}
           activeTerm={activeTerm}
+          feeRules={(feeRules || []) as any}
         />
       </div>
     </div>

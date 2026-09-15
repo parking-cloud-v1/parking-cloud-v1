@@ -72,7 +72,7 @@ export default function RentalTermManager({
 
       if (closeError) throw closeError
 
-      const { error } = await supabase
+      const { data: createdTerm, error } = await supabase
         .from('parking_lot_rental_terms')
         .insert({
           parking_lot_id: lotId,
@@ -85,8 +85,23 @@ export default function RentalTermManager({
           created_by: user?.id || null,
           updated_by: user?.id || null,
         })
+        .select('id,start_date,end_date')
+        .single()
 
-      if (error) throw error
+      if (error || !createdTerm) throw error || new Error('租期建立後讀取失敗')
+
+      const { error: rentalSyncError } = await supabase
+        .from('monthly_rentals')
+        .update({
+          system_term_id: createdTerm.id,
+          system_cycle_start_date: createdTerm.start_date,
+          system_cycle_end_date: createdTerm.end_date,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('parking_lot_id', lotId)
+        .neq('rental_status', 'cancelled')
+
+      if (rentalSyncError) throw rentalSyncError
 
       setTermName('')
       setStartDate('')
@@ -115,6 +130,9 @@ export default function RentalTermManager({
         .eq('is_active', true)
       if (closeError) throw closeError
 
+      const term = terms.find((item) => item.id === id)
+      if (!term) throw new Error('找不到要啟用的租期')
+
       const { error } = await supabase
         .from('parking_lot_rental_terms')
         .update({ is_active: true, updated_by: user?.id || null })
@@ -122,7 +140,20 @@ export default function RentalTermManager({
         .eq('parking_lot_id', lotId)
       if (error) throw error
 
-      setMessage('已切換目前有效租期。')
+      const { error: rentalSyncError } = await supabase
+        .from('monthly_rentals')
+        .update({
+          system_term_id: term.id,
+          system_cycle_start_date: term.start_date,
+          system_cycle_end_date: term.end_date,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('parking_lot_id', lotId)
+        .neq('rental_status', 'cancelled')
+
+      if (rentalSyncError) throw rentalSyncError
+
+      setMessage('已切換目前有效租期，並同步到本場使用中的月租戶。')
       await reload()
     } catch (error: any) {
       setMessage('切換租期失敗：' + (error?.message || '未知錯誤'))
@@ -139,7 +170,7 @@ export default function RentalTermManager({
         <div style={{ marginTop: 8, color: activeTerm ? '#166534' : '#b45309' }}>
           {activeTerm
             ? `目前租期：${activeTerm.term_name}｜${activeTerm.start_date} ～ ${activeTerm.end_date}`
-            : '目前尚未設定有效租期。新匯入戶會暫用檔案內日期，直到主管設定場站租期。'}
+            : '目前尚未設定有效租期。請先設定租期；未設定前舊月票名單不得建立新月租戶。'}
         </div>
       </div>
 

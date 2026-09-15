@@ -462,6 +462,22 @@ export default function MonthlyRentalTypeRuleManager({
         )
       }
 
+      if (form.is_active && baseMonthlyFee > 0) {
+        const { error: feeSyncError } = await supabase
+          .from('monthly_rentals')
+          .update({
+            monthly_fee: baseMonthlyFee,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('parking_lot_id', selectedLotId)
+          .eq('rental_type', form.type_name.trim())
+          .neq('rental_status', 'cancelled')
+
+        if (feeSyncError) {
+          setMessage(`規則已儲存，但同步本系統月租金失敗：${feeSyncError.message}`)
+        }
+      }
+
       resetForm()
 
       await loadRules(

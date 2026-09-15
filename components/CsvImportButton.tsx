@@ -42,6 +42,7 @@ type PaymentRow = {
   customerCode?: string
   customerName?: string
   phone?: string
+  monthlyFee?: number
 
   rentalStartDate?: string
   rentalEndDate?: string
@@ -72,6 +73,16 @@ function numberValue(value: any) {
   return Number.isFinite(result)
     ? result
     : 0
+}
+
+
+function paymentNeedsReview(row: PaymentRow) {
+  const amount = Number(row.amountPaid || 0)
+  const monthlyFee = Number(row.monthlyFee || 0)
+  if (!Number.isFinite(amount) || amount <= 0) return true
+  if (!Number.isFinite(monthlyFee) || monthlyFee <= 0) return true
+  const months = amount / monthlyFee
+  return Math.abs(months - Math.round(months)) > 1e-9
 }
 
 function toDate(value: string) {
@@ -1942,6 +1953,7 @@ async function readFiles(
               customer_code,
               customer_name,
               phone,
+              monthly_fee,
 
               start_date,
               end_date,
@@ -2160,6 +2172,9 @@ async function readFiles(
             rental.phone ||
             '',
 
+          monthlyFee:
+            Number(rental.monthly_fee || 0),
+
           rentalStartDate:
             rental.start_date ||
             '',
@@ -2173,7 +2188,7 @@ async function readFiles(
           message:
             row.amountPaid > 0
               ? '可同步'
-              : '找零不足（但已繳費）',
+              : '0 元／異常金額待確認',
         }
 
         matchedRow.sourceReference =
@@ -2318,12 +2333,12 @@ async function readFiles(
             !row.duplicate
         ).length
 
-      const zero =
+      const review =
         finalRows.filter(
           (row) =>
             row.matched &&
             !row.duplicate &&
-            row.amountPaid <= 0
+            paymentNeedsReview(row)
         ).length
 
       const duplicate =
@@ -2333,7 +2348,7 @@ async function readFiles(
         ).length
 
       setMessage(
-        `共找到 ${finalRows.length} 筆交易明細，可同步 ${syncCount} 筆，未匹配 ${unmatched} 筆，找零不足（但已繳費） ${zero} 筆，重複 ${duplicate} 筆`
+        `共找到 ${finalRows.length} 筆交易明細，可同步 ${syncCount} 筆，未匹配 ${unmatched} 筆，付款待確認 ${review} 筆，重複 ${duplicate} 筆`
       )
     } catch (
       error: any
@@ -2403,10 +2418,10 @@ async function readFiles(
     const confirmed = window.confirm(
       `確定同步 ${syncRows.length} 筆繳費資料？\n\n` +
       `系統會：\n` +
-      `1. 將符合的月租資料更新為「已繳」\n` +
-      `2. 同時永久保存一筆繳費歷史\n` +
-      `3. 繳費報表實收 0 元仍可辨識為已繳費\n\n` +
-      `未匹配及重複交易不會寫入。`
+      `1. 永久保存正式繳費歷史\n` +
+      `2. 實收為系統月租金整數倍時，自動計算繳交月數並延長本系統到期日\n` +
+      `3. 0 元或非整數倍金額進入「付款待確認」，不會先延長租期\n\n` +
+      `舊月票總表日期不參與本次判斷；未匹配及重複交易不會寫入。`
     )
 
     if (!confirmed) return
@@ -2425,15 +2440,11 @@ async function readFiles(
         paymentDate: row.paymentDate || toDate(row.exitTime),
         amountPaid: row.amountPaid,
         paymentMethod:
-          row.amountPaid <= 0
-            ? '找零不足（但已繳費）'
-            : row.paymentMethod || null,
+          row.paymentMethod || null,
         invoiceNumber: row.invoiceNumber || null,
-        rentalStartDate: row.rentalStartDate || null,
-        rentalEndDate: row.rentalEndDate || null,
         sourceReference: row.sourceReference || buildSourceReference(row),
         notes: [
-          row.amountPaid <= 0 ? '找零不足（但已繳費）' : '',
+          row.amountPaid <= 0 ? '0 元付款：待管理員確認是否因找零不足已完成繳費，或需退款後重繳' : '',
           row.fileName ? `匯入檔案：${row.fileName}` : '',
           row.ticketNo ? `票號：${row.ticketNo}` : '',
           row.workstation ? `工作站：${row.workstation}` : '',
@@ -2459,6 +2470,7 @@ async function readFiles(
       const historySuccess = Number(result?.historySuccess || 0)
       const historyDuplicate = Number(result?.historyDuplicate || 0)
       const historyFailed = Number(result?.historyFailed || 0)
+      const pendingReview = Number(result?.pendingReview || 0)
 
       if (success > 0 && pendingFolderSignatures.length > 0) {
         markFolderFilesProcessed(pendingFolderSignatures)
@@ -2467,7 +2479,7 @@ async function readFiles(
 
       if (failed === 0 && success > 0) {
         setMessage(
-          `同步完成：月租成功 ${success} 筆，繳費歷史新增 ${historySuccess} 筆，已存在 ${historyDuplicate} 筆，即將返回月租管理…`
+          `同步完成：處理 ${success} 筆，繳費歷史新增 ${historySuccess} 筆，已存在 ${historyDuplicate} 筆，待主管確認 ${pendingReview} 筆，即將返回月租管理…`
         )
         setTimeout(() => {
           window.location.href = '/dashboard/monthly-rentals'
@@ -2476,7 +2488,7 @@ async function readFiles(
       }
 
       setMessage(
-        `同步完成：月租成功 ${success} 筆、月租失敗 ${failed} 筆、繳費歷史新增 ${historySuccess} 筆、繳費歷史已存在 ${historyDuplicate} 筆、繳費歷史失敗 ${historyFailed} 筆` +
+        `同步完成：處理 ${success} 筆、失敗 ${failed} 筆、繳費歷史新增 ${historySuccess} 筆、繳費歷史已存在 ${historyDuplicate} 筆、繳費歷史失敗 ${historyFailed} 筆、待主管確認 ${pendingReview} 筆` +
         (result?.errors?.length ? `；${result.errors.join('；')}` : '')
       )
     } catch (error: any) {
@@ -2523,12 +2535,12 @@ async function readFiles(
         !row.duplicate
     ).length
 
-  const zeroCount =
+  const reviewCount =
     rows.filter(
       (row) =>
         row.matched &&
         !row.duplicate &&
-        row.amountPaid <= 0
+        paymentNeedsReview(row)
     ).length
 
   const duplicateCount =
@@ -2916,9 +2928,9 @@ async function readFiles(
                   </div>
 
                   <div className="card">
-                    找零不足已繳：
+                    付款待確認：
                     <strong>
-                      {zeroCount}
+                      {reviewCount}
                     </strong>
                   </div>
 
@@ -3023,9 +3035,8 @@ async function readFiles(
                                   ? '#fff7ed'
                                   : !row.matched
                                     ? '#fef2f2'
-                                    : row.amountPaid <=
-                                        0
-                                      ? '#f0fdf4'
+                                    : paymentNeedsReview(row)
+                                      ? '#fffbeb'
                                       : undefined,
                             }}
                           >
@@ -3038,9 +3049,8 @@ async function readFiles(
                                 ? '重複'
                                 : !row.matched
                                   ? '未匹配'
-                                  : row.amountPaid <=
-                                      0
-                                    ? '找零不足（已繳）'
+                                  : paymentNeedsReview(row)
+                                    ? '待確認'
                                     : '可同步'}
                             </td>
 

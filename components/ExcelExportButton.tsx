@@ -17,7 +17,7 @@ export default function ExcelExportButton({ rows }: { rows: Record<string, any>[
       月租類型: row.rental_type ?? '',
       租期開始: row.start_date ?? '',
       租期結束: row.end_date ?? '',
-      繳費月份: row.payment_month ?? '',
+      已繳至: row.paid_through_date ?? '',
       月租金額: Number(row.monthly_fee || 0),
       最近收款日期: row.payment_date ?? '',
       發票號碼: row.invoice_number ?? '',

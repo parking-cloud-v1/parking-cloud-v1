@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { hasOpenedNewPaymentCycle } from '@/lib/monthly-rental-payment-state'
 
 type Mode = 'payment' | 'renew' | 'edit'
 
@@ -43,7 +42,6 @@ export default function MonthlyRentalModal({
   const [rentalType, setRentalType] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
-  const [monthlyFee, setMonthlyFee] = useState('')
   const [paymentDate, setPaymentDate] = useState('')
   const [invoiceNumber, setInvoiceNumber] = useState('')
   const [notes, setNotes] = useState('')
@@ -62,7 +60,6 @@ export default function MonthlyRentalModal({
     setRentalType(rental.rental_type || '')
     setStartDate(rental.start_date || '')
     setEndDate(rental.end_date || '')
-    setMonthlyFee(String(rental.monthly_fee || ''))
 
     setPaymentDate(
       rental.payment_date ||
@@ -80,86 +77,11 @@ export default function MonthlyRentalModal({
   if (!open) return null
 
   async function savePayment() {
-    if (!paymentDate) {
-      setMessage('請選擇收款日期')
-      return
-    }
-
-    setLoading(true)
-    setMessage('')
-
-    try {
-      const response = await fetch('/api/monthly-rentals/payment-sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rows: [{
-            rentalId: rental.id,
-            parkingLotId: rental.parking_lot_id,
-            customerCode: rental.customer_code,
-            customerName: rental.customer_name,
-            phone: rental.phone,
-            vehiclePlate: rental.vehicle_plate,
-            paymentDate,
-            amountPaid: Number(rental.monthly_fee || 0),
-            paymentMethod: '手動收款',
-            invoiceNumber: invoiceNumber.trim() || null,
-            rentalStartDate: rental.start_date,
-            rentalEndDate: rental.end_date,
-          }],
-        }),
-      })
-
-      const result = await response.json().catch(() => ({}))
-
-      if (!response.ok || Number(result?.success || 0) < 1) {
-        setMessage(result?.error || result?.errors?.[0] || '收款失敗，請稍後再試。')
-        return
-      }
-
-      window.location.reload()
-    } catch (error: any) {
-      setMessage('收款失敗：' + (error?.message || '網路連線異常'))
-    } finally {
-      setLoading(false)
-    }
+    setMessage('新架構中付款只能由正式繳費報表匯入；0 元或異常金額請到「付款待確認」處理。')
   }
 
   async function saveRenew() {
-    if (!endDate) {
-      setMessage('請輸入新的到期日')
-      return
-    }
-
-    if (endDate <= rental.end_date) {
-      setMessage('新的到期日必須晚於目前到期日')
-      return
-    }
-
-    setLoading(true)
-    setMessage('')
-
-    const supabase = createClient()
-
-    const { error } = await supabase
-      .from('monthly_rentals')
-      .update({
-        end_date: endDate,
-        rental_status: 'active',
-        // 續租／開新繳費週期只把「本期狀態」改為未繳；
-        // 最近收款日期、發票與歷史繳費紀錄全部保留。
-        payment_status: 'unpaid',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', rental.id)
-
-    if (error) {
-      setMessage('續租失敗：' + error.message)
-      setLoading(false)
-      return
-    }
-
-    window.location.reload()
+    setMessage('新架構中不再手動修改到期日。請匯入正式繳費報表；0 元或非整數倍金額請到「付款待確認」處理。')
   }
 
   async function saveEdit() {
@@ -178,32 +100,10 @@ export default function MonthlyRentalModal({
       return
     }
 
-    if (!startDate || !endDate) {
-      setMessage('請輸入起租日與到期日')
-      return
-    }
-
-    if (endDate < startDate) {
-      setMessage('到期日不可早於起租日')
-      return
-    }
-
-    const fee = Number(monthlyFee || 0)
-
-    if (Number.isNaN(fee) || fee < 0) {
-      setMessage('月租金額格式錯誤')
-      return
-    }
-
     setLoading(true)
     setMessage('')
 
     const supabase = createClient()
-    const paymentCycleOpened =
-      hasOpenedNewPaymentCycle(
-        rental.end_date,
-        endDate
-      )
 
     const { error } = await supabase
       .from('monthly_rentals')
@@ -214,19 +114,6 @@ export default function MonthlyRentalModal({
         vehicle_plate: vehiclePlate.trim().toUpperCase(),
         vehicle_type: vehicleType,
         rental_type: rentalType.trim() || null,
-        start_date: startDate,
-        end_date: endDate,
-        monthly_fee: fee,
-
-        /*
-         * 編輯基本資料不可直接改成「已繳」。
-         * 但如果到期日往後延長，代表開放下一期繳費，
-         * 因此只會把目前這一期切回「未繳」。
-         */
-        ...(paymentCycleOpened
-          ? { payment_status: 'unpaid' }
-          : {}),
-
         notes: notes.trim() || null,
         updated_at: new Date().toISOString(),
       })
@@ -259,7 +146,7 @@ export default function MonthlyRentalModal({
     mode === 'payment'
       ? '月租收款'
       : mode === 'renew'
-        ? '續租'
+        ? '續租（由繳費報表處理）'
         : '編輯月租資料'
 
   return (
@@ -374,45 +261,10 @@ export default function MonthlyRentalModal({
         )}
 
         {mode === 'renew' && (
-          <div
-            style={{
-              display: 'grid',
-              gap: 16,
-            }}
-          >
-            <div
-              style={{
-                background: '#f8fafc',
-                padding: 14,
-                borderRadius: 10,
-              }}
-            >
-              <div>
-                目前到期日：
-                <strong>{rental.end_date}</strong>
-              </div>
-
-              <div
-                style={{
-                  marginTop: 6,
-                  color: '#64748b',
-                }}
-              >
-                續租完成後，本期付款狀態會改成「未繳」；既有繳費紀錄不會被刪除。
-              </div>
-            </div>
-
-            <div className="field">
-              <label>新的到期日 *</label>
-
-              <input
-                type="date"
-                value={endDate}
-                min={rental.end_date}
-                onChange={(e) =>
-                  setEndDate(e.target.value)
-                }
-              />
+          <div className="card" style={{ background: '#f8fafc' }}>
+            <strong>續租改由正式繳費報表處理</strong>
+            <div style={{ marginTop: 8, color: '#64748b' }}>
+              系統會依本系統月租金與實收金額計算繳交月數；0 元或非整數倍金額會進入「付款待確認」。不再手動修改到期日。
             </div>
           </div>
         )}
@@ -502,39 +354,16 @@ export default function MonthlyRentalModal({
 
             <div className="field">
               <label>月租金額</label>
-
-              <input
-                type="number"
-                min="0"
-                value={monthlyFee}
-                onChange={(e) =>
-                  setMonthlyFee(e.target.value)
-                }
-              />
+              <div style={{ padding: '10px 12px', background: '#f8fafc', borderRadius: 8, color: '#475569' }}>
+                ${Number(rental.monthly_fee || 0).toLocaleString()}（由「月租類型設定」統一管理）
+              </div>
             </div>
 
             <div className="field">
-              <label>起租日</label>
-
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) =>
-                  setStartDate(e.target.value)
-                }
-              />
-            </div>
-
-            <div className="field">
-              <label>到期日</label>
-
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) =>
-                  setEndDate(e.target.value)
-                }
-              />
+              <label>正式租期</label>
+              <div style={{ padding: '10px 12px', background: '#f8fafc', borderRadius: 8, color: '#475569' }}>
+                由「租期設定」統一管理，不在客戶基本資料內修改。
+              </div>
             </div>
 
             <div
@@ -563,7 +392,7 @@ export default function MonthlyRentalModal({
                   : '未繳'}
               </strong>
               <span style={{ marginLeft: 8 }}>
-                付款狀態不可在「編輯」直接修改；請使用「收款」或匯入繳費報表。
+                付款狀態不可在「編輯」直接修改；請匯入正式繳費報表。
               </span>
             </div>
 

@@ -6,11 +6,18 @@ import {
   useState,
 } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { getInitialPaidThroughDate } from '@/lib/monthly-rental-cycle'
 
 type ParkingLot = {
   id: string
   name: string
   status: string
+}
+
+type MonthlyFeeRule = {
+  type_name: string
+  vehicle_type: 'car' | 'motorcycle' | 'heavy_motorcycle'
+  base_monthly_fee: number
 }
 
 type ActiveRentalTerm = {
@@ -47,10 +54,12 @@ export default function MonthlyRentalForm({
   parkingLots,
   initialData,
   activeTerm,
+  feeRules = [],
 }: {
   parkingLots: ParkingLot[]
   initialData?: InitialData
   activeTerm?: ActiveRentalTerm | null
+  feeRules?: MonthlyFeeRule[]
 }) {
   const defaultLotId =
     initialData?.parkingLotId &&
@@ -103,18 +112,6 @@ export default function MonthlyRentalForm({
     useState(activeTerm?.end_date || '')
 
   const [monthlyFee, setMonthlyFee] =
-    useState('')
-
-  const [paymentStatus, setPaymentStatus] =
-    useState<'unpaid' | 'paid'>('unpaid')
-
-  const [paymentDate, setPaymentDate] =
-    useState('')
-
-  const [coverageMonth, setCoverageMonth] =
-    useState(activeTerm?.start_date?.slice(0, 7) || '')
-
-  const [invoiceNumber, setInvoiceNumber] =
     useState('')
 
   const [notes, setNotes] = useState(
@@ -190,22 +187,13 @@ export default function MonthlyRentalForm({
         return
       }
 
-      const effectiveStartDate = activeTerm?.start_date || startDate
-      const effectiveEndDate = activeTerm?.end_date || endDate
-
-      if (!effectiveStartDate) {
-        setMessage(
-          '請選擇起租日'
-        )
+      if (!activeTerm?.id || !activeTerm.start_date || !activeTerm.end_date) {
+        setMessage('請先由主管設定本停車場目前有效租期，再新增月租戶。')
         return
       }
 
-      if (!effectiveEndDate) {
-        setMessage(
-          '請選擇到期日'
-        )
-        return
-      }
+      const effectiveStartDate = activeTerm.start_date
+      const effectiveEndDate = activeTerm.end_date
 
       if (
         effectiveEndDate <
@@ -217,22 +205,18 @@ export default function MonthlyRentalForm({
         return
       }
 
-      if (paymentStatus === 'paid' && !coverageMonth) {
-        setMessage('已選擇「已繳」，請指定本次繳費月份')
+      if (!rentalType.trim()) {
+        setMessage('請選擇本系統月租類型')
         return
       }
 
-      if (paymentStatus === 'paid' && !paymentDate) {
-        setMessage('已選擇「已繳」，請填寫收款日期')
+      const selectedFeeRule = feeRules.find((item) => item.type_name === rentalType.trim())
+      if (!selectedFeeRule || Number(selectedFeeRule.base_monthly_fee || 0) <= 0) {
+        setMessage('此月租類型尚未設定有效的本系統月租金額，請先到類型規則設定。')
         return
       }
 
-      const fee =
-        monthlyFee.trim() === ''
-          ? 0
-          : Number(
-              monthlyFee
-            )
+      const fee = Number(selectedFeeRule.base_monthly_fee)
 
       if (
         Number.isNaN(
@@ -245,6 +229,12 @@ export default function MonthlyRentalForm({
         )
         return
       }
+
+      const initialPaidThroughDate = getInitialPaidThroughDate({
+        today: new Date().toISOString().slice(0, 10),
+        termStartDate: activeTerm.start_date,
+        termEndDate: activeTerm.end_date,
+      })
 
       const supabase =
         createClient()
@@ -365,10 +355,25 @@ export default function MonthlyRentalForm({
               effectiveEndDate,
 
             rental_term_id:
-              activeTerm?.id || null,
+              activeTerm.id,
 
             rental_term_locked:
-              Boolean(activeTerm),
+              true,
+
+            system_term_id:
+              activeTerm.id,
+
+            system_cycle_start_date:
+              activeTerm.start_date,
+
+            system_cycle_end_date:
+              activeTerm.end_date,
+
+            paid_through_date:
+              initialPaidThroughDate || null,
+
+            payment_review_status:
+              'clear',
 
             data_source:
               initialData?.waitingId ? 'waiting_list' : 'manual',
@@ -414,28 +419,6 @@ export default function MonthlyRentalForm({
         return
       }
 
-      let paymentWarning = ''
-
-      if (paymentStatus === 'paid' && createdRental?.id) {
-        const { error: paymentError } = await supabase.rpc(
-          'record_monthly_rental_payment_month',
-          {
-            p_monthly_rental_id: createdRental.id,
-            p_coverage_month: `${coverageMonth}-01`,
-            p_month_count: 1,
-            p_amount: fee,
-            p_payment_date: paymentDate,
-            p_invoice_number: invoiceNumber.trim() || null,
-            p_source: 'manual',
-            p_source_reference: null,
-            p_notes: '新增月租時登記繳費月份',
-          }
-        )
-
-        if (paymentError) {
-          paymentWarning = `；但繳費月份登記失敗：${paymentError.message}，請到月租總表按「收款」補登`
-        }
-      }
 
       /*
        * 如果這筆資料是從候補名單轉入，
@@ -501,7 +484,7 @@ export default function MonthlyRentalForm({
       setMessage(
         (initialData?.waitingId
           ? '已成功轉為正式月租'
-          : '月租資料新增成功') + paymentWarning
+          : '月租資料新增成功') + '；正式付款請使用繳費報表匯入。'
       )
 
       setTimeout(
@@ -802,21 +785,25 @@ export default function MonthlyRentalForm({
             月租類型
           </label>
 
-          <input
-            type="text"
-            value={
-              rentalType
-            }
-            onChange={(
-              e
-            ) =>
-              setRentalType(
-                e.target
-                  .value
-              )
-            }
-            placeholder="例如：一般、里民、身障"
-          />
+          <select
+            value={rentalType}
+            onChange={(e) => {
+              const nextType = e.target.value
+              setRentalType(nextType)
+              const rule = feeRules.find((item) => item.type_name === nextType)
+              if (rule) {
+                setMonthlyFee(String(Number(rule.base_monthly_fee || 0)))
+                setVehicleType(rule.vehicle_type)
+              }
+            }}
+          >
+            <option value="">請選擇本系統月租類型</option>
+            {feeRules.map((rule) => (
+              <option key={`${rule.type_name}-${rule.vehicle_type}`} value={rule.type_name}>
+                {rule.type_name}｜每月 ${Number(rule.base_monthly_fee || 0).toLocaleString()}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div
@@ -873,115 +860,24 @@ export default function MonthlyRentalForm({
             value={
               monthlyFee
             }
-            onChange={(
-              e
-            ) =>
-              setMonthlyFee(
-                e.target
-                  .value
-              )
-            }
-            placeholder="例如：3000"
+            readOnly
+            placeholder="請先選擇月租類型"
           />
         </div>
 
-        <div
-          className="field"
-        >
-          <label>
-            付款狀態 *
-          </label>
-
-          <select
-            value={
-              paymentStatus
-            }
-            onChange={(
-              e
-            ) =>
-              setPaymentStatus(
-                e.target
-                  .value as
-                  | 'unpaid'
-                  | 'paid'
-              )
-            }
-            required
+        <div className="field" style={{ gridColumn: '1 / -1' }}>
+          <label>付款狀態</label>
+          <div
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              background: '#f8fafc',
+              color: '#475569',
+            }}
           >
-            <option value="unpaid">
-              未繳
-            </option>
-
-            <option value="paid">
-              已繳
-            </option>
-          </select>
+            新增後先依本系統共同租期判定續租狀態；正式付款只由「繳費報表匯入」或「付款待確認」處理。
+          </div>
         </div>
-
-        {paymentStatus ===
-          'paid' && (
-          <>
-            <div className="field">
-              <label>繳費月份 *</label>
-              <input
-                type="month"
-                value={coverageMonth}
-                onChange={(e) => setCoverageMonth(e.target.value)}
-                min={effectiveMonthMin(activeTerm?.start_date || startDate)}
-                max={effectiveMonthMax(activeTerm?.end_date || endDate)}
-                required
-              />
-            </div>
-
-            <div
-              className="field"
-            >
-              <label>
-                收款日期
-              </label>
-
-              <input
-                type="date"
-                value={
-                  paymentDate
-                }
-                required
-                onChange={(
-                  e
-                ) =>
-                  setPaymentDate(
-                    e.target
-                      .value
-                  )
-                }
-              />
-            </div>
-
-            <div
-              className="field"
-            >
-              <label>
-                發票號碼
-              </label>
-
-              <input
-                type="text"
-                value={
-                  invoiceNumber
-                }
-                onChange={(
-                  e
-                ) =>
-                  setInvoiceNumber(
-                    e.target
-                      .value
-                  )
-                }
-                placeholder="可留空"
-              />
-            </div>
-          </>
-        )}
       </div>
 
       <div

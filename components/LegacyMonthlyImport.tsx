@@ -2,10 +2,8 @@
 
 import { useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import {
-  hasOpenedNewPaymentCycle,
-  nextPaymentStatusAfterRosterImport,
-} from '@/lib/monthly-rental-payment-state'
+import { getInitialPaidThroughDate } from '@/lib/monthly-rental-cycle'
+import { decideRosterIdentity } from '@/lib/monthly-rental-roster'
 
 
 type ParkingLot = {
@@ -18,7 +16,6 @@ type LegacyComparisonItem = {
   type:
     | 'joined'
     | 'recreated'
-    | 'retired_protected'
     | 'cancelled'
     | 'updated'
     | 'date_only'
@@ -54,8 +51,7 @@ function LegacyImportComparison({ result }: { result: LegacyComparisonResult | n
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
             <span>新增 {result.joinedCount}</span>
             <span>刪除後待重新匯入 {result.recreatedCount}</span>
-            <span>正式退租保護 {result.retiredProtectedCount}</span>
-            <span>退租 {result.cancelledCount}</span>
+                        <span>退租 {result.cancelledCount}</span>
             <span>資料異動 {result.updatedCount}</span>
             <span>租期差異 {result.dateOnlyCount}（主表已保護）</span>
             <span>未異動 {result.unchangedCount}</span>
@@ -67,7 +63,7 @@ function LegacyImportComparison({ result }: { result: LegacyComparisonResult | n
                 <tbody>
                   {result.items.slice(0, 200).map((item, index) => (
                     <tr key={`${item.vehicle_plate}-${index}`}>
-                      <td>{item.type === 'joined' ? '新增' : item.type === 'recreated' ? '刪除後重匯' : item.type === 'retired_protected' ? '退租保護' : item.type === 'cancelled' ? '退租' : item.type === 'updated' ? '資料異動' : '租期差異'}</td>
+                      <td>{item.type === 'joined' ? '新增' : item.type === 'recreated' ? '刪除後重匯' : item.type === 'cancelled' ? '退租' : item.type === 'updated' ? '資料異動' : '租期差異'}</td>
                       <td>{item.customer_code ? `${item.customer_code}／` : ''}{item.customer_name || '-'}</td>
                       <td>{item.vehicle_plate || '-'}</td>
                       <td>{item.detail}</td>
@@ -167,22 +163,11 @@ function importExpiryCutoffDateText() {
 function filterExpiredImportRows(
   sourceRows: PreviewRow[]
 ) {
-  const cutoff =
-    importExpiryCutoffDateText()
-
-  const rows =
-    sourceRows.filter(
-      (row) =>
-        !row.end_date ||
-        row.end_date >= cutoff
-    )
-
+  // 新架構：舊系統日期只保留作匯入稽核，不可再決定誰能進名單。
   return {
-    rows,
-    excludedCount:
-      sourceRows.length -
-      rows.length,
-    cutoff,
+    rows: sourceRows,
+    excludedCount: 0,
+    cutoff: '不使用舊系統日期',
   }
 }
 
@@ -601,328 +586,8 @@ function rowRuleText(
     .toLowerCase()
 }
 
-function applyTypeRulesToRows(
-  rows: PreviewRow[],
-  rules:
-    MonthlyRentalTypeRule[]
-) {
-  if (
-    rules.length ===
-    0
-  ) {
-    return {
-      rows,
-      matchedCount:
-        0,
-    }
-  }
-
-  let matchedCount =
-    0
-
-  const sortedRules =
-    [...rules]
-      .filter(
-        (
-          rule
-        ) =>
-          rule.is_active
-      )
-      .sort(
-        (
-          a,
-          b
-        ) =>
-          Number(
-            a.priority ||
-              100
-          ) -
-          Number(
-            b.priority ||
-              100
-          )
-      )
-
-  const nextRows =
-    rows.map(
-      (
-        row
-      ) => {
-        const source =
-          rowRuleText(
-            row
-          )
-
-        /*
-         * 新規則：
-         *
-         * 1. 金額是主要判斷條件。
-         * 2. 只有一條金額符合 → 直接套用。
-         * 3. 同一金額有多條規則 → 才用關鍵字協助挑選。
-         * 4. 關鍵字都沒有命中 → 依優先順序挑第一條。
-         *
-         * 因此關鍵字是「輔助條件」，不是必要條件。
-         */
-        const amountMatchedRules =
-          sortedRules.filter(
-            (
-              rule
-            ) => {
-              const amounts =
-                parseRuleAmounts(
-                  rule.match_amounts
-                )
-
-              /*
-               * 沒有設定金額的規則不自動套用，
-               * 避免單靠文字誤判整批月租資料。
-               */
-              if (
-                amounts.length ===
-                0
-              ) {
-                return false
-              }
-
-              return amounts.some(
-                (
-                  amount
-                ) =>
-                  Math.abs(
-                    Number(
-                      row.monthly_fee ||
-                        0
-                    ) -
-                      amount
-                  ) <
-                  0.001
-              )
-            }
-          )
-
-        let matchedRule:
-          MonthlyRentalTypeRule |
-          undefined
-
-        if (
-          amountMatchedRules.length ===
-          1
-        ) {
-          matchedRule =
-            amountMatchedRules[0]
-        } else if (
-          amountMatchedRules.length >
-          1
-        ) {
-          const keywordMatchedRules =
-            amountMatchedRules.filter(
-              (
-                rule
-              ) => {
-                const keywords =
-                  splitRuleValues(
-                    rule.keywords
-                  )
-                    .map(
-                      (
-                        keyword
-                      ) =>
-                        keyword
-                          .toLowerCase()
-                    )
-
-                if (
-                  keywords.length ===
-                  0
-                ) {
-                  return false
-                }
-
-                return rule.keyword_mode ===
-                'all'
-                  ? keywords.every(
-                      (
-                        keyword
-                      ) =>
-                        source.includes(
-                          keyword
-                        )
-                    )
-                  : keywords.some(
-                      (
-                        keyword
-                      ) =>
-                        source.includes(
-                          keyword
-                        )
-                    )
-              }
-            )
-
-          /*
-           * keywordMatchedRules 本身已沿用
-           * sortedRules 的優先順序。
-           */
-          matchedRule =
-            keywordMatchedRules[0] ||
-            amountMatchedRules[0]
-        }
-
-        if (
-          !matchedRule
-        ) {
-          return row
-        }
-
-        matchedCount++
-
-        return {
-          ...row,
-
-          rental_type:
-            matchedRule.type_name,
-
-          vehicle_type:
-            matchedRule.vehicle_type,
-
-          notes: [
-            row.notes ||
-              '',
-            `主管類型規則：${matchedRule.type_name}`,
-          ]
-            .filter(
-              Boolean
-            )
-            .join(
-              ' / '
-            ),
-        }
-      }
-    )
-
-  return {
-    rows:
-      nextRows,
-    matchedCount,
-  }
-}
-
-async function applySupervisorTypeRules(
-  rows: PreviewRow[],
-  parkingLotId: string
-) {
-  if (
-    !parkingLotId ||
-    rows.length ===
-      0
-  ) {
-    return {
-      rows,
-      matchedCount:
-        0,
-      ruleCount:
-        0,
-    }
-  }
-
-  const supabase =
-    createClient()
-
-  const {
-    data,
-    error,
-  } =
-    await supabase
-      .from(
-        'monthly_rental_type_rules'
-      )
-      .select(`
-        id,
-        parking_lot_id,
-        type_name,
-        vehicle_type,
-        match_amounts,
-        keywords,
-        keyword_mode,
-        priority,
-        is_active
-      `)
-      .eq(
-        'parking_lot_id',
-        parkingLotId
-      )
-      .eq(
-        'is_active',
-        true
-      )
-      .order(
-        'priority',
-        {
-          ascending:
-            true,
-        }
-      )
-
-  if (
-    error
-  ) {
-    /*
-     * 若資料表尚未建立或讀取失敗，
-     * 不破壞原本匯入功能。
-     */
-    console.error(
-      '月租類型規則讀取失敗',
-      error
-    )
-
-    return {
-      rows,
-      matchedCount:
-        0,
-      ruleCount:
-        0,
-    }
-  }
-
-  const rules =
-    (data ||
-      []) as MonthlyRentalTypeRule[]
-
-  const applied =
-    applyTypeRulesToRows(
-      rows,
-      rules
-    )
-
-  return {
-    ...applied,
-    ruleCount:
-      rules.length,
-  }
-}
-
-function isZeroRow(row: PreviewRow) {
-  return Number(row.monthly_fee || 0) === 0
-}
-
-function isPendingZeroRow(row: PreviewRow) {
-  return row.valid && isZeroRow(row) && row.zero_action === 'pending'
-}
-
-function isZeroCancelledRow(row: PreviewRow) {
-  return row.valid && isZeroRow(row) && row.zero_action === 'cancelled'
-}
-
-function isPaidShortRow(row: PreviewRow) {
-  return row.valid && isZeroRow(row) && row.zero_action === 'paid_short'
-}
-
-function isOfficialVehicleRow(row: PreviewRow) {
-  return row.valid && isZeroRow(row) && row.zero_action === 'official_vehicle'
-}
-
 function isActiveImportRow(row: PreviewRow) {
-  return row.valid && !isPendingZeroRow(row) && !isZeroCancelledRow(row)
+  return row.valid
 }
 
 function splitCsvLine(line: string) {
@@ -1971,14 +1636,8 @@ async function parseLegacyFile(
 
   finishCurrent()
 
-  /*
-   * 月租總表金額為 0 元：
-   * 直接略過，不進入預覽、不建立基準名單、不寫入月租主表。
-   */
-  return result.filter(
-    (item) =>
-      Number(item.monthly_fee || 0) > 0
-  )
+  // 新架構：舊月票金額只保留作稽核，不得決定名冊是否匯入。
+  return result
 }
 
 function sameValue(
@@ -1997,79 +1656,18 @@ function createChangeDetails(
   oldRow: any,
   newRow: any
 ) {
-  const details:
-    string[] = []
+  const details: string[] = []
 
-  if (
-    !sameValue(
-      oldRow.customer_code,
-      newRow.customer_code
-    )
-  ) {
-    details.push(
-      `客戶編號：${oldRow.customer_code || '-'} → ${newRow.customer_code || '-'}`
-    )
+  if (!sameValue(oldRow.customer_name, newRow.customer_name)) {
+    details.push(`姓名：${oldRow.customer_name || '-'} → ${newRow.customer_name || '-'}`)
   }
 
-  if (
-    !sameValue(
-      oldRow.customer_name,
-      newRow.customer_name
-    )
-  ) {
-    details.push(
-      `姓名：${oldRow.customer_name || '-'} → ${newRow.customer_name || '-'}`
-    )
+  if (!sameValue(oldRow.phone, newRow.phone)) {
+    details.push(`電話：${oldRow.phone || '-'} → ${newRow.phone || '-'}`)
   }
 
-  if (
-    !sameValue(
-      oldRow.phone,
-      newRow.phone
-    )
-  ) {
-    details.push(
-      `電話：${oldRow.phone || '-'} → ${newRow.phone || '-'}`
-    )
-  }
-
-  if (
-    !sameValue(
-      oldRow.vehicle_type,
-      newRow.vehicle_type
-    )
-  ) {
-    details.push(
-      `車種：${oldRow.vehicle_type || '-'} → ${newRow.vehicle_type || '-'}`
-    )
-  }
-
-  if (
-    !sameValue(
-      oldRow.rental_type,
-      newRow.rental_type
-    )
-  ) {
-    details.push(
-      `月租類型：${oldRow.rental_type || '-'} → ${newRow.rental_type || '-'}`
-    )
-  }
-
-  if (
-    Number(
-      oldRow.monthly_fee || 0
-    ) !==
-    Number(
-      newRow.monthly_fee || 0
-    )
-  ) {
-    details.push(
-      `月租金額：$${Number(
-        oldRow.monthly_fee || 0
-      ).toLocaleString()} → $${Number(
-        newRow.monthly_fee || 0
-      ).toLocaleString()}`
-    )
+  if (!sameValue(normalizePlate(oldRow.vehicle_plate || ''), normalizePlate(newRow.vehicle_plate || ''))) {
+    details.push(`車牌差異（只記錄、不覆蓋）：${oldRow.vehicle_plate || '-'} → ${newRow.vehicle_plate || '-'}`)
   }
 
   return details
@@ -2174,22 +1772,12 @@ export default function LegacyMonthlyImport({
             parsed408.rows
           )
 
-        const ruled408 =
-          await applySupervisorTypeRules(
-            expiryFiltered408.rows,
-            parkingLotId
-          )
-
-        const rosterRows408 =
-          ruled408.rows.map((row) => ({
-            ...row,
-            payment_status: 'unpaid' as const,
-          }))
+        const rosterRows408 = expiryFiltered408.rows
 
         setRows(rosterRows408)
 
         setMessage(
-          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，租期 ${parsed408.period}；月租 ${rosterRows408.length} 筆；名單匯入只負責更新名單／開放繳費，不會直接判定已繳。到期超過 ${IMPORT_EXPIRY_RETENTION_MONTHS} 個月排除 ${expiryFiltered408.excludedCount} 筆（門檻 ${expiryFiltered408.cutoff}）；主管類型規則 ${ruled408.ruleCount} 條，本次自動分類 ${ruled408.matchedCount} 筆。`
+          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，共 ${rosterRows408.length} 筆。舊月票總表只做姓名、電話、新增與退租的名冊同步；舊系統日期、金額、付款狀態與類型規則都不會改動本系統正式租期、月租金、付款或簡訊名單。`
         )
 
         return
@@ -2205,30 +1793,15 @@ export default function LegacyMonthlyImport({
           parsed
         )
 
-      const ruled =
-        await applySupervisorTypeRules(
-          expiryFiltered.rows,
-          parkingLotId
-        )
-
-      const rosterRows =
-        ruled.rows.map((row) => ({
-          ...row,
-          payment_status: 'unpaid' as const,
-        }))
+      const rosterRows = expiryFiltered.rows
 
       setRows(rosterRows)
 
-      const valid =
-        rosterRows.filter(
-          (item) => item.valid
-        ).length
-
-      const invalid =
-        rosterRows.length - valid
+      const valid = rosterRows.filter((item) => item.valid).length
+      const invalid = rosterRows.length - valid
 
       setMessage(
-        `已辨識 ${rosterRows.length} 筆，可匯入 ${valid} 筆，格式異常 ${invalid} 筆；名單匯入只負責更新名單／開放繳費，不會直接判定已繳；到期超過 ${IMPORT_EXPIRY_RETENTION_MONTHS} 個月排除 ${expiryFiltered.excludedCount} 筆（門檻 ${expiryFiltered.cutoff}）；主管類型規則 ${ruled.ruleCount} 條，本次自動分類 ${ruled.matchedCount} 筆。`
+        `已辨識 ${rosterRows.length} 筆，可匯入 ${valid} 筆，格式異常 ${invalid} 筆；舊月票總表只做姓名、電話、新增與退租的名冊同步。舊系統日期、金額、付款狀態與類型規則全部不會影響本系統正式租期、月租金、付款或簡訊名單。`
       )
     } catch (
       error: any
@@ -2256,29 +1829,9 @@ export default function LegacyMonthlyImport({
       return
     }
 
-    const unresolvedZeroRows =
-      rows.filter((item) =>
-        isPendingZeroRow(item)
-      )
+    const validRows = rows.filter((item) => item.valid)
 
-    if (unresolvedZeroRows.length > 0) {
-      alert(
-        `還有 ${unresolvedZeroRows.length} 筆 0 元資料尚未選擇處理方式。\n\n請先選擇「找零不足（保留名單）」或「退租」。`
-      )
-      return
-    }
-
-    const validRows =
-      rows.filter((item) =>
-        isActiveImportRow(item)
-      )
-
-    const zeroCancelledRows =
-      rows.filter((item) =>
-        isZeroCancelledRow(item)
-      )
-
-    if (!validRows.length && !zeroCancelledRows.length) {
+    if (!validRows.length) {
       alert('沒有可以比較的資料')
       return
     }
@@ -2361,7 +1914,7 @@ export default function LegacyMonthlyImport({
         })
 
         setMessage(
-          `目前沒有上一份總表，本次 ${validRows.length} 筆將建立為基準名單；人工選擇退租 ${zeroCancelledRows.length} 筆不會加入基準名單。`
+          `目前沒有上一份總表，本次 ${validRows.length} 筆將建立為基準名單。舊系統日期與金額只保留在匯入稽核，不參與名冊資格或付款判斷。`
         )
 
         return
@@ -2445,79 +1998,9 @@ export default function LegacyMonthlyImport({
           any
         >()
 
-      const cancelledCustomerCodes =
-        new Set<string>()
-
-      const cancelledPlates =
-        new Set<string>()
-
-      for (
-        const rental of
-        currentRentalRows || []
-      ) {
-        if (
-          rental.rental_status ===
-          'cancelled'
-        ) {
-          const cancelledCode =
-            normalizeCustomerCode(
-              rental.customer_code
-            )
-
-          const cancelledPlate =
-            normalizePlate(
-              rental.vehicle_plate
-            )
-
-          if (cancelledCode) {
-            cancelledCustomerCodes.add(
-              cancelledCode
-            )
-          }
-
-          if (cancelledPlate) {
-            cancelledPlates.add(
-              cancelledPlate
-            )
-          }
-
-          continue
-        }
-
-        setImportIdentity(
-          activeRentalMap,
-          rental,
-          rental
-        )
-      }
-
-      function isProtectedRetiredRow(
-        row: {
-          customer_code?: string | null
-          vehicle_plate?: string | null
-        }
-      ) {
-        const customerCode =
-          normalizeCustomerCode(
-            row.customer_code
-          )
-
-        if (customerCode) {
-          return cancelledCustomerCodes.has(
-            customerCode
-          )
-        }
-
-        const plate =
-          normalizePlate(
-            row.vehicle_plate ||
-              ''
-          )
-
-        return Boolean(
-          plate &&
-          cancelledPlates.has(plate)
-        )
+      for (const rental of currentRentalRows || []) {
+        if (rental.rental_status === 'cancelled') continue
+        setImportIdentity(activeRentalMap, rental, rental)
       }
 
       const previousMap =
@@ -2556,7 +2039,7 @@ export default function LegacyMonthlyImport({
 
       let joinedCount = 0
       let recreatedCount = 0
-      let retiredProtectedCount = 0
+      const retiredProtectedCount = 0
       let cancelledCount = 0
       let updatedCount = 0
       let dateOnlyCount = 0
@@ -2576,32 +2059,6 @@ export default function LegacyMonthlyImport({
             newRow
           )
 
-        if (
-          isProtectedRetiredRow(
-            newRow
-          )
-        ) {
-          retiredProtectedCount++
-
-          items.push({
-            type:
-              'retired_protected',
-
-            customer_code:
-              newRow.customer_code,
-
-            customer_name:
-              newRow.customer_name,
-
-            vehicle_plate:
-              newRow.vehicle_plate,
-
-            detail:
-              '此客戶已有正式退租紀錄，重新匯入時仍會略過',
-          })
-
-          continue
-        }
 
         const currentRental =
           getImportIdentity(
@@ -2757,11 +2214,6 @@ export default function LegacyMonthlyImport({
           continue
         }
 
-        const explicitZeroCancel =
-          zeroCancelledRows.some(
-            (item) =>
-              normalizePlate(item.vehicle_plate) === oldPlateKey
-          )
 
         cancelledCount++
 
@@ -2781,9 +2233,7 @@ export default function LegacyMonthlyImport({
             '',
 
           detail:
-            explicitZeroCancel
-              ? '本次總表金額為 0，人工選擇「退租」'
-              : '上一次總表有，本次總表已不存在',
+            '上一次總表有，本次總表已不存在；依名冊同步規則標記退租',
         })
       }
 
@@ -2805,7 +2255,7 @@ export default function LegacyMonthlyImport({
       })
 
       setMessage(
-        `比對完成：新增 ${joinedCount} 筆、刪除後待重新匯入 ${recreatedCount} 筆、正式退租保護 ${retiredProtectedCount} 筆、退租 ${cancelledCount} 筆、簽約資料異動 ${updatedCount} 筆、總表租期不同 ${dateOnlyCount} 筆（主表不覆蓋）、完全未異動 ${unchangedCount} 筆；0 元「找零不足（待繳費紀錄）」 ${validRows.filter((item) => isPaidShortRow(item)).length} 筆；公務車 ${validRows.filter((item) => isOfficialVehicleRow(item)).length} 筆。`
+        `比對完成：新增 ${joinedCount} 筆、刪除後待重新匯入 ${recreatedCount} 筆、退租 ${cancelledCount} 筆、姓名／電話等名冊異動 ${updatedCount} 筆、舊系統日期差異 ${dateOnlyCount} 筆（只記錄、不影響本系統）、完全未異動 ${unchangedCount} 筆。`
       )
     } catch (
       error: any
@@ -2833,29 +2283,9 @@ export default function LegacyMonthlyImport({
       return
     }
 
-    const unresolvedZeroRows =
-      rows.filter((item) =>
-        isPendingZeroRow(item)
-      )
+    const validRows = rows.filter((item) => item.valid)
 
-    if (unresolvedZeroRows.length > 0) {
-      alert(
-        `還有 ${unresolvedZeroRows.length} 筆 0 元資料尚未選擇處理方式。\n\n請先選擇「找零不足（保留名單）」或「退租」。`
-      )
-      return
-    }
-
-    const validRows =
-      rows.filter((item) =>
-        isActiveImportRow(item)
-      )
-
-    const zeroCancelledRows =
-      rows.filter((item) =>
-        isZeroCancelledRow(item)
-      )
-
-    if (!validRows.length && !zeroCancelledRows.length) {
+    if (!validRows.length) {
       alert('沒有可以匯入的資料')
       return
     }
@@ -2872,11 +2302,8 @@ export default function LegacyMonthlyImport({
         `請再次確認：\n\n` +
           `停車場：${selectedLot?.name || '-'}\n` +
           `檔案：${fileName}\n` +
-          `有效月租：${validRows.length} 筆\n` +
-          `0 元人工退租：${zeroCancelledRows.length} 筆\n` +
-          `0 元找零不足（保留名單，仍需繳費紀錄）：${validRows.filter((item) => isPaidShortRow(item)).length} 筆\n` +
-          `0 元公務車：${validRows.filter((item) => isOfficialVehicleRow(item)).length} 筆\n\n` +
-          `既有月租的正式租期不會被本次總表覆蓋；新戶優先套用目前場站租期。\n\n` +
+          `有效名冊：${validRows.length} 筆\n\n` +
+          `既有客戶只更新姓名、電話與名冊狀態；客戶編號、車牌、車種、類型、金額、正式租期與付款狀態都不會被舊總表覆蓋。新戶一律套用目前場站共同租期。\n\n` +
           `確定正式匯入嗎？`
       )
 
@@ -2911,9 +2338,9 @@ export default function LegacyMonthlyImport({
       }
 
       /*
-       * 第 23 階段：匯入總表不得決定既有月租的正式租期。
-       * 新加入的月租戶，優先使用主管為該場設定的目前抽籤／年度租期；
-       * 若尚未設定，才以舊檔內日期做第一次建立。
+       * 新架構：舊月票總表只做名冊同步。
+       * 新加入的月租戶一律使用主管為該場設定的目前共同租期；
+       * 舊檔開始日、結束日、金額與付款欄位永遠不作為正式來源。
        */
       const { data: activeRentalTerm, error: activeRentalTermError } =
         await supabase
@@ -2927,6 +2354,36 @@ export default function LegacyMonthlyImport({
         setMessage(`讀取目前場站租期失敗：${activeRentalTermError.message}`)
         return
       }
+
+      if (!activeRentalTerm?.id || !activeRentalTerm.start_date || !activeRentalTerm.end_date) {
+        setMessage('請先到「租期設定」建立目前有效租期，再匯入舊月票名單。舊系統日期不再作為正式租期來源。')
+        return
+      }
+
+      const { data: systemFeeRules, error: systemFeeRulesError } = await supabase
+        .from('monthly_rental_type_rules')
+        .select('type_name,base_monthly_fee,is_active')
+        .eq('parking_lot_id', parkingLotId)
+        .eq('is_active', true)
+
+      if (systemFeeRulesError) {
+        setMessage(`讀取本系統月租金設定失敗：${systemFeeRulesError.message}`)
+        return
+      }
+
+      const systemFeeByType = new Map<string, number>()
+      for (const rule of systemFeeRules || []) {
+        const key = String(rule.type_name || '').trim().toLowerCase()
+        const fee = Number(rule.base_monthly_fee || 0)
+        if (key && fee > 0) systemFeeByType.set(key, fee)
+      }
+
+      const todayText = new Date().toISOString().slice(0, 10)
+      const initialPaidThroughDate = getInitialPaidThroughDate({
+        today: todayText,
+        termStartDate: activeRentalTerm.start_date,
+        termEndDate: activeRentalTerm.end_date,
+      })
 
       const {
         data:
@@ -3222,89 +2679,10 @@ export default function LegacyMonthlyImport({
        * 之後重新匯入舊總表時都不會把它改回 active，
        * 也不會重新新增回月租總表。
        */
-      const cancelledCustomerCodes =
-        new Set<string>()
-
-      const cancelledPlates =
-        new Set<string>()
-
-      for (
-        const rental of
-        currentRentals ||
-        []
-      ) {
-        if (
-          rental.rental_status !==
-          'cancelled'
-        ) {
-          continue
-        }
-
-        const code =
-          normalizeCustomerCode(
-            rental.customer_code
-          )
-
-        const plate =
-          normalizePlate(
-            rental.vehicle_plate
-          )
-
-        if (code) {
-          cancelledCustomerCodes.add(
-            code
-          )
-        }
-
-        if (plate) {
-          cancelledPlates.add(
-            plate
-          )
-        }
-      }
-
-      function isRetiredImportRow(
-        row: {
-          customer_code?: string | null
-          vehicle_plate?: string | null
-        }
-      ) {
-        const code =
-          normalizeCustomerCode(
-            row.customer_code
-          )
-
-        if (code) {
-          return cancelledCustomerCodes.has(
-            code
-          )
-        }
-
-        const plate =
-          normalizePlate(
-            row.vehicle_plate ||
-              ''
-          )
-
-        return Boolean(
-          plate &&
-            cancelledPlates.has(
-              plate
-            )
-        )
-      }
-
-      const effectiveRows =
-        validRows.filter(
-          (row) =>
-            !isRetiredImportRow(
-              row
-            )
-        )
-
-      const retiredSkipped =
-        validRows.length -
-        effectiveRows.length
+      // 新架構以「本次舊月票總表」只判斷目前名冊是否存在。
+      // cancelled 歷史不再阻擋同客戶編號被新客戶重新使用；
+      // 是否為換新客會在下方依姓名+電話+車牌三項全部不同判定。
+      const effectiveRows = validRows
 
       /*
        * 重建本次有效名單。
@@ -3407,14 +2785,9 @@ export default function LegacyMonthlyImport({
           )
 
         if (customerCodeKey) {
-          const byCustomerCode =
-            rentalMapByCustomerCode.get(
-              customerCodeKey
-            )
-
-          if (byCustomerCode) {
-            return byCustomerCode
-          }
+          return rentalMapByCustomerCode.get(
+            customerCodeKey
+          )
         }
 
         const plateKey =
@@ -3435,9 +2808,6 @@ export default function LegacyMonthlyImport({
       let cancelled = 0
       let unchanged = 0
       let dateOnlyChanged = 0
-      let paidShortUpdated = 0
-      let officialVehicleUpdated = 0
-      let paymentCycleOpenedCount = 0
       let recreatedAfterDelete = 0
       let failed = 0
 
@@ -3451,38 +2821,65 @@ export default function LegacyMonthlyImport({
             newRow
           )
 
-        const currentRental =
+        let currentRental =
           findCurrentRental(
             newRow
           )
 
-        const paymentCycleOpened =
-          Boolean(
-            previous &&
-              hasOpenedNewPaymentCycle(
-                previous.end_date,
-                newRow.end_date
-              )
-          )
-
-        /*
-         * 名單匯入與繳費紀錄完全分開：
-         * - 新資料：未繳
-         * - 舊系統到期日往後：只代表開放下一期繳費，因此改成未繳
-         * - 同一週期重匯／更新姓名電話車牌：保留目前付款狀態
-         * - 名單內的日期、付款日期、發票欄位都不能直接把人改成已繳
-         *
-         * 真正的「已繳」只由收款／繳費報表先建立繳費紀錄後設定。
-         */
-        const nextPaymentStatus =
-          nextPaymentStatusAfterRosterImport({
-            currentStatus:
-              currentRental?.payment_status,
-            cycleOpened:
-              paymentCycleOpened,
-            isNewRental:
-              !currentRental,
+        // 同客戶編號但姓名、電話、車牌三項全部不同 = 編號已換新客。
+        // 舊客戶先退租，歷史與付款紀錄留在舊 rental id；新客戶另建新 id。
+        if (currentRental) {
+          const identityDecision = decideRosterIdentity({
+            incoming: {
+              customerCode: newRow.customer_code,
+              name: newRow.customer_name,
+              phone: newRow.phone,
+              plate: newRow.vehicle_plate,
+            },
+            current: {
+              customerCode: currentRental.customer_code,
+              name: currentRental.customer_name,
+              phone: currentRental.phone,
+              plate: currentRental.vehicle_plate,
+            },
           })
+
+          if (identityDecision === 'replacement') {
+            const oldRental = currentRental
+            const { error: replacementCancelError } = await supabase
+              .from('monthly_rentals')
+              .update({
+                rental_status: 'cancelled',
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', oldRental.id)
+
+            if (replacementCancelError) {
+              failed++
+              continue
+            }
+
+            await supabase.from('monthly_rental_changes').insert({
+              parking_lot_id: parkingLotId,
+              monthly_rental_id: oldRental.id,
+              customer_code: oldRental.customer_code,
+              customer_name: oldRental.customer_name,
+              phone: oldRental.phone,
+              vehicle_plate: oldRental.vehicle_plate,
+              vehicle_type: oldRental.vehicle_type,
+              rental_type: oldRental.rental_type,
+              change_type: 'cancelled',
+              effective_date: todayText,
+              reason: '同客戶編號換新客戶',
+              change_detail: '姓名、電話、車牌三項皆不同；舊客戶歷史保留，新客戶另建資料。',
+              source: 'legacy_import',
+              import_batch_id: batchId,
+              created_by: user.id,
+            })
+
+            currentRental = undefined
+          }
+        }
 
         const importedNotes =
           [
@@ -3492,11 +2889,6 @@ export default function LegacyMonthlyImport({
               ? `交易序號：${newRow.transaction_no}`
               : '',
 
-            isPaidShortRow(newRow)
-              ? '0元處理：找零不足（保留名單，仍需繳費紀錄）'
-              : isOfficialVehicleRow(newRow)
-                ? '0元處理：公務車'
-                : '',
           ]
             .filter(Boolean)
             .join(' / ')
@@ -3543,25 +2935,25 @@ export default function LegacyMonthlyImport({
                     null,
 
                   start_date:
-                    activeRentalTerm?.start_date || newRow.start_date,
+                    activeRentalTerm.start_date,
 
                   end_date:
-                    activeRentalTerm?.end_date || newRow.end_date,
+                    activeRentalTerm.end_date,
 
                   rental_term_id:
-                    activeRentalTerm?.id || null,
+                    activeRentalTerm.id,
 
                   rental_term_locked:
-                    Boolean(activeRentalTerm?.id),
+                    true,
 
                   data_source:
                     'legacy_import',
 
                   monthly_fee:
-                    newRow.monthly_fee,
+                    systemFeeByType.get(String(newRow.rental_type || '').trim().toLowerCase()) || 0,
 
                   payment_status:
-                    nextPaymentStatus,
+                    'unpaid',
 
                   rental_status:
                     'active',
@@ -3571,6 +2963,21 @@ export default function LegacyMonthlyImport({
                   invoice_number: null,
 
                   last_payment_source: null,
+
+                  system_term_id:
+                    activeRentalTerm.id,
+
+                  system_cycle_start_date:
+                    activeRentalTerm.start_date,
+
+                  system_cycle_end_date:
+                    activeRentalTerm.end_date,
+
+                  paid_through_date:
+                    initialPaidThroughDate || null,
+
+                  payment_review_status:
+                    'clear',
 
                   notes:
                     importedNotes ||
@@ -3641,10 +3048,10 @@ export default function LegacyMonthlyImport({
                  */
 
                 monthly_fee:
-                  newRow.monthly_fee,
+                  systemFeeByType.get(String(newRow.rental_type || '').trim().toLowerCase()) || 0,
 
                 payment_status:
-                  nextPaymentStatus,
+                  'unpaid',
 
                 rental_status:
                   'active',
@@ -3815,10 +3222,7 @@ export default function LegacyMonthlyImport({
                 'monthly_rentals'
               )
               .update({
-                customer_code:
-                  newRow.customer_code ||
-                  null,
-
+                // 既有客戶：舊月票總表只更新姓名、電話與名冊狀態。
                 customer_name:
                   newRow.customer_name,
 
@@ -3826,30 +3230,14 @@ export default function LegacyMonthlyImport({
                   newRow.phone ||
                   null,
 
-                vehicle_plate:
-                  newRow.vehicle_plate,
-
-                vehicle_type:
-                  newRow.vehicle_type,
-
-                rental_type:
-                  newRow.rental_type ||
-                  null,
-
                 /*
-                 * 第 23 階段正式租期保護：既有月租不接受總表覆蓋日期。
+                 * 舊名單不再變更本系統車種／月租類型，避免間接影響系統月租金。
                  */
-
-                monthly_fee:
-                  newRow.monthly_fee,
 
                 rental_status:
                   'active',
 
-                // 重匯同一週期保留付款；開新週期則回到未繳。
-                payment_status:
-                  nextPaymentStatus,
-
+                // 舊名單只同步名冊；正式金額、租期與付款狀態完全不碰。
                 notes:
                   importedNotes ||
                   null,
@@ -3956,18 +3344,10 @@ export default function LegacyMonthlyImport({
             newRow.end_date
           )
 
-        const paymentChanged =
-          !sameValue(
-            currentRental?.payment_status,
-            nextPaymentStatus
-          )
+        const paymentChanged = false
 
         const anyMainDataChanged =
-          contractChanges.length >
-            0 ||
-          dateChanged ||
-          isPaidShortRow(newRow) ||
-          paymentChanged
+          contractChanges.length > 0 || dateChanged
 
         if (
           !anyMainDataChanged
@@ -4061,10 +3441,7 @@ export default function LegacyMonthlyImport({
               'monthly_rentals'
             )
             .update({
-              customer_code:
-                newRow.customer_code ||
-                null,
-
+              // 既有客戶：舊月票總表只更新姓名、電話與名冊狀態。
               customer_name:
                 newRow.customer_name,
 
@@ -4072,35 +3449,14 @@ export default function LegacyMonthlyImport({
                 newRow.phone ||
                 null,
 
-              vehicle_plate:
-                newRow.vehicle_plate,
-
-              vehicle_type:
-                newRow.vehicle_type,
-
-              rental_type:
-                newRow.rental_type ||
-                null,
-
               /*
-               * 正式租期保護：即使新總表日期不同，也保留既有租期。
+               * 舊名單不再變更本系統車種／月租類型，避免間接影響系統月租金。
                */
-
-              monthly_fee:
-                newRow.monthly_fee,
 
               rental_status:
                 'active',
 
-              /*
-               * 付款狀態規則：
-               * - 到期日延長 = 開放下一期繳費，狀態改為未繳
-               * - 同一份名單重匯／基本資料更新 = 保留目前付款狀態
-               * - 名單匯入永遠不會直接標成已繳
-               */
-              payment_status:
-                nextPaymentStatus,
-
+              // 舊名單只同步名冊；正式金額、租期與付款狀態完全不碰。
               notes:
                 importedNotes ||
                 null,
@@ -4124,13 +3480,7 @@ export default function LegacyMonthlyImport({
           continue
         }
 
-        /*
-         * 舊系統總表日期延長只用來「開放下一期繳費」。
-         * 不再依日期差異自動建立任何繳費月份，也不改寫付款歷史。
-         */
-        if (paymentCycleOpened) {
-          paymentCycleOpenedCount++
-        }
+        // 舊系統日期差異只保留在匯入稽核，不再開啟付款週期。
 
         if (
           contractChanges.length >
@@ -4213,10 +3563,6 @@ export default function LegacyMonthlyImport({
           dateOnlyChanged++
         } else if (paymentChanged) {
           updated++
-        } else if (isPaidShortRow(newRow)) {
-          paidShortUpdated++
-        } else if (isOfficialVehicleRow(newRow)) {
-          officialVehicleUpdated++
         }
       }
 
@@ -4227,16 +3573,6 @@ export default function LegacyMonthlyImport({
           const oldRow of
           previousMembers
         ) {
-          /*
-           * 已經是退租歷史的資料不要重複建立退租紀錄。
-           */
-          if (
-            isRetiredImportRow(
-              oldRow
-            )
-          ) {
-            continue
-          }
 
           const oldPlateKey =
             normalizePlate(
@@ -4405,12 +3741,7 @@ export default function LegacyMonthlyImport({
                     '與上一次總表比較',
 
                   change_detail:
-                    zeroCancelledRows.some(
-                      (item) =>
-                        normalizePlate(item.vehicle_plate) === oldPlateKey
-                    )
-                      ? '本次總表金額為 0，人工選擇「退租」'
-                      : '上一次總表有此月租戶，本次總表已不存在',
+                    '上一次總表有此月租戶，本次總表已不存在；依名冊同步規則標記退租',
                 })
                 .eq(
                   'id',
@@ -4469,12 +3800,7 @@ export default function LegacyMonthlyImport({
                     '與上一次總表比較',
 
                   change_detail:
-                    zeroCancelledRows.some(
-                      (item) =>
-                        normalizePlate(item.vehicle_plate) === oldPlateKey
-                    )
-                      ? '本次總表金額為 0，人工選擇「退租」'
-                      : '上一次總表有此月租戶，本次總表已不存在',
+                    '上一次總表有此月租戶，本次總表已不存在；依名冊同步規則標記退租',
 
                   source:
                     'legacy_import',
@@ -4521,7 +3847,7 @@ export default function LegacyMonthlyImport({
             finalStatus,
 
           notes:
-            `新加入 ${inserted} 筆（其中刪除後重新匯入 ${recreatedAfterDelete} 筆）；簽約資料異動 ${updated} 筆；退租 ${cancelled} 筆；已退租保護略過 ${retiredSkipped} 筆；總表租期不同但已保護 ${dateOnlyChanged} 筆；開放新繳費週期 ${paymentCycleOpenedCount} 筆；0元找零不足保留名單 ${paidShortUpdated} 筆；公務車 ${officialVehicleUpdated} 筆；完全未異動 ${unchanged} 筆；失敗 ${failed} 筆`,
+            `新加入 ${inserted} 筆（其中刪除後重新匯入 ${recreatedAfterDelete} 筆）；簽約資料異動 ${updated} 筆；退租 ${cancelled} 筆；總表租期不同但已保護 ${dateOnlyChanged} 筆；完全未異動 ${unchanged} 筆；失敗 ${failed} 筆`,
         })
         .eq(
           'id',
@@ -4534,11 +3860,7 @@ export default function LegacyMonthlyImport({
 其中刪除後重新匯入 ${recreatedAfterDelete} 筆、
 簽約資料異動 ${updated} 筆、
 退租 ${cancelled} 筆、
-已退租保護略過 ${retiredSkipped} 筆、
 總表租期不同但已保護 ${dateOnlyChanged} 筆、
-開放新繳費週期 ${paymentCycleOpenedCount} 筆、
-0元找零不足保留名單 ${paidShortUpdated} 筆、
-公務車 ${officialVehicleUpdated} 筆、
 完全未異動 ${unchanged} 筆、
 失敗 ${failed} 筆。`
       )
@@ -4610,25 +3932,8 @@ export default function LegacyMonthlyImport({
     rows.length -
     validCount
 
-  const unresolvedZeroCount =
-    rows.filter((item) =>
-      isPendingZeroRow(item)
-    ).length
 
-  const zeroCancelledCount =
-    rows.filter((item) =>
-      isZeroCancelledRow(item)
-    ).length
-
-  const paidShortCount =
-    rows.filter((item) =>
-      isPaidShortRow(item)
-    ).length
-
-  const activeImportCount =
-    rows.filter((item) =>
-      isActiveImportRow(item)
-    ).length
+  const activeImportCount = rows.filter((item) => item.valid).length
 
   return (
     <div>
@@ -4642,7 +3947,7 @@ export default function LegacyMonthlyImport({
         </h2>
 
         <p className="muted">
-          先分析與上一份舊系統總表的差異，確認後才正式匯入。固定匯入參數：到期日超過 {IMPORT_EXPIRY_RETENTION_MONTHS} 個月的資料不列入名單；辨識完成後會顯示本次排除筆數與門檻日期。正式租期仍以主管設定為準，不會被舊系統日期覆蓋。舊系統到期日若比上一份總表往後，只代表「開放下一期繳費」，會把本期狀態設為未繳；同一份名單重匯或只更新姓名、電話、車牌等資料，不會改動既有付款狀態。只有「收款」或「繳費紀錄上傳」成功建立真正繳費紀錄後才會成為已繳；總表本身不再建立繳費月份，也不會直接判定已繳。月租總表內金額為 0 元的資料會依 0 元處理規則決定是否匯入。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
+          先分析與上一份舊系統總表的差異，確認後才正式匯入。舊系統日期不再作為匯入排除條件；目前總表存在即視為名冊中的有效候選資料。正式租期仍以主管設定為準，不會被舊系統日期覆蓋。舊系統開始日、結束日、金額與付款欄位全部只作稽核，不會改動本系統正式租期、到期日、月租金額、付款狀態或簡訊名單。只有「收款」或「繳費紀錄上傳」成功建立真正繳費紀錄後才會成為已繳；總表本身不再建立繳費月份，也不會直接判定已繳。舊總表金額即使為 0 元也不會改變名冊資格；0 元付款是否成立只由正式繳費報表進入管理員待確認流程。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
         </p>
 
         <div
@@ -4743,8 +4048,7 @@ export default function LegacyMonthlyImport({
               disabled={
                 comparing ||
                 importing ||
-                validCount === 0 ||
-                unresolvedZeroCount > 0
+                validCount === 0
               }
               onClick={
                 compareBeforeImport
@@ -4954,17 +4258,7 @@ export default function LegacyMonthlyImport({
                             '1px solid #e5e7eb',
 
                           background:
-                            !row.valid
-                              ? '#fef2f2'
-                              : isPendingZeroRow(row)
-                                ? '#fffbeb'
-                                : isZeroCancelledRow(row)
-                                  ? '#fef2f2'
-                                  : isPaidShortRow(row)
-                                    ? '#f0fdf4'
-                                    : isOfficialVehicleRow(row)
-                                      ? '#eff6ff'
-                                      : undefined,
+                            !row.valid ? '#fef2f2' : undefined,
                         }}
                       >
                         <td
@@ -4972,17 +4266,7 @@ export default function LegacyMonthlyImport({
                             padding: 8,
                           }}
                         >
-                          {!row.valid
-                            ? row.error
-                            : isPendingZeroRow(row)
-                              ? '0 元待選'
-                              : isZeroCancelledRow(row)
-                                ? '退租'
-                                : isPaidShortRow(row)
-                                  ? '找零不足（待繳費紀錄）'
-                                  : isOfficialVehicleRow(row)
-                                    ? '公務車'
-                                    : '正常'}
+                          {!row.valid ? row.error : '名冊資料'}
                         </td>
 
                         <td

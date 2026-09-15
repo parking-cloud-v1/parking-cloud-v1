@@ -88,6 +88,7 @@ export default async function DashboardShell({ children }: { children: React.Rea
             )}
             <div className={ui.navGroup}><div className={ui.navTitle}>現場作業</div>
               <Nav href="/dashboard/monthly-rentals" icon="月">月租管理</Nav>
+              <Nav href="/dashboard/monthly-rentals/payment-reviews" icon="核">付款待確認</Nav>
               <Nav href="/dashboard/monthly-rentals/waiting-list" icon="候">月租候補名單</Nav>
               <Nav href="/dashboard/monthly-rentals/sms-list" icon="簡">每月簡訊名單</Nav>
               <Nav href="/dashboard/taxi-discounts" icon="計">計程車折扣</Nav>
