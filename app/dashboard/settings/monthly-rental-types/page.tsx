@@ -1,4 +1,4 @@
-import Link from 'next/link'
+﻿import Link from 'next/link'
 import {
   redirect,
 } from 'next/navigation'
@@ -8,6 +8,7 @@ import {
 } from '@/lib/supabase/server'
 
 import MonthlyRentalTypeRuleManager from '@/components/MonthlyRentalTypeRuleManager'
+import ParkingLotSmsScheduleSettings from '@/components/ParkingLotSmsScheduleSettings'
 
 export default async function MonthlyRentalTypeSettingsPage() {
   const supabase =
@@ -169,13 +170,27 @@ export default async function MonthlyRentalTypeSettingsPage() {
           目前沒有啟用中的停車場。
         </div>
       ) : (
-        <MonthlyRentalTypeRuleManager
-          parkingLots={
-            parkingLots ||
-            []
-          }
-        />
+                <>
+          <>
+          <ParkingLotSmsScheduleSettings
+            parkingLots={
+              parkingLots ||
+              []
+            }
+          />
+
+          <MonthlyRentalTypeRuleManager
+            parkingLots={
+              parkingLots ||
+              []
+            }
+          />
+        </>
+        </>
       )}
     </div>
   )
 }
+
+
+
