@@ -2,6 +2,10 @@
 
 import { useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import {
+  hasOpenedNewPaymentCycle,
+  nextPaymentStatusAfterRosterImport,
+} from '@/lib/monthly-rental-payment-state'
 
 
 type ParkingLot = {
@@ -143,48 +147,6 @@ type PreviewRow = {
  */
 const IMPORT_EXPIRY_RETENTION_MONTHS = 4
 
-/*
- * 已繳／未繳統一以「本次匯入總表的到期日」判斷。
- * 到期日仍在今天或之後：已繳；到期日早於今天：未繳。
- * 到期當天仍視為有效，避免尚未到期的月租戶被誤列未繳與簡訊名單。
- */
-function paymentStatusFromImportedEndDate(
-  endDate?: string | null
-): 'paid' | 'unpaid' {
-  const normalized = normalizeDate(
-    String(endDate || '')
-  )
-
-  if (!normalized) {
-    return 'unpaid'
-  }
-
-  const now = new Date()
-  const today = `${now.getFullYear()}-${String(
-    now.getMonth() + 1
-  ).padStart(2, '0')}-${String(
-    now.getDate()
-  ).padStart(2, '0')}`
-
-  return normalized >= today
-    ? 'paid'
-    : 'unpaid'
-}
-
-function applyImportedEndDatePaymentStatus(
-  rows: PreviewRow[]
-) {
-  return rows.map((row) => ({
-    ...row,
-    payment_status:
-      isZeroPaidRow(row)
-        ? 'paid'
-        : paymentStatusFromImportedEndDate(
-            row.end_date
-          ),
-  }))
-}
-
 function importExpiryCutoffDateText() {
   const now = new Date()
 
@@ -257,269 +219,41 @@ function normalizeDate(value: string) {
 }
 
 
-function parseLegacyDateValue(
-  value?: string | null
-) {
-  const source =
-    String(value || '')
-      .trim()
-
-  const match =
-    source.match(
-      /^(\d{4})-(\d{1,2})-(\d{1,2})/
-    )
-
-  if (!match) {
-    return null
-  }
-
-  const year = Number(match[1])
-  const month = Number(match[2])
-  const day = Number(match[3])
-
-  const daysInMonth =
-    new Date(
-      Date.UTC(
-        year,
-        month,
-        0
-      )
-    ).getUTCDate()
-
-  if (
-    !Number.isInteger(year) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > daysInMonth
-  ) {
-    return null
-  }
-
-  return {
-    year,
-    month,
-    day,
-    isEndOfMonth:
-      day === daysInMonth,
-    utcTime:
-      Date.UTC(
-        year,
-        month - 1,
-        day
-      ),
-  }
-}
-
-function legacyDateAfterMonths(
-  anchor: NonNullable<
-    ReturnType<
-      typeof parseLegacyDateValue
-    >
-  >,
-  monthOffset: number
-) {
-  const monthIndex =
-    anchor.month - 1 +
-    monthOffset
-
-  const year =
-    anchor.year +
-    Math.floor(
-      monthIndex / 12
-    )
-
-  const zeroBasedMonth =
-    ((monthIndex % 12) +
-      12) %
-    12
-
-  const month =
-    zeroBasedMonth + 1
-
-  const daysInMonth =
-    new Date(
-      Date.UTC(
-        year,
-        month,
-        0
-      )
-    ).getUTCDate()
-
-  const day =
-    anchor.isEndOfMonth
-      ? daysInMonth
-      : Math.min(
-          anchor.day,
-          daysInMonth
-        )
-
-  return {
-    year,
-    month,
-    day,
-    utcTime:
-      Date.UTC(
-        year,
-        month - 1,
-        day
-      ),
-  }
-}
-
-function inferPaymentMonthsFromLegacyDiff(
-  previousEndDate?: string | null,
-  currentEndDate?: string | null
-) {
-  const previous =
-    parseLegacyDateValue(
-      previousEndDate
-    )
-
-  const current =
-    parseLegacyDateValue(
-      currentEndDate
-    )
-
-  if (
-    !previous ||
-    !current ||
-    current.utcTime <=
-      previous.utcTime
-  ) {
-    return [] as string[]
-  }
-
-  const result:
-    string[] = []
-
-  /*
-   * 第 29 階段：改用「本期結束日期 - 上一期結束日期」判斷。
-   *
-   * 不再只看 YYYY-MM 是否跨月，避免：
-   * 上期 09/30 → 本期 10/01 只有多 1 天，卻被誤判成已繳 10 月。
-   *
-   * 現在會以「上一期結束日」為基準，逐一往後加完整日曆月：
-   * 09/30 → 10/31 = 1 個完整月 => 10 月
-   * 09/30 → 11/30 = 2 個完整月 => 10、11 月
-   * 09/30 → 10/01 = 不足 1 個完整月 => 不自動記繳費月份
-   *
-   * 若上一期本身是月底，下一期也以各月月底計算，
-   * 可正確處理 1/31 → 2/28 → 3/31。
-   */
-  for (
-    let monthOffset = 1;
-    monthOffset <= 36;
-    monthOffset++
-  ) {
-    const boundary =
-      legacyDateAfterMonths(
-        previous,
-        monthOffset
-      )
-
-    if (
-      boundary.utcTime >
-      current.utcTime
-    ) {
-      break
-    }
-
-    result.push(
-      `${boundary.year}-${String(
-        boundary.month
-      ).padStart(2, '0')}-01`
-    )
-  }
-
-  return result
-}
-
 function legacyEndDateDiffSummary(
   previousEndDate?: string | null,
   currentEndDate?: string | null
 ) {
-  const previous =
-    parseLegacyDateValue(
-      previousEndDate
-    )
+  const previous = normalizeDate(
+    String(previousEndDate || '')
+  )
 
-  const current =
-    parseLegacyDateValue(
-      currentEndDate
-    )
+  const current = normalizeDate(
+    String(currentEndDate || '')
+  )
 
   if (!previous || !current) {
-    return '結束日期格式不足，未自動判定繳費月份'
+    return '結束日期格式不足，不變更繳費狀態'
   }
 
-  const addedDays =
-    Math.round(
-      (
-        current.utcTime -
-        previous.utcTime
-      ) /
-        86400000
-    )
+  const previousTime = Date.parse(
+    `${previous}T00:00:00Z`
+  )
+  const currentTime = Date.parse(
+    `${current}T00:00:00Z`
+  )
+  const addedDays = Math.round(
+    (currentTime - previousTime) / 86400000
+  )
 
-  if (addedDays <= 0) {
-    return addedDays === 0
-      ? '結束日期未變更，不新增繳費月份'
-      : `本期結束日期較上期提早 ${Math.abs(
-          addedDays
-        )} 天，不新增繳費月份`
+  if (addedDays === 0) {
+    return '結束日期未變更，保留目前付款狀態'
   }
 
-  const months =
-    inferPaymentMonthsFromLegacyDiff(
-      previousEndDate,
-      currentEndDate
-    )
-
-  if (months.length === 0) {
-    return `結束日期增加 ${addedDays} 天，但不足 1 個完整月，為避免誤記，不自動新增繳費月份`
+  if (addedDays < 0) {
+    return `本期結束日期較上期提早 ${Math.abs(addedDays)} 天，不會自動改成已繳`
   }
 
-  const lastBoundary =
-    legacyDateAfterMonths(
-      previous,
-      months.length
-    )
-
-  const remainderDays =
-    Math.max(
-      0,
-      Math.round(
-        (
-          current.utcTime -
-          lastBoundary.utcTime
-        ) /
-          86400000
-      )
-    )
-
-  return [
-    `結束日期增加 ${addedDays} 天`,
-    `完整延長 ${months.length} 個月`,
-    remainderDays > 0
-      ? `另有 ${remainderDays} 天不自動計入`
-      : '',
-    `辨識繳費月份：${months
-      .map(paymentMonthLabel)
-      .join('、')}`,
-  ]
-    .filter(Boolean)
-    .join('；')
-}
-
-function paymentMonthLabel(
-  value: string
-) {
-  return value
-    ? value
-        .slice(0, 7)
-        .replace('-', '/')
-    : '-'
+  return `結束日期增加 ${addedDays} 天，視為開放下一期繳費並切回未繳；不代表已繳`
 }
 
 function normalizePlate(value: string) {
@@ -1185,10 +919,6 @@ function isPaidShortRow(row: PreviewRow) {
 
 function isOfficialVehicleRow(row: PreviewRow) {
   return row.valid && isZeroRow(row) && row.zero_action === 'official_vehicle'
-}
-
-function isZeroPaidRow(row: PreviewRow) {
-  return isPaidShortRow(row) || isOfficialVehicleRow(row)
 }
 
 function isActiveImportRow(row: PreviewRow) {
@@ -2450,30 +2180,16 @@ export default function LegacyMonthlyImport({
             parkingLotId
           )
 
-        const statusRows408 =
-          applyImportedEndDatePaymentStatus(
-            ruled408.rows
-          )
+        const rosterRows408 =
+          ruled408.rows.map((row) => ({
+            ...row,
+            payment_status: 'unpaid' as const,
+          }))
 
-        setRows(
-          statusRows408
-        )
-
-        const paidCount =
-          statusRows408.filter(
-            (
-              item
-            ) =>
-              item.payment_status ===
-              'paid'
-          ).length
-
-        const unpaidCount =
-          statusRows408.length -
-          paidCount
+        setRows(rosterRows408)
 
         setMessage(
-          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，租期 ${parsed408.period}；月租 ${statusRows408.length} 筆，已繳 ${paidCount} 筆，未繳 ${unpaidCount} 筆（依匯入到期日判斷）；到期超過 ${IMPORT_EXPIRY_RETENTION_MONTHS} 個月排除 ${expiryFiltered408.excludedCount} 筆（門檻 ${expiryFiltered408.cutoff}）；主管類型規則 ${ruled408.ruleCount} 條，本次自動分類 ${ruled408.matchedCount} 筆。`
+          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，租期 ${parsed408.period}；月租 ${rosterRows408.length} 筆；名單匯入只負責更新名單／開放繳費，不會直接判定已繳。到期超過 ${IMPORT_EXPIRY_RETENTION_MONTHS} 個月排除 ${expiryFiltered408.excludedCount} 筆（門檻 ${expiryFiltered408.cutoff}）；主管類型規則 ${ruled408.ruleCount} 條，本次自動分類 ${ruled408.matchedCount} 筆。`
         )
 
         return
@@ -2495,27 +2211,24 @@ export default function LegacyMonthlyImport({
           parkingLotId
         )
 
-      const statusRows =
-        applyImportedEndDatePaymentStatus(
-          ruled.rows
-        )
+      const rosterRows =
+        ruled.rows.map((row) => ({
+          ...row,
+          payment_status: 'unpaid' as const,
+        }))
 
-      setRows(
-        statusRows
-      )
+      setRows(rosterRows)
 
       const valid =
-        statusRows.filter(
-          (item) =>
-            item.valid
+        rosterRows.filter(
+          (item) => item.valid
         ).length
 
       const invalid =
-        statusRows.length -
-        valid
+        rosterRows.length - valid
 
       setMessage(
-        `已辨識 ${statusRows.length} 筆，可匯入 ${valid} 筆，格式異常 ${invalid} 筆；已繳／未繳依匯入到期日判斷；到期超過 ${IMPORT_EXPIRY_RETENTION_MONTHS} 個月排除 ${expiryFiltered.excludedCount} 筆（門檻 ${expiryFiltered.cutoff}）；主管類型規則 ${ruled.ruleCount} 條，本次自動分類 ${ruled.matchedCount} 筆。`
+        `已辨識 ${rosterRows.length} 筆，可匯入 ${valid} 筆，格式異常 ${invalid} 筆；名單匯入只負責更新名單／開放繳費，不會直接判定已繳；到期超過 ${IMPORT_EXPIRY_RETENTION_MONTHS} 個月排除 ${expiryFiltered.excludedCount} 筆（門檻 ${expiryFiltered.cutoff}）；主管類型規則 ${ruled.ruleCount} 條，本次自動分類 ${ruled.matchedCount} 筆。`
       )
     } catch (
       error: any
@@ -2550,7 +2263,7 @@ export default function LegacyMonthlyImport({
 
     if (unresolvedZeroRows.length > 0) {
       alert(
-        `還有 ${unresolvedZeroRows.length} 筆 0 元資料尚未選擇處理方式。\n\n請先選擇「找零不足（但已繳費）」或「退租」。`
+        `還有 ${unresolvedZeroRows.length} 筆 0 元資料尚未選擇處理方式。\n\n請先選擇「找零不足（保留名單）」或「退租」。`
       )
       return
     }
@@ -2960,12 +2673,6 @@ export default function LegacyMonthlyImport({
             newRow.end_date
           )
 
-        const inferredPaymentMonths =
-          inferPaymentMonthsFromLegacyDiff(
-            oldRow.end_date,
-            newRow.end_date
-          )
-
         if (
           contractChanges.length >
           0
@@ -3098,7 +2805,7 @@ export default function LegacyMonthlyImport({
       })
 
       setMessage(
-        `比對完成：新增 ${joinedCount} 筆、刪除後待重新匯入 ${recreatedCount} 筆、正式退租保護 ${retiredProtectedCount} 筆、退租 ${cancelledCount} 筆、簽約資料異動 ${updatedCount} 筆、總表租期不同 ${dateOnlyCount} 筆（主表不覆蓋）、完全未異動 ${unchangedCount} 筆；0 元「找零不足但已繳」 ${validRows.filter((item) => isPaidShortRow(item)).length} 筆；公務車 ${validRows.filter((item) => isOfficialVehicleRow(item)).length} 筆。`
+        `比對完成：新增 ${joinedCount} 筆、刪除後待重新匯入 ${recreatedCount} 筆、正式退租保護 ${retiredProtectedCount} 筆、退租 ${cancelledCount} 筆、簽約資料異動 ${updatedCount} 筆、總表租期不同 ${dateOnlyCount} 筆（主表不覆蓋）、完全未異動 ${unchangedCount} 筆；0 元「找零不足（待繳費紀錄）」 ${validRows.filter((item) => isPaidShortRow(item)).length} 筆；公務車 ${validRows.filter((item) => isOfficialVehicleRow(item)).length} 筆。`
       )
     } catch (
       error: any
@@ -3133,7 +2840,7 @@ export default function LegacyMonthlyImport({
 
     if (unresolvedZeroRows.length > 0) {
       alert(
-        `還有 ${unresolvedZeroRows.length} 筆 0 元資料尚未選擇處理方式。\n\n請先選擇「找零不足（但已繳費）」或「退租」。`
+        `還有 ${unresolvedZeroRows.length} 筆 0 元資料尚未選擇處理方式。\n\n請先選擇「找零不足（保留名單）」或「退租」。`
       )
       return
     }
@@ -3167,7 +2874,7 @@ export default function LegacyMonthlyImport({
           `檔案：${fileName}\n` +
           `有效月租：${validRows.length} 筆\n` +
           `0 元人工退租：${zeroCancelledRows.length} 筆\n` +
-          `0 元找零不足已繳：${validRows.filter((item) => isPaidShortRow(item)).length} 筆\n` +
+          `0 元找零不足（保留名單，仍需繳費紀錄）：${validRows.filter((item) => isPaidShortRow(item)).length} 筆\n` +
           `0 元公務車：${validRows.filter((item) => isOfficialVehicleRow(item)).length} 筆\n\n` +
           `既有月租的正式租期不會被本次總表覆蓋；新戶優先套用目前場站租期。\n\n` +
           `確定正式匯入嗎？`
@@ -3730,8 +3437,7 @@ export default function LegacyMonthlyImport({
       let dateOnlyChanged = 0
       let paidShortUpdated = 0
       let officialVehicleUpdated = 0
-      let inferredPaymentMonthsSaved = 0
-      let paymentMonthInferenceFailed = 0
+      let paymentCycleOpenedCount = 0
       let recreatedAfterDelete = 0
       let failed = 0
 
@@ -3750,20 +3456,33 @@ export default function LegacyMonthlyImport({
             newRow
           )
 
-        const importedPaymentStatus =
-          isZeroPaidRow(newRow)
-            ? 'paid'
-            : paymentStatusFromImportedEndDate(
-                newRow.end_date
-              )
-
-        const inferredPaymentMonths =
-          previous
-            ? inferPaymentMonthsFromLegacyDiff(
+        const paymentCycleOpened =
+          Boolean(
+            previous &&
+              hasOpenedNewPaymentCycle(
                 previous.end_date,
                 newRow.end_date
               )
-            : []
+          )
+
+        /*
+         * 名單匯入與繳費紀錄完全分開：
+         * - 新資料：未繳
+         * - 舊系統到期日往後：只代表開放下一期繳費，因此改成未繳
+         * - 同一週期重匯／更新姓名電話車牌：保留目前付款狀態
+         * - 名單內的日期、付款日期、發票欄位都不能直接把人改成已繳
+         *
+         * 真正的「已繳」只由收款／繳費報表先建立繳費紀錄後設定。
+         */
+        const nextPaymentStatus =
+          nextPaymentStatusAfterRosterImport({
+            currentStatus:
+              currentRental?.payment_status,
+            cycleOpened:
+              paymentCycleOpened,
+            isNewRental:
+              !currentRental,
+          })
 
         const importedNotes =
           [
@@ -3774,7 +3493,7 @@ export default function LegacyMonthlyImport({
               : '',
 
             isPaidShortRow(newRow)
-              ? '0元處理：找零不足（但已繳費）'
+              ? '0元處理：找零不足（保留名單，仍需繳費紀錄）'
               : isOfficialVehicleRow(newRow)
                 ? '0元處理：公務車'
                 : '',
@@ -3842,23 +3561,16 @@ export default function LegacyMonthlyImport({
                     newRow.monthly_fee,
 
                   payment_status:
-                    importedPaymentStatus,
+                    nextPaymentStatus,
 
                   rental_status:
                     'active',
 
-                  payment_date:
-                    newRow.payment_date ||
-                    null,
+                  payment_date: null,
 
-                  invoice_number:
-                    newRow.invoice_number ||
-                    null,
+                  invoice_number: null,
 
-                  last_payment_source:
-                    importedPaymentStatus === 'paid'
-                      ? 'legacy_import_end_date'
-                      : null,
+                  last_payment_source: null,
 
                   notes:
                     importedNotes ||
@@ -3932,7 +3644,7 @@ export default function LegacyMonthlyImport({
                   newRow.monthly_fee,
 
                 payment_status:
-                  importedPaymentStatus,
+                  nextPaymentStatus,
 
                 rental_status:
                   'active',
@@ -4134,9 +3846,9 @@ export default function LegacyMonthlyImport({
                 rental_status:
                   'active',
 
-                // 已繳／未繳改由本次匯入總表的到期日直接轉換。
+                // 重匯同一週期保留付款；開新週期則回到未繳。
                 payment_status:
-                  importedPaymentStatus,
+                  nextPaymentStatus,
 
                 notes:
                   importedNotes ||
@@ -4247,7 +3959,7 @@ export default function LegacyMonthlyImport({
         const paymentChanged =
           !sameValue(
             currentRental?.payment_status,
-            importedPaymentStatus
+            nextPaymentStatus
           )
 
         const anyMainDataChanged =
@@ -4380,15 +4092,14 @@ export default function LegacyMonthlyImport({
               rental_status:
                 'active',
 
-              // 已繳／未繳統一依本次匯入總表到期日轉換。
-              payment_status:
-                importedPaymentStatus,
-
               /*
-               * 正式租期仍完全不被總表覆蓋。
-               * 繳費月份則於 update 成功後，以「上一期舊系統總表」
-               * 與「本期舊系統總表」的到期月份差異自動辨識。
+               * 付款狀態規則：
+               * - 到期日延長 = 開放下一期繳費，狀態改為未繳
+               * - 同一份名單重匯／基本資料更新 = 保留目前付款狀態
+               * - 名單匯入永遠不會直接標成已繳
                */
+              payment_status:
+                nextPaymentStatus,
 
               notes:
                 importedNotes ||
@@ -4414,130 +4125,11 @@ export default function LegacyMonthlyImport({
         }
 
         /*
-         * 第 25 階段：
-         * 舊系統總表的日期只拿來辨識「新增繳費月份」，
-         * 不再拿來修改正式租期。
-         *
-         * 上一期到期 2026-09，本期到期 2026-10
-         * => 自動新增 2026/10 的 payment month。
+         * 舊系統總表日期延長只用來「開放下一期繳費」。
+         * 不再依日期差異自動建立任何繳費月份，也不改寫付款歷史。
          */
-        if (
-          inferredPaymentMonths.length >
-          0
-        ) {
-          const detectedAt =
-            new Date()
-              .toISOString()
-              .slice(0, 10)
-
-          const paymentMonthRows =
-            inferredPaymentMonths.map(
-              (
-                coverageMonth
-              ) => ({
-                monthly_rental_id:
-                  currentRental.id,
-
-                parking_lot_id:
-                  parkingLotId,
-
-                coverage_month:
-                  coverageMonth,
-
-                amount:
-                  Number(
-                    newRow.monthly_fee ||
-                    currentRental.monthly_fee ||
-                    0
-                  ),
-
-                payment_date:
-                  newRow.payment_date ||
-                  detectedAt,
-
-                invoice_number:
-                  newRow.invoice_number ||
-                  null,
-
-                source:
-                  'legacy_roster_diff',
-
-                source_reference:
-                  `legacy-roster-diff:${batchId}:${currentRental.id}:${coverageMonth}`,
-
-                notes:
-                  `由舊系統總表結束日期差異自動辨識：上一期 ${previous?.end_date || '-'}，本期 ${newRow.end_date || '-'}；${legacyEndDateDiffSummary(
-                    previous?.end_date,
-                    newRow.end_date
-                  )}。`,
-
-                created_by:
-                  user.id,
-              })
-            )
-
-          const {
-            error:
-              paymentMonthError,
-          } =
-            await supabase
-              .from(
-                'monthly_rental_payment_months'
-              )
-              .upsert(
-                paymentMonthRows,
-                {
-                  onConflict:
-                    'monthly_rental_id,coverage_month',
-                  ignoreDuplicates:
-                    true,
-                }
-              )
-
-          if (
-            paymentMonthError
-          ) {
-            console.error(
-              '自動辨識繳費月份失敗',
-              paymentMonthError
-            )
-
-            paymentMonthInferenceFailed++
-          } else {
-            inferredPaymentMonthsSaved +=
-              inferredPaymentMonths.length
-
-            const latestMonth =
-              inferredPaymentMonths[
-                inferredPaymentMonths.length -
-                  1
-              ]
-
-            const existingLastPaidMonth =
-              String(
-                currentRental.last_paid_month ||
-                ''
-              )
-
-            if (
-              !existingLastPaidMonth ||
-              latestMonth >
-                existingLastPaidMonth
-            ) {
-              await supabase
-                .from(
-                  'monthly_rentals'
-                )
-                .update({
-                  last_paid_month:
-                    latestMonth,
-                })
-                .eq(
-                  'id',
-                  currentRental.id
-                )
-            }
-          }
+        if (paymentCycleOpened) {
+          paymentCycleOpenedCount++
         }
 
         if (
@@ -4929,7 +4521,7 @@ export default function LegacyMonthlyImport({
             finalStatus,
 
           notes:
-            `新加入 ${inserted} 筆（其中刪除後重新匯入 ${recreatedAfterDelete} 筆）；簽約資料異動 ${updated} 筆；退租 ${cancelled} 筆；已退租保護略過 ${retiredSkipped} 筆；總表租期不同但已保護 ${dateOnlyChanged} 筆；自動辨識繳費月份 ${inferredPaymentMonthsSaved} 筆；繳費月份辨識失敗 ${paymentMonthInferenceFailed} 筆；0元找零不足已繳 ${paidShortUpdated} 筆；公務車 ${officialVehicleUpdated} 筆；完全未異動 ${unchanged} 筆；失敗 ${failed} 筆`,
+            `新加入 ${inserted} 筆（其中刪除後重新匯入 ${recreatedAfterDelete} 筆）；簽約資料異動 ${updated} 筆；退租 ${cancelled} 筆；已退租保護略過 ${retiredSkipped} 筆；總表租期不同但已保護 ${dateOnlyChanged} 筆；開放新繳費週期 ${paymentCycleOpenedCount} 筆；0元找零不足保留名單 ${paidShortUpdated} 筆；公務車 ${officialVehicleUpdated} 筆；完全未異動 ${unchanged} 筆；失敗 ${failed} 筆`,
         })
         .eq(
           'id',
@@ -4944,9 +4536,8 @@ export default function LegacyMonthlyImport({
 退租 ${cancelled} 筆、
 已退租保護略過 ${retiredSkipped} 筆、
 總表租期不同但已保護 ${dateOnlyChanged} 筆、
-自動辨識繳費月份 ${inferredPaymentMonthsSaved} 筆、
-繳費月份辨識失敗 ${paymentMonthInferenceFailed} 筆、
-0元找零不足已繳 ${paidShortUpdated} 筆、
+開放新繳費週期 ${paymentCycleOpenedCount} 筆、
+0元找零不足保留名單 ${paidShortUpdated} 筆、
 公務車 ${officialVehicleUpdated} 筆、
 完全未異動 ${unchanged} 筆、
 失敗 ${failed} 筆。`
@@ -5051,7 +4642,7 @@ export default function LegacyMonthlyImport({
         </h2>
 
         <p className="muted">
-          先分析與上一份舊系統總表的差異，確認後才正式匯入。固定匯入參數：到期日超過 {IMPORT_EXPIRY_RETENTION_MONTHS} 個月的資料不列入名單；辨識完成後會顯示本次排除筆數與門檻日期。正式租期仍以主管設定為準，不會被舊系統日期覆蓋；「已繳／未繳」固定依本次匯入總表的到期日判斷：到期日為今天或之後＝已繳，到期日早於今天＝未繳。繳費月份歷史仍保留原本差異辨識，不再拿來決定目前已繳／未繳狀態。月租總表內金額為 0 元的資料會自動略過，不會匯入。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
+          先分析與上一份舊系統總表的差異，確認後才正式匯入。固定匯入參數：到期日超過 {IMPORT_EXPIRY_RETENTION_MONTHS} 個月的資料不列入名單；辨識完成後會顯示本次排除筆數與門檻日期。正式租期仍以主管設定為準，不會被舊系統日期覆蓋。舊系統到期日若比上一份總表往後，只代表「開放下一期繳費」，會把本期狀態設為未繳；同一份名單重匯或只更新姓名、電話、車牌等資料，不會改動既有付款狀態。只有「收款」或「繳費紀錄上傳」成功建立真正繳費紀錄後才會成為已繳；總表本身不再建立繳費月份，也不會直接判定已繳。月租總表內金額為 0 元的資料會依 0 元處理規則決定是否匯入。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
         </p>
 
         <div
@@ -5339,7 +4930,7 @@ export default function LegacyMonthlyImport({
                   <th>類型</th>
                   <th>租用期間</th>
                   <th>金額</th>
-                  <th>繳費</th>
+                  <th>繳費判定</th>
                   <th>繳費日期</th>
                   <th>發票號碼</th>
                 </tr>
@@ -5388,7 +4979,7 @@ export default function LegacyMonthlyImport({
                               : isZeroCancelledRow(row)
                                 ? '退租'
                                 : isPaidShortRow(row)
-                                  ? '已繳'
+                                  ? '找零不足（待繳費紀錄）'
                                   : isOfficialVehicleRow(row)
                                     ? '公務車'
                                     : '正常'}
@@ -5482,23 +5073,10 @@ export default function LegacyMonthlyImport({
                             padding: 8,
                             fontWeight:
                               700,
-                            color:
-                              row.payment_status ===
-                              'paid'
-                                ? '#15803d'
-                                : row.payment_status ===
-                                    'unpaid'
-                                  ? '#b91c1c'
-                                  : undefined,
+                            color: '#64748b',
                           }}
                         >
-                          {row.payment_status ===
-                          'paid'
-                            ? '已繳'
-                            : row.payment_status ===
-                                'unpaid'
-                              ? '未繳'
-                              : '-'}
+                          不由名單判定
                         </td>
 
                         <td

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { hasOpenedNewPaymentCycle } from '@/lib/monthly-rental-payment-state'
 
 type Mode = 'payment' | 'renew' | 'edit'
 
@@ -43,9 +44,6 @@ export default function MonthlyRentalModal({
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [monthlyFee, setMonthlyFee] = useState('')
-  const [paymentStatus, setPaymentStatus] =
-    useState<'paid' | 'unpaid'>('unpaid')
-
   const [paymentDate, setPaymentDate] = useState('')
   const [invoiceNumber, setInvoiceNumber] = useState('')
   const [notes, setNotes] = useState('')
@@ -65,12 +63,6 @@ export default function MonthlyRentalModal({
     setStartDate(rental.start_date || '')
     setEndDate(rental.end_date || '')
     setMonthlyFee(String(rental.monthly_fee || ''))
-
-    setPaymentStatus(
-      rental.payment_status === 'paid'
-        ? 'paid'
-        : 'unpaid'
-    )
 
     setPaymentDate(
       rental.payment_date ||
@@ -154,9 +146,9 @@ export default function MonthlyRentalModal({
       .update({
         end_date: endDate,
         rental_status: 'active',
+        // 續租／開新繳費週期只把「本期狀態」改為未繳；
+        // 最近收款日期、發票與歷史繳費紀錄全部保留。
         payment_status: 'unpaid',
-        payment_date: null,
-        invoice_number: null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', rental.id)
@@ -203,20 +195,15 @@ export default function MonthlyRentalModal({
       return
     }
 
-    if (
-      paymentStatus === 'paid' &&
-      !paymentDate
-    ) {
-      setMessage(
-        '已選擇「已繳」，請填寫收款日期'
-      )
-      return
-    }
-
     setLoading(true)
     setMessage('')
 
     const supabase = createClient()
+    const paymentCycleOpened =
+      hasOpenedNewPaymentCycle(
+        rental.end_date,
+        endDate
+      )
 
     const { error } = await supabase
       .from('monthly_rentals')
@@ -231,17 +218,14 @@ export default function MonthlyRentalModal({
         end_date: endDate,
         monthly_fee: fee,
 
-        payment_status: paymentStatus,
-
-        payment_date:
-          paymentStatus === 'paid'
-            ? paymentDate
-            : null,
-
-        invoice_number:
-          paymentStatus === 'paid'
-            ? invoiceNumber.trim() || null
-            : null,
+        /*
+         * 編輯基本資料不可直接改成「已繳」。
+         * 但如果到期日往後延長，代表開放下一期繳費，
+         * 因此只會把目前這一期切回「未繳」。
+         */
+        ...(paymentCycleOpened
+          ? { payment_status: 'unpaid' }
+          : {}),
 
         notes: notes.trim() || null,
         updated_at: new Date().toISOString(),
@@ -414,7 +398,7 @@ export default function MonthlyRentalModal({
                   color: '#64748b',
                 }}
               >
-                續租完成後，付款狀態會重新改成「未繳」。
+                續租完成後，本期付款狀態會改成「未繳」；既有繳費紀錄不會被刪除。
               </div>
             </div>
 
@@ -553,58 +537,35 @@ export default function MonthlyRentalModal({
               />
             </div>
 
-            <div className="field">
-              <label>付款狀態 *</label>
-
-              <select
-                value={paymentStatus}
-                onChange={(e) =>
-                  setPaymentStatus(
-                    e.target.value as
-                      | 'paid'
-                      | 'unpaid'
-                  )
-                }
+            <div
+              style={{
+                gridColumn: '1 / -1',
+                background: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderRadius: 10,
+                padding: 12,
+                color: '#475569',
+                fontSize: 14,
+              }}
+            >
+              目前付款狀態：
+              <strong
+                style={{
+                  marginLeft: 6,
+                  color:
+                    rental.payment_status === 'paid'
+                      ? '#15803d'
+                      : '#dc2626',
+                }}
               >
-                <option value="unpaid">
-                  未繳
-                </option>
-
-                <option value="paid">
-                  已繳
-                </option>
-              </select>
+                {rental.payment_status === 'paid'
+                  ? '已繳'
+                  : '未繳'}
+              </strong>
+              <span style={{ marginLeft: 8 }}>
+                付款狀態不可在「編輯」直接修改；請使用「收款」或匯入繳費報表。
+              </span>
             </div>
-
-            {paymentStatus === 'paid' && (
-              <>
-                <div className="field">
-                  <label>收款日期 *</label>
-
-                  <input
-                    type="date"
-                    value={paymentDate}
-                    onChange={(e) =>
-                      setPaymentDate(e.target.value)
-                    }
-                  />
-                </div>
-
-                <div className="field">
-                  <label>發票號碼</label>
-
-                  <input
-                    value={invoiceNumber}
-                    onChange={(e) =>
-                      setInvoiceNumber(
-                        e.target.value.toUpperCase()
-                      )
-                    }
-                    placeholder="沒有可留空"
-                  />
-                </div>
-              </>
-            )}
 
             <div
               className="field"

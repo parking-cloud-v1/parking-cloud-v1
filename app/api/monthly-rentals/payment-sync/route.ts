@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
@@ -87,42 +88,55 @@ export async function POST(request: NextRequest) {
       const paymentDate = validDate(input.paymentDate) || new Date().toISOString().slice(0, 10)
       const invoiceNumber = safeText(input.invoiceNumber, 100) || null
 
-      const { data: updated, error: updateError } = await admin
-        .from('monthly_rentals')
-        .update({
-          payment_status: 'paid',
-          payment_date: paymentDate,
-          invoice_number: invoiceNumber,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', rentalId)
-        .select('id')
-        .maybeSingle()
+      /*
+       * 付款狀態的唯一原則：
+       * 必須先有一筆真正的 monthly_payments 繳費紀錄，
+       * 才能把 monthly_rentals.payment_status 改成 paid。
+       *
+       * CSV 匯入沿用來源識別避免重複；
+       * 手動「收款」沒有來源識別時，建立獨立的 manual 繳費紀錄。
+       */
+      const suppliedSourceReference = safeText(input.sourceReference, 300)
+      const paymentSource =
+        suppliedSourceReference
+          ? 'payment_csv'
+          : 'manual'
 
-      if (updateError || !updated?.id) {
-        failed++
-        console.error('[monthly-payment-sync] update failed', rentalId, updateError?.message)
-        errors.push(`${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：付款狀態更新失敗`)
-        continue
-      }
+      const sourceReference =
+        suppliedSourceReference ||
+        `manual:${rentalId}:${paymentDate}:${randomUUID()}`
 
-      success++
+      let historyExists = false
 
-      // 有來源識別時才寫 monthly_payments，避免重複匯入同一筆交易。
-      const sourceReference = safeText(input.sourceReference, 300)
-      if (sourceReference) {
-        const { data: existing } = await admin
+      if (suppliedSourceReference) {
+        const { data: existing, error: duplicateCheckError } = await admin
           .from('monthly_payments')
           .select('id')
-          .eq('source_reference', sourceReference)
+          .eq('source_reference', suppliedSourceReference)
           .limit(1)
           .maybeSingle()
 
-        if (existing?.id) {
-          historyDuplicate++
+        if (duplicateCheckError) {
+          failed++
+          historyFailed++
+          console.error(
+            '[monthly-payment-sync] duplicate check failed',
+            rentalId,
+            duplicateCheckError.message
+          )
+          errors.push(
+            `${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：繳費紀錄重複檢查失敗`
+          )
           continue
         }
 
+        if (existing?.id) {
+          historyExists = true
+          historyDuplicate++
+        }
+      }
+
+      if (!historyExists) {
         const { error: historyError } = await admin
           .from('monthly_payments')
           .insert({
@@ -138,19 +152,61 @@ export async function POST(request: NextRequest) {
             invoice_number: invoiceNumber,
             rental_start_date: input.rentalStartDate || rental.start_date || null,
             rental_end_date: input.rentalEndDate || rental.end_date || null,
-            source: 'payment_csv',
+            source: paymentSource,
             source_reference: sourceReference,
             notes: safeText(input.notes, 1000) || null,
             created_by: user.id,
           })
 
         if (historyError) {
+          failed++
           historyFailed++
-          console.error('[monthly-payment-sync] history insert failed', rentalId, historyError.message)
-        } else {
-          historySuccess++
+          console.error(
+            '[monthly-payment-sync] history insert failed',
+            rentalId,
+            historyError.message
+          )
+          errors.push(
+            `${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：繳費紀錄建立失敗，因此未改成已繳`
+          )
+          continue
         }
+
+        historySuccess++
       }
+
+      /*
+       * 只有確認繳費歷史已存在之後，才更新目前這一期的狀態。
+       * 若狀態更新失敗，繳費歷史仍會保留；再次同步同一 CSV 時，
+       * 系統會辨識為既有紀錄並重新嘗試更新狀態。
+       */
+      const { data: updated, error: updateError } = await admin
+        .from('monthly_rentals')
+        .update({
+          payment_status: 'paid',
+          payment_date: paymentDate,
+          invoice_number: invoiceNumber,
+          last_payment_source: paymentSource,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', rentalId)
+        .select('id')
+        .maybeSingle()
+
+      if (updateError || !updated?.id) {
+        failed++
+        console.error(
+          '[monthly-payment-sync] update failed',
+          rentalId,
+          updateError?.message
+        )
+        errors.push(
+          `${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：繳費紀錄已保存，但付款狀態更新失敗，可重新同步此筆`
+        )
+        continue
+      }
+
+      success++
     }
 
     return NextResponse.json({

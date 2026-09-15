@@ -1,4 +1,4 @@
-﻿import Link from 'next/link'
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 
 import { createClient } from '@/lib/supabase/server'
@@ -513,9 +513,10 @@ export default async function MonthlyRentalsPage({
     enrichedRentals.length
 
   /*
-   * 已繳／未繳由月租總表匯入時，依「匯入到期日」統一轉換後
-   * 寫回 payment_status。這裡不可再用繳費月份推算，否則尚未到期
-   * 但沒有 payment_month 紀錄的資料會被誤算成未繳。
+   * payment_status 代表「目前這一期」是否已完成付款：
+   * - 舊系統名單日期延長只會開啟下一期並改為未繳
+   * - 同一份名單重匯不會覆蓋已繳
+   * - 只有收款／繳費報表成功建立付款紀錄後才改為已繳
    */
   const paidCount =
     enrichedRentals.filter(
@@ -641,7 +642,7 @@ export default async function MonthlyRentalsPage({
                 0,
             }}
           >
-            管理各停車場月租戶。名單中的正式租期直接依主管目前租期設定顯示，繳費只顯示最近一個繳費月份；完整繳費歷史仍保留在「繳費紀錄」。已退租與到期超過 4 個月的資料不顯示於總表。
+            管理各停車場月租戶。舊系統名單日期延長只代表開放下一期繳費，不代表已繳；只有「收款」或匯入繳費報表成功建立付款紀錄後才會顯示已繳。同一份名單重新匯入不會覆蓋既有付款結果。完整繳費歷史保留在「繳費紀錄」；已退租與到期超過 4 個月的資料不顯示於總表。
           </p>
         </div>
 
@@ -878,7 +879,7 @@ export default async function MonthlyRentalsPage({
                 700,
             }}
           >
-            有繳費紀錄
+            本期已繳
           </div>
 
           <h2
@@ -900,7 +901,7 @@ export default async function MonthlyRentalsPage({
                 700,
             }}
           >
-            尚有應繳月份
+            本期未繳
           </div>
 
           <h2
