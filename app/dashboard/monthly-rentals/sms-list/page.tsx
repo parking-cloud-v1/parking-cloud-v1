@@ -1,6 +1,6 @@
 'use client'
 
-// PHASE51_SMS_20_DAYS_AND_LINE
+// SMS_UNPAID_LIST_AND_ORIGINAL_CSV_SHARE
 import {
   useEffect,
   useMemo,
@@ -24,10 +24,9 @@ type SmsRow = {
   vehicle_type: string | null
   rental_type: string | null
   monthly_fee: number | null
-  due_date: string
-  days_remaining: number
-  cycle_months: number | null
-  cycle_source: string
+  start_date: string | null
+  end_date: string | null
+  payment_status: string
 }
 
 function normalizePhone(
@@ -60,176 +59,19 @@ function escapeCsv(
     .replace(/"/g, '""')}"`
 }
 
-function parseCsvLine(
-  line: string
-) {
-  const result: string[] = []
-  let current = ''
-  let quoted = false
-
-  for (
-    let i = 0;
-    i < line.length;
-    i++
-  ) {
-    const char =
-      line[i]
-
-    if (char === '"') {
-      if (
-        quoted &&
-        line[i + 1] ===
-          '"'
-      ) {
-        current += '"'
-        i++
-      } else {
-        quoted =
-          !quoted
-      }
-
-      continue
-    }
-
-    if (
-      char === ',' &&
-      !quoted
-    ) {
-      result.push(
-        current
-      )
-      current = ''
-      continue
-    }
-
-    current += char
-  }
-
-  result.push(current)
-
-  return result.map(
-    (item) =>
-      item.trim()
+function fourMonthsAgoDateText() {
+  const now = new Date()
+  const cutoff = new Date(
+    now.getFullYear(),
+    now.getMonth() - 4,
+    now.getDate()
   )
-}
 
-function csvToLineText(
-  csvText: string
-) {
-  const cleanText =
-    csvText.replace(
-      /^\uFEFF/,
-      ''
-    )
+  const year = cutoff.getFullYear()
+  const month = String(cutoff.getMonth() + 1).padStart(2, '0')
+  const day = String(cutoff.getDate()).padStart(2, '0')
 
-  const lines =
-    cleanText
-      .split(
-        /\r?\n/
-      )
-      .filter(
-        (line) =>
-          line.trim()
-      )
-
-  if (
-    lines.length <
-    2
-  ) {
-    return ''
-  }
-
-  const headers =
-    parseCsvLine(
-      lines[0]
-    )
-
-  const findIndex = (
-    names: string[]
-  ) =>
-    headers.findIndex(
-      (header) =>
-        names.includes(
-          header.trim()
-        )
-    )
-
-  const nameIndex =
-    findIndex([
-      '姓名',
-      '客戶姓名',
-    ])
-
-  const phoneIndex =
-    findIndex([
-      '電話',
-      '手機',
-      '手機號碼',
-    ])
-
-  const plateIndex =
-    findIndex([
-      '車牌',
-      '車牌號碼',
-    ])
-
-  const dueIndex =
-    findIndex([
-      '到期日',
-      '舊系統到期日',
-    ])
-
-  const result =
-    lines
-      .slice(1)
-      .map((line) => {
-        const cols =
-          parseCsvLine(
-            line
-          )
-
-        const name =
-          nameIndex >= 0
-            ? cols[
-                nameIndex
-              ] || ''
-            : ''
-
-        const phone =
-          phoneIndex >= 0
-            ? cols[
-                phoneIndex
-              ] || ''
-            : ''
-
-        const plate =
-          plateIndex >= 0
-            ? cols[
-                plateIndex
-              ] || ''
-            : ''
-
-        const due =
-          dueIndex >= 0
-            ? cols[
-                dueIndex
-              ] || ''
-            : ''
-
-        return [
-          name,
-          phone,
-          plate,
-          due,
-        ]
-          .filter(Boolean)
-          .join('｜')
-      })
-      .filter(Boolean)
-
-  return result.join(
-    '\n'
-  )
+  return `${year}-${month}-${day}`
 }
 
 export default function SmsListPage() {
@@ -281,12 +123,6 @@ export default function SmsListPage() {
   const [
     message,
     setMessage,
-  ] =
-    useState('')
-
-  const [
-    lineText,
-    setLineText,
   ] =
     useState('')
 
@@ -363,19 +199,44 @@ export default function SmsListPage() {
         workLotId
       )
 
+      const fourMonthsAgo =
+        fourMonthsAgoDateText()
+
       const {
         data,
         error,
       } =
         await supabase
-          .rpc(
-            'get_sms_due_within_days',
-            {
-              p_parking_lot_id:
-                workLotId,
-              p_days:
-                20,
-            }
+          .from('monthly_rentals')
+          .select(`
+            customer_name,
+            phone,
+            vehicle_plate,
+            vehicle_type,
+            rental_type,
+            monthly_fee,
+            start_date,
+            end_date,
+            payment_status
+          `)
+          .eq(
+            'parking_lot_id',
+            workLotId
+          )
+          .neq(
+            'rental_status',
+            'cancelled'
+          )
+          .eq(
+            'payment_status',
+            'unpaid'
+          )
+          .or(
+            `end_date.is.null,end_date.gte.${fourMonthsAgo}`
+          )
+          .order(
+            'customer_name',
+            { ascending: true }
           )
 
       if (error) {
@@ -449,9 +310,9 @@ export default function SmsListPage() {
       '車牌',
       '月租類型',
       '月租金額',
-      '到期日',
-      '剩餘天數',
-      '繳費週期月數',
+      '租期開始',
+      '租期到期',
+      '繳費狀態',
     ]
 
     const lines = [
@@ -472,10 +333,9 @@ export default function SmsListPage() {
             row.rental_type || '',
             row.monthly_fee ??
               '',
-            row.due_date,
-            row.days_remaining,
-            row.cycle_months ??
-              '',
+            row.start_date || '',
+            row.end_date || '',
+            '未繳',
           ]
             .map(escapeCsv)
             .join(',')
@@ -508,7 +368,7 @@ export default function SmsListPage() {
 
     a.href = url
     a.download =
-      `${currentLot?.name || '停車場'}_20天內到期簡訊名單.csv`
+      `${currentLot?.name || '停車場'}_月租未繳簡訊名單.csv`
 
     document.body.appendChild(
       a
@@ -519,30 +379,6 @@ export default function SmsListPage() {
 
     URL.revokeObjectURL(
       url
-    )
-  }
-
-  function currentRowsToLine() {
-    const text =
-      filteredRows
-        .map(
-          (row) =>
-            [
-              row.customer_name,
-              normalizePhone(
-                row.phone ||
-                  ''
-              ),
-              row.vehicle_plate,
-              `到期 ${row.due_date}`,
-            ]
-              .filter(Boolean)
-              .join('｜')
-        )
-        .join('\n')
-
-    setLineText(
-      text
     )
   }
 
@@ -559,66 +395,31 @@ export default function SmsListPage() {
     }
 
     try {
-      const text =
-        await file.text()
-
-      const converted =
-        csvToLineText(
-          text
-        )
-
-      if (!converted) {
+      if (
+        typeof navigator.share !== 'function' ||
+        (typeof navigator.canShare === 'function' &&
+          !navigator.canShare({ files: [file] }))
+      ) {
         alert(
-          'CSV 內找不到可轉換的名單。'
+          '目前瀏覽器不支援直接分享 CSV 檔案。請改用支援檔案分享的瀏覽器或裝置。'
         )
         return
       }
 
-      setLineText(
-        converted
-      )
+      await navigator.share({
+        files: [file],
+        title: file.name,
+      })
+    } catch (error: any) {
+      if (error?.name !== 'AbortError') {
+        alert(
+          'CSV 檔案分享失敗：' +
+            (error?.message || '請稍後再試')
+        )
+      }
     } finally {
-      event.target.value =
-        ''
+      event.target.value = ''
     }
-  }
-
-  async function copyLineText() {
-    if (!lineText.trim()) {
-      return
-    }
-
-    await navigator.clipboard.writeText(
-      lineText
-    )
-
-    alert(
-      '已複製 LINE 文字。'
-    )
-  }
-
-  function openLineShare() {
-    if (!lineText.trim()) {
-      return
-    }
-
-    const shareText =
-      lineText.length >
-      1800
-        ? lineText.slice(
-            0,
-            1800
-          ) +
-          '\n\n（名單較長，完整內容請用「複製 LINE 文字」貼上）'
-        : lineText
-
-    window.open(
-      `https://line.me/R/msg/text/?${encodeURIComponent(
-        shareText
-      )}`,
-      '_blank',
-      'noopener,noreferrer'
-    )
   }
 
   return (
@@ -656,7 +457,7 @@ export default function SmsListPage() {
           <div
             className="muted"
           >
-            系統直接依最新舊系統匯入資料的到期日，列出未來 20 天內即將到期名單；不需要再選月份。
+            系統直接抓取目前工作停車場的月租未繳資料；已退租與到期超過 4 個月的舊資料不列入。
           </div>
         </div>
 
@@ -680,20 +481,6 @@ export default function SmsListPage() {
             }
           >
             匯出 CSV
-          </button>
-
-          <button
-            type="button"
-            className="btn"
-            onClick={
-              currentRowsToLine
-            }
-            disabled={
-              filteredRows.length ===
-              0
-            }
-          >
-            目前名單轉 LINE
           </button>
 
           <button
@@ -771,7 +558,7 @@ export default function SmsListPage() {
           <div
             className="muted"
           >
-            自動提醒範圍
+            名單條件
           </div>
 
           <strong
@@ -780,7 +567,7 @@ export default function SmsListPage() {
                 22,
             }}
           >
-            今天起 20 天內到期
+            月租未繳
           </strong>
         </div>
 
@@ -898,7 +685,7 @@ export default function SmsListPage() {
                 20,
             }}
           >
-            目前沒有未來 20 天內到期的月租戶。
+            目前沒有月租未繳資料。
           </div>
         ) : (
           <table
@@ -920,9 +707,9 @@ export default function SmsListPage() {
                 <th>車牌</th>
                 <th>類型</th>
                 <th>金額</th>
-                <th>到期日</th>
-                <th>剩餘</th>
-                <th>繳費週期</th>
+                <th>租期開始</th>
+                <th>租期到期</th>
+                <th>繳費狀態</th>
               </tr>
             </thead>
 
@@ -975,28 +762,26 @@ export default function SmsListPage() {
                       ).toLocaleString()}
                     </td>
 
+                    <td>
+                      {row.start_date || '-'}
+                    </td>
+
                     <td
                       style={{
                         fontWeight:
                           700,
                       }}
                     >
-                      {
-                        row.due_date
-                      }
+                      {row.end_date || '-'}
                     </td>
 
-                    <td>
-                      {row.days_remaining ===
-                      0
-                        ? '今天'
-                        : `${row.days_remaining} 天`}
-                    </td>
-
-                    <td>
-                      {row.cycle_months
-                        ? `${row.cycle_months} 個月`
-                        : '尚待辨識'}
+                    <td
+                      style={{
+                        color: '#dc2626',
+                        fontWeight: 700,
+                      }}
+                    >
+                      未繳
                     </td>
                   </tr>
                 )
@@ -1006,97 +791,6 @@ export default function SmsListPage() {
         )}
       </div>
 
-      {lineText && (
-        <div
-          className="card"
-          style={{
-            marginTop:
-              16,
-          }}
-        >
-          <h2
-            style={{
-              marginTop:
-                0,
-            }}
-          >
-            LINE 傳送內容
-          </h2>
-
-          <div
-            className="muted"
-            style={{
-              marginBottom:
-                10,
-            }}
-          >
-            可以由目前到期名單產生，也可以上傳 CSV 轉成 LINE 文字。
-          </div>
-
-          <textarea
-            value={
-              lineText
-            }
-            onChange={(
-              event
-            ) =>
-              setLineText(
-                event.target.value
-              )
-            }
-            rows={12}
-            style={{
-              width:
-                '100%',
-              resize:
-                'vertical',
-            }}
-          />
-
-          <div
-            style={{
-              display:
-                'flex',
-              gap: 8,
-              flexWrap:
-                'wrap',
-              marginTop:
-                10,
-            }}
-          >
-            <button
-              type="button"
-              className="btn"
-              onClick={
-                copyLineText
-              }
-            >
-              複製 LINE 文字
-            </button>
-
-            <button
-              type="button"
-              className="btn"
-              onClick={
-                openLineShare
-              }
-            >
-              開啟 LINE 分享
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                setLineText(
-                  ''
-                )
-              }
-            >
-              清除
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
