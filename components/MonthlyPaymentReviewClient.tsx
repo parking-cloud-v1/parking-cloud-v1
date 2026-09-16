@@ -60,7 +60,23 @@ export default function MonthlyPaymentReviewClient() {
     }
 
     const rentalMap = new Map(rentals.map((r: any) => [r.id, r]))
-    setRows((reviews || []).map((r: any) => ({ ...r, ...(rentalMap.get(r.monthly_rental_id) || {}) })))
+
+    /*
+     * 重要：
+     * rental.id 是 monthly_rentals.id，
+     * review.id 才是 monthly_payment_reviews.id。
+     *
+     * 舊版把 rental spread 在 review 後面，導致 review.id 被 rental.id 覆蓋，
+     * 按鈕送到 API 的 reviewId 因此錯誤，API 會回「找不到待確認付款」。
+     *
+     * 這裡改成 rental 在前、review 在後，保留 review.id。
+     */
+    setRows(
+      (reviews || []).map((review: any) => ({
+        ...(rentalMap.get(review.monthly_rental_id) || {}),
+        ...review,
+      }))
+    )
     setLoading(false)
   }
 
