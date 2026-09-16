@@ -8,6 +8,8 @@ export type MonthlyTypeRule = {
   is_active?: unknown
 }
 
+export const DEFAULT_ALLOWED_PAYMENT_MONTHS = [1, 2] as const
+
 function safeText(value: unknown, max = 500) {
   return String(value ?? '').trim().slice(0, max)
 }
@@ -39,6 +41,18 @@ function ruleMonthlyFee(rule: MonthlyTypeRule) {
   if (amounts.length) return Math.min(...amounts)
 
   return positiveNumber(rule.base_monthly_fee)
+}
+
+function normalizeAllowedMonths(values: readonly number[]) {
+  const normalized = [...new Set(
+    values
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0),
+  )].sort((a, b) => a - b)
+
+  return normalized.length
+    ? normalized
+    : [...DEFAULT_ALLOWED_PAYMENT_MONTHS]
 }
 
 export function resolveStandardMonthlyFee(
@@ -73,6 +87,7 @@ export function resolveStandardMonthlyFee(
 export function paymentAmountNeedsReview(
   amountPaid: unknown,
   standardMonthlyFee: unknown,
+  allowedMonths: readonly number[] = DEFAULT_ALLOWED_PAYMENT_MONTHS,
 ) {
   const amount = Number(amountPaid ?? 0)
   const monthlyFee = Number(standardMonthlyFee ?? 0)
@@ -81,13 +96,15 @@ export function paymentAmountNeedsReview(
   if (!Number.isFinite(monthlyFee) || monthlyFee <= 0) return true
 
   const months = amount / monthlyFee
-  return Math.abs(months - Math.round(months)) > 1e-9
+  if (!Number.isInteger(months) || months <= 0) return true
+
+  return !normalizeAllowedMonths(allowedMonths).includes(months)
 }
 
 export type PaymentRuleResolution =
   | {
       kind: 'matched'
-      method: 'amount_unique' | 'amount_type_hint'
+      method: 'amount_unique'
       matchedType: string
       standardMonthlyFee: number
       months: number
@@ -126,18 +143,16 @@ type LogicalCandidate = {
   priority: number
 }
 
-function isPositiveInteger(value: number) {
-  return Number.isFinite(value) && value > 0 && Math.abs(value - Math.round(value)) <= 1e-9
-}
-
 export function resolvePaymentRuleByAmount(
   rental: {
     parkingLotId?: unknown
+    // 保留欄位是為了相容既有呼叫端；正式自動辨識不使用舊類型文字當條件。
     rentalType?: unknown
     vehicleType?: unknown
   },
   amountPaid: unknown,
   rules: MonthlyTypeRule[],
+  allowedMonths: readonly number[] = DEFAULT_ALLOWED_PAYMENT_MONTHS,
 ): PaymentRuleResolution {
   const amount = Number(amountPaid ?? 0)
   if (!Number.isFinite(amount) || amount <= 0) {
@@ -153,8 +168,7 @@ export function resolvePaymentRuleByAmount(
 
   const parkingLotId = safeText(rental.parkingLotId, 80)
   const vehicleType = normalizeVehicleType(rental.vehicleType)
-  const rentalType = safeText(rental.rentalType, 100).toLowerCase()
-
+  const allowed = new Set(normalizeAllowedMonths(allowedMonths))
   const logicalCandidates = new Map<string, LogicalCandidate>()
 
   for (const rule of rules) {
@@ -169,16 +183,19 @@ export function resolvePaymentRuleByAmount(
     const fee = ruleMonthlyFee(rule)
     if (fee <= 0) continue
 
-    const months = amount / fee
-    if (!isPositiveInteger(months)) continue
+    const rawMonths = amount / fee
+    if (!Number.isInteger(rawMonths) || rawMonths <= 0) continue
+
+    const months = Math.round(rawMonths)
+    if (!allowed.has(months)) continue
 
     const priority = Number(rule.priority ?? 100)
-    const key = `${normalizedType}|${fee}`
+    const key = `${normalizedType}|${fee}|${months}`
     const next: LogicalCandidate = {
       normalizedType,
       typeName,
       fee,
-      months: Math.round(months),
+      months,
       priority: Number.isFinite(priority) ? priority : 100,
     }
 
@@ -189,7 +206,11 @@ export function resolvePaymentRuleByAmount(
   }
 
   const candidates = [...logicalCandidates.values()].sort(
-    (a, b) => a.priority - b.priority || a.typeName.localeCompare(b.typeName) || a.fee - b.fee,
+    (a, b) =>
+      a.priority - b.priority ||
+      a.typeName.localeCompare(b.typeName) ||
+      a.months - b.months ||
+      a.fee - b.fee,
   )
 
   if (candidates.length === 0) {
@@ -215,21 +236,8 @@ export function resolvePaymentRuleByAmount(
     }
   }
 
-  if (rentalType) {
-    const hinted = candidates.filter((candidate) => candidate.normalizedType === rentalType)
-    if (hinted.length === 1) {
-      const selected = hinted[0]
-      return {
-        kind: 'matched',
-        method: 'amount_type_hint',
-        matchedType: selected.typeName,
-        standardMonthlyFee: selected.fee,
-        months: selected.months,
-        candidateCount: candidates.length,
-      }
-    }
-  }
-
+  // 金額是正式主條件。舊 rental_type、現場備註、匯入文字僅供顯示參考，
+  // 不拿來排除多候選，避免舊文字資料反過來影響正式付款身分判斷。
   return {
     kind: 'ambiguous',
     method: 'amount_ambiguous',

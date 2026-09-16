@@ -152,13 +152,12 @@ export async function POST(request: NextRequest) {
       const paymentSource = 'payment_csv'
       const sourceReference = suppliedSourceReference
 
-      // 金額優先辨識：先在同停車場＋同車種的啟用規則中，
-      // 找出「實收 ÷ 單月標準費」為正整數的候選。
-      // 唯一候選直接採用；多候選時才用既有 rental_type 當第二層提示。
+      // 金額主判斷：只在同停車場＋同車種的啟用規則中比對。
+      // 目前正式付款只允許 1 個月或 2 個月；3 個月以上的數學整除不列入候選。
+      // 舊 rental_type、現場備註與匯入文字都只供參考，不參與自動排除候選。
       const resolution = resolvePaymentRuleByAmount(
         {
           parkingLotId: rental.parking_lot_id,
-          rentalType: rental.rental_type,
           vehicleType: rental.vehicle_type,
         },
         amountPaid,
@@ -170,8 +169,8 @@ export async function POST(request: NextRequest) {
           : 0
       const amountDecision = classifyPaymentAmount(amountPaid, standardMonthlyFee)
 
-      // 金額已能唯一辨識身分時，同步正規化 rental_type。
-      // 這不會在歧義情況下猜測；ambiguous/no_match 仍進待確認。
+      // 金額在 1／2 個月限制下唯一辨識身分時，同步正規化 rental_type。
+      // 歧義時不使用舊類型或備註猜測；ambiguous/no_match 仍進待確認。
       if (resolution.kind === 'matched') {
         const currentType = safeText(rental.rental_type, 100).toLowerCase()
         const resolvedType = safeText(resolution.matchedType, 100)

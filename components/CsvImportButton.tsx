@@ -1939,8 +1939,9 @@ async function readFiles(
        * 3. 抓取本系統月租類型設定
        * =================================================
        *
-       * 預覽與正式同步必須使用同一個「單月標準費」來源：
-       * 停車場 + 月租類型 + 車種 -> monthly_rental_type_rules。
+       * 預覽與正式同步必須使用同一套「金額主判斷」：
+       * 同停車場 + 同車種 -> 逐一測試本系統月租類型單月費。
+       * 目前正式付款只接受 1 個月或 2 個月；舊月租類型／現場文字僅供參考。
        * 不再拿 monthly_rentals.monthly_fee 當作單月費。
        */
 
@@ -2217,8 +2218,6 @@ async function readFiles(
           resolvePaymentRuleByAmount(
             {
               parkingLotId: lot.id,
-              rentalType:
-                rental.rental_type,
               vehicleType:
                 rental.vehicle_type,
             },
@@ -2290,8 +2289,8 @@ async function readFiles(
               : ruleResolution.kind === 'zero_amount'
                 ? '0 元付款，待確認'
                 : ruleResolution.kind === 'ambiguous'
-                  ? `實收金額可對應 ${ruleResolution.candidateCount} 種月租條件，需用既有類型或人工確認`
-                  : '同停車場／同車種中找不到可由實收金額整數辨識的月租條件，待確認',
+                  ? `實收金額在 1／2 個月規則內仍可對應 ${ruleResolution.candidateCount} 種月租條件，需人工確認`
+                  : '同停車場／同車種中找不到符合 1／2 個月付款的月租條件，待確認',
         }
 
         matchedRow.sourceReference =
