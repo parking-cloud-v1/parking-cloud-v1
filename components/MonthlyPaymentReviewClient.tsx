@@ -60,38 +60,22 @@ export default function MonthlyPaymentReviewClient() {
     }
 
     const rentalMap = new Map(rentals.map((r: any) => [r.id, r]))
-
-    /*
-     * 重要：
-     * rental.id 是 monthly_rentals.id，
-     * review.id 才是 monthly_payment_reviews.id。
-     *
-     * 舊版把 rental spread 在 review 後面，導致 review.id 被 rental.id 覆蓋，
-     * 按鈕送到 API 的 reviewId 因此錯誤，API 會回「找不到待確認付款」。
-     *
-     * 這裡改成 rental 在前、review 在後，保留 review.id。
-     */
-    setRows(
-      (reviews || []).map((review: any) => ({
-        ...(rentalMap.get(review.monthly_rental_id) || {}),
-        ...review,
-      }))
-    )
+    setRows((reviews || []).map((r: any) => ({ ...r, ...(rentalMap.get(r.monthly_rental_id) || {}) })))
     setLoading(false)
   }
 
   useEffect(() => { void load() }, [])
 
-  async function resolve(review: Review, action: 'approve' | 'refund_repay') {
-    let approvedMonths = 0
+  async function resolve(
+    review: Review,
+    action: 'approve' | 'refund_repay',
+    approvedMonths = 0,
+  ) {
     let notes = ''
 
     if (action === 'approve') {
-      const value = window.prompt('確認這筆要算幾個月？請輸入 1～24', '1')
-      if (value === null) return
-      approvedMonths = Number(value)
-      if (!Number.isInteger(approvedMonths) || approvedMonths <= 0 || approvedMonths > 24) {
-        setMessage('月數必須是 1～24 的整數。')
+      if (![1, 2].includes(approvedMonths)) {
+        setMessage('請使用「確認 1 個月」或「確認 2 個月」。')
         return
       }
       notes = window.prompt('備註（可留空）', '') || ''
@@ -123,7 +107,7 @@ export default function MonthlyPaymentReviewClient() {
     <div>
       <div className="card">
         <h1 style={{ marginTop: 0 }}>月租付款待確認</h1>
-        <p className="muted">只有 0 元、非整數倍金額，或尚未設定本系統租期的付款會進到這裡。確認以前不延長租期。</p>
+        <p className="muted">待確認會保留正式繳費報表的原始實收金額；管理員只需確認這筆算 1 個月或 2 個月，原始金額不會被改寫。確認以前不延長租期。</p>
       </div>
 
       {message && <div className="card" style={{ marginTop: 16 }}>{message}</div>}
@@ -142,7 +126,8 @@ export default function MonthlyPaymentReviewClient() {
                   <td style={{ padding: 8 }}>{reasonText(row.reason)}</td>
                   <td style={{ padding: 8 }}>{row.paid_through_date || '-'}</td>
                   <td style={{ padding: 8, whiteSpace: 'nowrap' }}>
-                    <button type="button" disabled={busyId === row.id} onClick={() => void resolve(row, 'approve')}>確認已繳</button>{' '}
+                    <button type="button" disabled={busyId === row.id} onClick={() => void resolve(row, 'approve', 1)}>確認 1 個月</button>{' '}
+                    <button type="button" disabled={busyId === row.id} onClick={() => void resolve(row, 'approve', 2)}>確認 2 個月</button>{' '}
                     <button type="button" disabled={busyId === row.id} onClick={() => void resolve(row, 'refund_repay')}>退款／需重繳</button>
                   </td>
                 </tr>

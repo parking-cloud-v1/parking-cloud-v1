@@ -171,7 +171,6 @@ export function isWithinOperationalWindow({
 export function getNextCoverageStartDate({
   currentPaidThroughDate,
   termStartDate,
-  paymentDate,
 }: {
   currentPaidThroughDate?: string | null
   termStartDate: string
@@ -181,12 +180,13 @@ export function getNextCoverageStartDate({
   if (!termStart) return ''
 
   const currentPaidThrough = parseDateOnly(currentPaidThroughDate)
-  const paidAt = parseDateOnly(paymentDate)
+
+  // 付款日只記錄實際收款時間，不決定應套用哪一期。
+  // 有既有已繳至日期時，永遠從下一個共同週期接續；
+  // 尚無已繳基準時，才從正式租期第一個共同週期開始。
   const targetStart = currentPaidThrough && currentPaidThrough.getTime() >= termStart.getTime()
     ? addDays(currentPaidThrough, 1)
-    : paidAt && paidAt.getTime() >= termStart.getTime()
-      ? paidAt
-      : termStart
+    : termStart
 
   return formatDateOnly(sharedCycleStartOnOrAfter(termStart, targetStart))
 }
@@ -195,7 +195,6 @@ export function nextPaidThroughDate({
   currentPaidThroughDate,
   termStartDate,
   termEndDate,
-  paymentDate,
   months,
 }: {
   currentPaidThroughDate?: string | null
@@ -208,12 +207,11 @@ export function nextPaidThroughDate({
   if (!termStart || !Number.isFinite(months) || months <= 0 || !Number.isInteger(months)) return ''
 
   const currentPaidThrough = parseDateOnly(currentPaidThroughDate)
-  const paidAt = parseDateOnly(paymentDate)
+
+  // 不用付款日跳月份：提前繳或遲繳都只從目前最早未繳期接續。
   const targetStart = currentPaidThrough && currentPaidThrough.getTime() >= termStart.getTime()
     ? addDays(currentPaidThrough, 1)
-    : paidAt && paidAt.getTime() >= termStart.getTime()
-      ? paidAt
-      : termStart
+    : termStart
   const nextStart = sharedCycleStartOnOrAfter(termStart, targetStart)
   const startIndex = Math.max(0, calendarMonthDistance(termStart, nextStart))
 
