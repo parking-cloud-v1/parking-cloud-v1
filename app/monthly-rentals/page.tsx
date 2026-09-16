@@ -12,6 +12,7 @@ import {
   getMonthlyBillingState,
   isWithinOperationalWindow,
 } from '@/lib/monthly-rental-cycle'
+import { buildAppliedPaymentAmountMap } from '@/lib/monthly-rental-payment-summary'
 import ui from '@/components/PlatformAdmin.module.css'
 
 function formatRentalPeriod(
@@ -359,33 +360,20 @@ export default async function MonthlyRentalsPage({
   } =
     await query
 
-  /*
-   * 畫面上的「金額」改顯示正式繳費報表最近一筆實收，
-   * 不再拿 monthly_fee（標準單月費）冒充實收金額。
-   * pending_review 也保留原始實收，方便管理員人工確認 1／2 個月。
-   */
-  const latestPaymentByRentalId = new Map<string, any>()
   const rentalIds = (rentals || [])
     .map((item: any) => String(item.id || '').trim())
     .filter(Boolean)
 
-  if (rentalIds.length) {
-    const { data: paymentRows, error: paymentRowsError } = await supabase
-      .from('monthly_payments')
-      .select('monthly_rental_id,amount,payment_date,cycle_application_status,created_at')
-      .in('monthly_rental_id', rentalIds)
-      .in('cycle_application_status', ['applied', 'pending_review'])
-      .order('payment_date', { ascending: false, nullsFirst: false })
-      .order('created_at', { ascending: false })
+  let appliedPaymentAmountMap = new Map<string, number>()
 
-    if (!paymentRowsError) {
-      for (const paymentRow of paymentRows || []) {
-        const key = String((paymentRow as any).monthly_rental_id || '')
-        if (key && !latestPaymentByRentalId.has(key)) {
-          latestPaymentByRentalId.set(key, paymentRow)
-        }
-      }
-    }
+  if (rentalIds.length) {
+    const { data: appliedPayments } = await supabase
+      .from('monthly_payments')
+      .select('monthly_rental_id,amount,cycle_application_status')
+      .in('monthly_rental_id', rentalIds)
+      .eq('cycle_application_status', 'applied')
+
+    appliedPaymentAmountMap = buildAppliedPaymentAmountMap(appliedPayments || [])
   }
 
   /*
@@ -412,15 +400,12 @@ export default async function MonthlyRentalsPage({
         reminderDays: 15,
       })
 
-      const latestPayment = latestPaymentByRentalId.get(String(item.id || ''))
-
       return {
         ...item,
         _stored_payment_status: item.payment_status,
         payment_status: billing.status,
         _billing_state: billing,
-        _latest_payment_amount: latestPayment?.amount ?? null,
-        _latest_payment_date: latestPayment?.payment_date || null,
+        _actual_applied_amount: appliedPaymentAmountMap.get(String(item.id)) || 0,
       }
     })
 
@@ -507,14 +492,10 @@ export default async function MonthlyRentalsPage({
 
         monthly_fee:
           Number(
+            item._actual_applied_amount ||
             item.monthly_fee ||
             0
           ),
-
-        actual_payment_amount:
-          item._latest_payment_amount == null
-            ? ''
-            : Number(item._latest_payment_amount),
 
         payment_status:
           item.payment_status ||
@@ -525,7 +506,6 @@ export default async function MonthlyRentalsPage({
           '',
 
         payment_date:
-          item._latest_payment_date ||
           item.payment_date ||
           '',
 
@@ -1612,9 +1592,12 @@ export default async function MonthlyRentalsPage({
                               700,
                           }}
                         >
-                          {item._latest_payment_amount == null
-                            ? '-'
-                            : `$${Number(item._latest_payment_amount).toLocaleString()}`}
+                          $
+                          {Number(
+                            item._actual_applied_amount ||
+                            item.monthly_fee ||
+                            0
+                          ).toLocaleString()}
                         </td>
 
                         {/* 付款 */}
@@ -1647,7 +1630,7 @@ export default async function MonthlyRentalsPage({
                                 已繳
                               </div>
 
-                              {(item._latest_payment_date || item.payment_date) && (
+                              {item.payment_date && (
                                 <div
                                   style={{
                                     fontSize: 13,
@@ -1657,7 +1640,7 @@ export default async function MonthlyRentalsPage({
                                     fontWeight: 500,
                                   }}
                                 >
-                                  {item._latest_payment_date || item.payment_date}
+                                  {item.payment_date}
                                 </div>
                               )}
                             </div>
