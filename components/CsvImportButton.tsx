@@ -3,8 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
-  paymentAmountNeedsReview,
-  resolveStandardMonthlyFee,
+  resolvePaymentRuleByAmount,
   type MonthlyTypeRule,
 } from '@/lib/monthly-payment-preview'
 
@@ -49,6 +48,10 @@ type PaymentRow = {
   phone?: string
   monthlyFee?: number
   standardMonthlyFee?: number
+  resolvedRentalType?: string
+  resolvedMonths?: number
+  ruleMatchMethod?: string
+  ruleCandidateCount?: number
 
   rentalStartDate?: string
   rentalEndDate?: string
@@ -83,9 +86,13 @@ function numberValue(value: any) {
 
 
 function paymentNeedsReview(row: PaymentRow) {
-  return paymentAmountNeedsReview(
-    row.amountPaid,
-    row.standardMonthlyFee,
+  if (!Number.isFinite(Number(row.amountPaid)) || Number(row.amountPaid) <= 0) {
+    return true
+  }
+
+  return !(
+    Number(row.standardMonthlyFee || 0) > 0 &&
+    Number(row.resolvedMonths || 0) > 0
   )
 }
 
@@ -2206,8 +2213,8 @@ async function readFiles(
           continue
         }
 
-        const standardMonthlyFee =
-          resolveStandardMonthlyFee(
+        const ruleResolution =
+          resolvePaymentRuleByAmount(
             {
               parkingLotId: lot.id,
               rentalType:
@@ -2215,8 +2222,14 @@ async function readFiles(
               vehicleType:
                 rental.vehicle_type,
             },
+            row.amountPaid,
             typeRules,
           )
+
+        const standardMonthlyFee =
+          ruleResolution.kind === 'matched'
+            ? ruleResolution.standardMonthlyFee
+            : 0
 
         const matchedRow:
           PaymentRow = {
@@ -2245,6 +2258,22 @@ async function readFiles(
 
           standardMonthlyFee,
 
+          resolvedRentalType:
+            ruleResolution.kind === 'matched'
+              ? ruleResolution.matchedType
+              : '',
+
+          resolvedMonths:
+            ruleResolution.kind === 'matched'
+              ? ruleResolution.months
+              : 0,
+
+          ruleMatchMethod:
+            ruleResolution.method,
+
+          ruleCandidateCount:
+            ruleResolution.candidateCount,
+
           rentalStartDate:
             rental.start_date ||
             '',
@@ -2256,16 +2285,13 @@ async function readFiles(
           matched: true,
 
           message:
-            paymentAmountNeedsReview(
-              row.amountPaid,
-              standardMonthlyFee,
-            )
-              ? row.amountPaid <= 0
+            ruleResolution.kind === 'matched'
+              ? `可同步（${ruleResolution.matchedType}／單月 $${ruleResolution.standardMonthlyFee.toLocaleString()}／${ruleResolution.months} 個月）`
+              : ruleResolution.kind === 'zero_amount'
                 ? '0 元付款，待確認'
-                : standardMonthlyFee > 0
-                  ? `實收非系統單月標準費 $${standardMonthlyFee.toLocaleString()} 的整數倍，待確認`
-                  : '找不到本系統對應的單月標準費，待確認'
-              : `可同步（系統單月標準費 $${standardMonthlyFee.toLocaleString()}）`,
+                : ruleResolution.kind === 'ambiguous'
+                  ? `實收金額可對應 ${ruleResolution.candidateCount} 種月租條件，需用既有類型或人工確認`
+                  : '同停車場／同車種中找不到可由實收金額整數辨識的月租條件，待確認',
         }
 
         matchedRow.sourceReference =

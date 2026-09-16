@@ -6,6 +6,10 @@ import {
   getNextCoverageStartDate,
   nextPaidThroughDate,
 } from '@/lib/monthly-rental-cycle'
+import {
+  resolvePaymentRuleByAmount,
+  type MonthlyTypeRule,
+} from '@/lib/monthly-payment-preview'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -46,61 +50,6 @@ function validDate(value: unknown) {
 
 function safeText(value: unknown, max = 500) {
   return String(value || '').trim().slice(0, max)
-}
-
-type MonthlyTypeRule = {
-  parking_lot_id?: unknown
-  type_name?: unknown
-  vehicle_type?: unknown
-  match_amounts?: unknown
-  base_monthly_fee?: unknown
-  priority?: unknown
-  is_active?: unknown
-}
-
-function normalizeVehicleType(value: unknown) {
-  const v = safeText(value, 50).toLowerCase()
-  if (['car', '汽車'].includes(v)) return 'car'
-  if (['motorcycle', '機車'].includes(v)) return 'motorcycle'
-  if (['heavy_motorcycle', '重機'].includes(v)) return 'heavy_motorcycle'
-  return v
-}
-
-function ruleAmounts(value: unknown) {
-  return safeText(value, 500)
-    .split(/[,，;；\s]+/)
-    .map((item) => Number(item.replace(/[^0-9.]/g, '')))
-    .filter((amount) => Number.isFinite(amount) && amount > 0)
-}
-
-function positiveNumber(value: unknown) {
-  const number = Number(value)
-  return Number.isFinite(number) && number > 0 ? number : 0
-}
-
-function ruleMonthlyFee(rule: MonthlyTypeRule) {
-  // 2026-09-16 正式規則仍以 match_amounts 的最小正數作單月標準費。
-  // base_monthly_fee 僅作舊/過渡資料表結構的相容備援。
-  const amounts = ruleAmounts(rule.match_amounts)
-  if (amounts.length) return Math.min(...amounts)
-  return positiveNumber(rule.base_monthly_fee)
-}
-
-function resolveStandardMonthlyFee(rental: any, rules: MonthlyTypeRule[]) {
-  const rentalType = safeText(rental?.rental_type, 100).toLowerCase()
-  const vehicleType = normalizeVehicleType(rental?.vehicle_type)
-
-  const candidates = rules
-    .filter((rule) => rule?.is_active !== false)
-    .filter((rule) =>
-      safeText(rule.parking_lot_id, 80) === safeText(rental?.parking_lot_id, 80) &&
-      safeText(rule.type_name, 100).toLowerCase() === rentalType &&
-      normalizeVehicleType(rule.vehicle_type) === vehicleType
-    )
-    .sort((a, b) => Number(a.priority ?? 100) - Number(b.priority ?? 100))
-
-  const selected = candidates[0]
-  return selected ? ruleMonthlyFee(selected) : 0
 }
 
 export async function POST(request: NextRequest) {
@@ -203,11 +152,49 @@ export async function POST(request: NextRequest) {
       const paymentSource = 'payment_csv'
       const sourceReference = suppliedSourceReference
 
-      // 付款月數的除數只能使用本系統「月租類型設定」的單月標準費。
-      // monthly_rentals.monthly_fee 可能是舊總表當期應收總額（例如 2 個月 4,800），
-      // 不能再直接拿來當成單月費，否則 4,800 / 4,800 會被誤算成 1 個月。
-      const standardMonthlyFee = resolveStandardMonthlyFee(rental, typeRules)
+      // 金額優先辨識：先在同停車場＋同車種的啟用規則中，
+      // 找出「實收 ÷ 單月標準費」為正整數的候選。
+      // 唯一候選直接採用；多候選時才用既有 rental_type 當第二層提示。
+      const resolution = resolvePaymentRuleByAmount(
+        {
+          parkingLotId: rental.parking_lot_id,
+          rentalType: rental.rental_type,
+          vehicleType: rental.vehicle_type,
+        },
+        amountPaid,
+        typeRules,
+      )
+      const standardMonthlyFee =
+        resolution.kind === 'matched'
+          ? resolution.standardMonthlyFee
+          : 0
       const amountDecision = classifyPaymentAmount(amountPaid, standardMonthlyFee)
+
+      // 金額已能唯一辨識身分時，同步正規化 rental_type。
+      // 這不會在歧義情況下猜測；ambiguous/no_match 仍進待確認。
+      if (resolution.kind === 'matched') {
+        const currentType = safeText(rental.rental_type, 100).toLowerCase()
+        const resolvedType = safeText(resolution.matchedType, 100)
+        if (resolvedType && currentType !== resolvedType.toLowerCase()) {
+          const { error: typeUpdateError } = await admin
+            .from('monthly_rentals')
+            .update({
+              rental_type: resolvedType,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', rentalId)
+
+          if (typeUpdateError) {
+            console.error('[monthly-payment-sync] rental type normalize failed', {
+              rentalId,
+              resolutionMethod: resolution.method,
+              message: typeUpdateError.message,
+            })
+          } else {
+            rental.rental_type = resolvedType
+          }
+        }
+      }
       const missingSystemTerm = !rental.system_term_id || !rental.system_cycle_start_date || !rental.system_cycle_end_date
 
       let reviewReason: ReviewReason | null = missingSystemTerm
