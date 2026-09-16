@@ -372,7 +372,7 @@ export default async function MonthlyRentalsPage({
       isWithinOperationalWindow({
         today: todayText,
         paidThroughDate: item.paid_through_date,
-        months: 4,
+        months: 3,
       })
     )
     .map((item: any) => {

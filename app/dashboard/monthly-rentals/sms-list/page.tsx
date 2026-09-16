@@ -120,7 +120,7 @@ export default function SmsListPage() {
           isWithinOperationalWindow({
             today: todayText,
             paidThroughDate: row.paid_through_date,
-            months: 4,
+            months: 3,
           })
         )
         .map((row) => {

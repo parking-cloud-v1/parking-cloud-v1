@@ -198,12 +198,14 @@ export async function POST(request: NextRequest) {
         appliedFromDate = getNextCoverageStartDate({
           currentPaidThroughDate: rental.paid_through_date,
           termStartDate: rental.system_cycle_start_date,
+          paymentDate,
         })
 
         newPaidThroughDate = nextPaidThroughDate({
           currentPaidThroughDate: rental.paid_through_date,
           termStartDate: rental.system_cycle_start_date,
           termEndDate: rental.system_cycle_end_date,
+          paymentDate,
           months: amountDecision.months,
         })
 

@@ -16,6 +16,11 @@ function serviceClient() {
   return createAdminClient(url, key, { auth: { persistSession: false } })
 }
 
+function validDate(value: unknown) {
+  const text = String(value || '').trim()
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null
+}
+
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient()
@@ -44,7 +49,7 @@ export async function POST(request: NextRequest) {
 
     const { data: review, error: reviewError } = await supabase
       .from('monthly_payment_reviews')
-      .select('id,monthly_rental_id,status')
+      .select('id,monthly_rental_id,monthly_payment_id,status')
       .eq('id', reviewId)
       .maybeSingle()
 
@@ -66,6 +71,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '找不到對應月租戶。' }, { status: 404 })
     }
 
+    const admin = serviceClient()
+    let reviewPaymentDate: string | null = null
+
+    if (action === 'approve') {
+      if (!review.monthly_payment_id) {
+        return NextResponse.json({ error: '這筆待確認付款缺少正式付款紀錄，無法判斷應從哪個共同週期起算。' }, { status: 400 })
+      }
+
+      const { data: payment, error: paymentError } = await admin
+        .from('monthly_payments')
+        .select('payment_date')
+        .eq('id', review.monthly_payment_id)
+        .maybeSingle()
+
+      reviewPaymentDate = validDate(payment?.payment_date)
+
+      if (paymentError || !reviewPaymentDate) {
+        return NextResponse.json({ error: '找不到這筆正式付款的付款日期，無法判斷起算週期。' }, { status: 400 })
+      }
+    }
+
     let appliedFromDate: string | null = null
     let paidThroughDate: string | null = null
 
@@ -81,12 +107,14 @@ export async function POST(request: NextRequest) {
       appliedFromDate = getNextCoverageStartDate({
         currentPaidThroughDate: rental.paid_through_date,
         termStartDate: rental.system_cycle_start_date,
+        paymentDate: reviewPaymentDate,
       }) || null
 
       paidThroughDate = nextPaidThroughDate({
         currentPaidThroughDate: rental.paid_through_date,
         termStartDate: rental.system_cycle_start_date,
         termEndDate: rental.system_cycle_end_date,
+        paymentDate: reviewPaymentDate,
         months: approvedMonths,
       }) || null
 
@@ -97,7 +125,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const admin = serviceClient()
     const { data: resolved, error: resolveError } = await admin.rpc(
       'resolve_monthly_payment_review',
       {
