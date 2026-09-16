@@ -10,7 +10,6 @@ import CsvImportButton from '@/components/CsvImportButton'
 import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
 import {
   getMonthlyBillingState,
-  isWithinOperationalWindow,
 } from '@/lib/monthly-rental-cycle'
 import ui from '@/components/PlatformAdmin.module.css'
 
@@ -367,14 +366,11 @@ export default async function MonthlyRentalsPage({
 
   const todayText = new Date().toISOString().slice(0, 10)
 
+  /*
+   * 月租總表必須顯示所有未退租月租戶。
+   * 3 個月逾期規則只用於操作／簡訊名單，不可把 active 月租戶從總表隱藏。
+   */
   const enrichedRentals: any[] = (rentals || [])
-    .filter((item: any) =>
-      isWithinOperationalWindow({
-        today: todayText,
-        paidThroughDate: item.paid_through_date,
-        months: 3,
-      })
-    )
     .map((item: any) => {
       const billing = getMonthlyBillingState({
         today: todayText,
