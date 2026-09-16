@@ -138,20 +138,64 @@ type PreviewRow = {
 }
 
 /*
- * 舊月租總表的日期只保留作稽核，不參與是否匯入的判斷。
- * 月租金額為 0 的列不是正常月租戶，直接略過，不進預覽、比對或正式匯入。
+ * 舊月租總表只在「名冊匯入資格」使用舊 end_date：
+ * - 月租金額為 0：直接略過。
+ * - 舊總表 end_date 早於今天往前 3 個月：視為久未續租，直接略過。
+ * - 其他舊 start_date / end_date 仍只保留作稽核，不會控制本系統正式租期、
+ *   paid_through_date、付款狀態或簡訊名單。
  */
-function filterExpiredImportRows(
-  sourceRows: PreviewRow[]
+const IMPORT_EXPIRY_RETENTION_MONTHS = 3
+
+function importExpiryCutoffDateText(
+  today = new Date()
 ) {
-  const rows = sourceRows.filter(
-    (item) => Number(item.monthly_fee || 0) > 0
+  const cutoff = new Date(
+    today.getFullYear(),
+    today.getMonth() - IMPORT_EXPIRY_RETENTION_MONTHS,
+    today.getDate()
   )
+
+  return `${cutoff.getFullYear()}-${String(
+    cutoff.getMonth() + 1
+  ).padStart(2, '0')}-${String(
+    cutoff.getDate()
+  ).padStart(2, '0')}`
+}
+
+function filterExpiredImportRows(
+  sourceRows: PreviewRow[],
+  today = new Date()
+) {
+  const cutoff = importExpiryCutoffDateText(today)
+  let zeroExcludedCount = 0
+  let expiredExcludedCount = 0
+
+  const rows = sourceRows.filter((item) => {
+    if (Number(item.monthly_fee || 0) <= 0) {
+      zeroExcludedCount++
+      return false
+    }
+
+    const endDate = normalizeDate(
+      String(item.end_date || '')
+    )
+
+    if (endDate && endDate < cutoff) {
+      expiredExcludedCount++
+      return false
+    }
+
+    return true
+  })
 
   return {
     rows,
-    excludedCount: sourceRows.length - rows.length,
-    cutoff: '舊系統日期不參與；0 元資料略過',
+    excludedCount:
+      zeroExcludedCount +
+      expiredExcludedCount,
+    zeroExcludedCount,
+    expiredExcludedCount,
+    cutoff,
   }
 }
 
@@ -577,7 +621,7 @@ function rowRuleText(
 }
 
 function isActiveImportRow(row: PreviewRow) {
-  return row.valid && Number(row.monthly_fee || 0) > 0
+  return row.valid
 }
 
 function splitCsvLine(line: string) {
@@ -1755,7 +1799,7 @@ export default function LegacyMonthlyImport({
         setRows(rosterRows408)
 
         setMessage(
-          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，可匯入 ${rosterRows408.length} 筆，0 元略過 ${expiryFiltered408.excludedCount} 筆。舊開始日／結束日只留作稽核，不參與本系統到期日或簡訊判斷；月租金只作正式繳費報表換算月數的基準。`
+          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，可匯入 ${rosterRows408.length} 筆，0 元略過 ${expiryFiltered408.zeroExcludedCount} 筆，舊總表到期超過 3 個月略過 ${expiryFiltered408.expiredExcludedCount} 筆（分界 ${expiryFiltered408.cutoff}）。舊開始日／結束日除名冊首次匯入的 3 個月排除外，只留作稽核，不參與本系統正式到期日或簡訊判斷；月租金只作正式繳費報表換算月數的基準。`
         )
 
         return
@@ -1779,7 +1823,7 @@ export default function LegacyMonthlyImport({
       const invalid = rosterRows.length - valid
 
       setMessage(
-        `已辨識 ${rosterRows.length} 筆，可匯入 ${valid} 筆，0 元略過 ${expiryFiltered.excludedCount} 筆，格式異常 ${invalid} 筆；舊開始日／結束日只留作稽核，不參與本系統到期日或簡訊判斷；月租金只作正式繳費報表換算月數的基準。`
+        `已辨識 ${rosterRows.length} 筆，可匯入 ${valid} 筆，0 元略過 ${expiryFiltered.zeroExcludedCount} 筆，舊總表到期超過 3 個月略過 ${expiryFiltered.expiredExcludedCount} 筆（分界 ${expiryFiltered.cutoff}），格式異常 ${invalid} 筆；舊開始日／結束日除名冊首次匯入的 3 個月排除外，只留作稽核，不參與本系統正式到期日或簡訊判斷；月租金只作正式繳費報表換算月數的基準。`
       )
     } catch (
       error: any
@@ -1807,7 +1851,7 @@ export default function LegacyMonthlyImport({
       return
     }
 
-    const validRows = rows.filter(isActiveImportRow)
+    const validRows = rows.filter((item) => item.valid)
 
     if (!validRows.length) {
       alert('沒有可以比較的資料')
@@ -1892,7 +1936,7 @@ export default function LegacyMonthlyImport({
         })
 
         setMessage(
-          `目前沒有上一份總表，本次 ${validRows.length} 筆將建立為基準名單。0 元資料已略過；舊系統日期只保留作稽核，不參與本系統到期日或付款判斷。`
+          `目前沒有上一份總表，本次 ${validRows.length} 筆將建立為基準名單。舊系統日期與金額只保留在匯入稽核，不參與名冊資格或付款判斷。`
         )
 
         return
@@ -2261,7 +2305,7 @@ export default function LegacyMonthlyImport({
       return
     }
 
-    const validRows = rows.filter(isActiveImportRow)
+    const validRows = rows.filter((item) => item.valid)
 
     if (!validRows.length) {
       alert('沒有可以匯入的資料')
@@ -3901,19 +3945,18 @@ export default function LegacyMonthlyImport({
     }
   }
 
-  const importableRows = rows.filter(isActiveImportRow)
-
   const validCount =
-    importableRows.length
-
-  const invalidCount =
     rows.filter(
       (item) =>
-        !item.valid
+        item.valid
     ).length
 
-  const activeImportCount =
-    importableRows.length
+  const invalidCount =
+    rows.length -
+    validCount
+
+
+  const activeImportCount = rows.filter((item) => item.valid).length
 
   return (
     <div>
@@ -3927,7 +3970,7 @@ export default function LegacyMonthlyImport({
         </h2>
 
         <p className="muted">
-          先分析與上一份舊系統總表的差異，確認後才正式匯入。舊系統開始日／結束日只保留作稽核，不參與本系統到期日、付款狀態或簡訊判斷；正式租期仍以主管設定為準。舊月租總表的月租金只作為正式繳費報表換算月數的基準，金額為 0 元的資料會直接略過，不進入預覽、比對或正式匯入。只有「收款」或「繳費紀錄上傳」成功建立真正繳費紀錄後才會成為已繳。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
+          先分析與上一份舊系統總表的差異，確認後才正式匯入。名冊匯入時，舊總表月租金為 0 元的資料直接略過；舊總表到期日早於今天往前 3 個月的資料也直接略過，不進預覽、比對或正式匯入。其餘舊系統開始日／結束日只保留作稽核，正式租期仍以主管設定為準，不會被舊系統日期覆蓋，也不會改動本系統正式到期日、付款狀態或簡訊名單。只有「收款」或「繳費紀錄上傳」成功建立真正繳費紀錄後才會成為已繳；總表本身不建立繳費月份，也不直接判定已繳。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
         </p>
 
         <div
@@ -4021,7 +4064,7 @@ export default function LegacyMonthlyImport({
               : '選擇月票 CSV'}
           </button>
 
-          {importableRows.length >
+          {rows.length >
             0 && (
             <button
               type="button"
@@ -4062,7 +4105,7 @@ export default function LegacyMonthlyImport({
             </button>
           )}
 
-          {importableRows.length >
+          {rows.length >
             0 && (
             <button
               type="button"
@@ -4221,7 +4264,7 @@ export default function LegacyMonthlyImport({
               </thead>
 
               <tbody>
-                {importableRows
+                {rows
                   .slice(
                     0,
                     200
