@@ -2,6 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import {
+  paymentAmountNeedsReview,
+  resolveStandardMonthlyFee,
+  type MonthlyTypeRule,
+} from '@/lib/monthly-payment-preview'
 
 type ParkingLot = {
   id: string
@@ -43,6 +48,7 @@ type PaymentRow = {
   customerName?: string
   phone?: string
   monthlyFee?: number
+  standardMonthlyFee?: number
 
   rentalStartDate?: string
   rentalEndDate?: string
@@ -77,53 +83,10 @@ function numberValue(value: any) {
 
 
 function paymentNeedsReview(row: PaymentRow) {
-  const amount = Number(row.amountPaid || 0)
-  const monthlyFee = Number(row.monthlyFee || 0)
-  if (!Number.isFinite(amount) || amount <= 0) return true
-  if (!Number.isFinite(monthlyFee) || monthlyFee <= 0) return true
-  const months = amount / monthlyFee
-  return Math.abs(months - Math.round(months)) > 1e-9
-}
-
-type MonthlyTypeRule = {
-  parking_lot_id: string
-  type_name: string
-  vehicle_type: string
-  match_amounts: string
-  priority: number
-}
-
-function normalizeRuleVehicleType(value: any) {
-  const v = text(value).toLowerCase()
-  if (['car', '汽車'].includes(v)) return 'car'
-  if (['motorcycle', '機車'].includes(v)) return 'motorcycle'
-  if (['heavy_motorcycle', '重機'].includes(v)) return 'heavy_motorcycle'
-  return v
-}
-
-function parseRuleAmounts(value: any) {
-  return text(value)
-    .split(/[,，;；\s]+/)
-    .map((item) => Number(item.replace(/[^0-9.]/g, '')))
-    .filter((amount) => Number.isFinite(amount) && amount > 0)
-}
-
-function standardMonthlyFeeForRental(rental: any, rules: MonthlyTypeRule[]) {
-  const rentalType = text(rental?.rental_type).toLowerCase()
-  const vehicleType = normalizeRuleVehicleType(rental?.vehicle_type)
-  const candidates = rules
-    .filter((rule) =>
-      text(rule.parking_lot_id) === text(rental?.parking_lot_id) &&
-      text(rule.type_name).toLowerCase() === rentalType
-    )
-    .sort((a, b) => Number(a.priority || 100) - Number(b.priority || 100))
-  const vehicleMatched = candidates.filter(
-    (rule) => !vehicleType || normalizeRuleVehicleType(rule.vehicle_type) === vehicleType
+  return paymentAmountNeedsReview(
+    row.amountPaid,
+    row.standardMonthlyFee,
   )
-  const selected = vehicleMatched[0] || candidates[0]
-  if (!selected) return 0
-  const amounts = parseRuleAmounts(selected.match_amounts)
-  return amounts.length ? Math.min(...amounts) : 0
 }
 
 function toDate(value: string) {
@@ -1966,7 +1929,57 @@ async function readFiles(
 
       /*
        * =================================================
-       * 3. 抓取目前所有停車場月租資料
+       * 3. 抓取本系統月租類型設定
+       * =================================================
+       *
+       * 預覽與正式同步必須使用同一個「單月標準費」來源：
+       * 停車場 + 月租類型 + 車種 -> monthly_rental_type_rules。
+       * 不再拿 monthly_rentals.monthly_fee 當作單月費。
+       */
+
+      const lotIds =
+        parkingLots
+          .map((lot) => lot.id)
+          .filter(Boolean)
+
+      let typeRules:
+        MonthlyTypeRule[] = []
+
+      if (lotIds.length > 0) {
+        const {
+          data: typeRuleRows,
+          error: typeRuleError,
+        } =
+          await supabase
+            .from(
+              'monthly_rental_type_rules'
+            )
+            .select('*')
+            .in(
+              'parking_lot_id',
+              lotIds
+            )
+
+        if (typeRuleError) {
+          console.error(
+            '月租類型設定讀取失敗',
+            typeRuleError
+          )
+
+          setRows([])
+          setMessage(
+            `無法讀取本系統月租類型設定，已停止預覽付款月份（${typeRuleError.code || 'UNKNOWN'}：${typeRuleError.message}）。`
+          )
+          return
+        }
+
+        typeRules =
+          (typeRuleRows || []) as MonthlyTypeRule[]
+      }
+
+      /*
+       * =================================================
+       * 4. 抓取目前所有停車場月租資料
        * =================================================
        */
 
@@ -1974,12 +1987,6 @@ async function readFiles(
         new Map<
           string,
           any[]
-        >()
-
-      const typeRuleCache =
-        new Map<
-          string,
-          MonthlyTypeRule[]
         >()
 
       for (
@@ -1995,15 +2002,14 @@ async function readFiles(
             )
             .select(`
               id,
-              parking_lot_id,
               vehicle_plate,
-              vehicle_type,
-              rental_type,
 
               customer_code,
               customer_name,
               phone,
               monthly_fee,
+              rental_type,
+              vehicle_type,
 
               start_date,
               end_date,
@@ -2039,25 +2045,11 @@ async function readFiles(
             data || []
           )
         }
-
-        const { data: ruleData, error: ruleError } = await supabase
-          .from('monthly_rental_type_rules')
-          .select('parking_lot_id,type_name,vehicle_type,match_amounts,priority,is_active')
-          .eq('parking_lot_id', lot.id)
-          .eq('is_active', true)
-          .order('priority', { ascending: true })
-
-        if (ruleError) {
-          console.error('月租類型設定讀取失敗', lot.name, ruleError)
-          typeRuleCache.set(lot.id, [])
-        } else {
-          typeRuleCache.set(lot.id, (ruleData || []) as MonthlyTypeRule[])
-        }
       }
 
       /*
        * =================================================
-       * 4. 車牌及停車場比對
+       * 5. 車牌及停車場比對
        * =================================================
        */
 
@@ -2214,6 +2206,18 @@ async function readFiles(
           continue
         }
 
+        const standardMonthlyFee =
+          resolveStandardMonthlyFee(
+            {
+              parkingLotId: lot.id,
+              rentalType:
+                rental.rental_type,
+              vehicleType:
+                rental.vehicle_type,
+            },
+            typeRules,
+          )
+
         const matchedRow:
           PaymentRow = {
           ...row,
@@ -2236,13 +2240,10 @@ async function readFiles(
             rental.phone ||
             '',
 
-          // 預覽與後端同步都用「月租類型設定」的單月標準費。
-          // 舊總表 monthly_fee 可能是一整期總額，不可直接當單月費。
           monthlyFee:
-            standardMonthlyFeeForRental(
-              rental,
-              typeRuleCache.get(lot.id) || []
-            ),
+            Number(rental.monthly_fee || 0),
+
+          standardMonthlyFee,
 
           rentalStartDate:
             rental.start_date ||
@@ -2255,9 +2256,16 @@ async function readFiles(
           matched: true,
 
           message:
-            row.amountPaid > 0
-              ? '可同步'
-              : '0 元／異常金額待確認',
+            paymentAmountNeedsReview(
+              row.amountPaid,
+              standardMonthlyFee,
+            )
+              ? row.amountPaid <= 0
+                ? '0 元付款，待確認'
+                : standardMonthlyFee > 0
+                  ? `實收非系統單月標準費 $${standardMonthlyFee.toLocaleString()} 的整數倍，待確認`
+                  : '找不到本系統對應的單月標準費，待確認'
+              : `可同步（系統單月標準費 $${standardMonthlyFee.toLocaleString()}）`,
         }
 
         matchedRow.sourceReference =
@@ -2272,7 +2280,7 @@ async function readFiles(
 
       /*
        * =================================================
-       * 5. 檢查以前是否已經匯入過同一筆繳費
+       * 6. 檢查以前是否已經匯入過同一筆繳費
        * =================================================
        */
 
