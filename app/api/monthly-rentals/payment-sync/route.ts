@@ -48,6 +48,51 @@ function safeText(value: unknown, max = 500) {
   return String(value || '').trim().slice(0, max)
 }
 
+type MonthlyTypeRule = {
+  parking_lot_id: string
+  type_name: string
+  vehicle_type: string
+  match_amounts: string
+  priority: number
+}
+
+function normalizeVehicleType(value: unknown) {
+  const v = safeText(value, 50).toLowerCase()
+  if (['car', '汽車'].includes(v)) return 'car'
+  if (['motorcycle', '機車'].includes(v)) return 'motorcycle'
+  if (['heavy_motorcycle', '重機'].includes(v)) return 'heavy_motorcycle'
+  return v
+}
+
+function ruleAmounts(value: unknown) {
+  return safeText(value, 500)
+    .split(/[,，;；\s]+/)
+    .map((item) => Number(item.replace(/[^0-9.]/g, '')))
+    .filter((amount) => Number.isFinite(amount) && amount > 0)
+}
+
+function resolveStandardMonthlyFee(rental: any, rules: MonthlyTypeRule[]) {
+  const rentalType = safeText(rental?.rental_type, 100).toLowerCase()
+  const vehicleType = normalizeVehicleType(rental?.vehicle_type)
+
+  const candidates = rules
+    .filter((rule) =>
+      safeText(rule.parking_lot_id, 80) === safeText(rental?.parking_lot_id, 80) &&
+      safeText(rule.type_name, 100).toLowerCase() === rentalType
+    )
+    .sort((a, b) => Number(a.priority || 100) - Number(b.priority || 100))
+
+  const vehicleMatched = candidates.filter(
+    (rule) => !vehicleType || normalizeVehicleType(rule.vehicle_type) === vehicleType
+  )
+
+  const selected = vehicleMatched[0] || candidates[0]
+  if (!selected) return 0
+
+  const amounts = ruleAmounts(selected.match_amounts)
+  return amounts.length ? Math.min(...amounts) : 0
+}
+
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient()
@@ -68,7 +113,7 @@ export async function POST(request: NextRequest) {
       .from('monthly_rentals')
       .select(`
         id,parking_lot_id,customer_code,customer_name,phone,vehicle_plate,
-        rental_type,monthly_fee,payment_status,payment_date,invoice_number,
+        rental_type,vehicle_type,monthly_fee,payment_status,payment_date,invoice_number,
         system_term_id,system_cycle_start_date,system_cycle_end_date,
         paid_through_date,payment_review_status
       `)
@@ -81,6 +126,27 @@ export async function POST(request: NextRequest) {
 
     const allowed = new Map((allowedRows || []).map((r: any) => [String(r.id), r]))
     const admin = serviceClient()
+
+    const lotIds = [...new Set((allowedRows || [])
+      .map((r: any) => safeText(r.parking_lot_id, 80))
+      .filter(Boolean))]
+
+    let typeRules: MonthlyTypeRule[] = []
+    if (lotIds.length) {
+      const { data: rulesData, error: rulesError } = await admin
+        .from('monthly_rental_type_rules')
+        .select('parking_lot_id,type_name,vehicle_type,match_amounts,priority,is_active')
+        .in('parking_lot_id', lotIds)
+        .eq('is_active', true)
+        .order('priority', { ascending: true })
+
+      if (rulesError) {
+        console.error('[monthly-payment-sync] type rules read failed', rulesError.message)
+        return NextResponse.json({ error: '無法讀取本系統月租類型設定，已停止套用付款月份。' }, { status: 500 })
+      }
+
+      typeRules = (rulesData || []) as MonthlyTypeRule[]
+    }
 
     let success = 0
     let failed = 0
@@ -112,7 +178,11 @@ export async function POST(request: NextRequest) {
       const paymentSource = 'payment_csv'
       const sourceReference = suppliedSourceReference
 
-      const amountDecision = classifyPaymentAmount(amountPaid, Number(rental.monthly_fee || 0))
+      // 付款月數的除數只能使用本系統「月租類型設定」的單月標準費。
+      // monthly_rentals.monthly_fee 可能是舊總表當期應收總額（例如 2 個月 4,800），
+      // 不能再直接拿來當成單月費，否則 4,800 / 4,800 會被誤算成 1 個月。
+      const standardMonthlyFee = resolveStandardMonthlyFee(rental, typeRules)
+      const amountDecision = classifyPaymentAmount(amountPaid, standardMonthlyFee)
       const missingSystemTerm = !rental.system_term_id || !rental.system_cycle_start_date || !rental.system_cycle_end_date
 
       let reviewReason: ReviewReason | null = missingSystemTerm
@@ -245,7 +315,7 @@ export async function POST(request: NextRequest) {
               monthly_payment_id: paymentHistoryId || null,
               source_reference: sourceReference,
               amount: amountPaid,
-              monthly_fee: Number(rental.monthly_fee || 0),
+              monthly_fee: standardMonthlyFee,
               reason: reviewReason,
               status: 'pending',
               created_by: user.id,

@@ -85,6 +85,47 @@ function paymentNeedsReview(row: PaymentRow) {
   return Math.abs(months - Math.round(months)) > 1e-9
 }
 
+type MonthlyTypeRule = {
+  parking_lot_id: string
+  type_name: string
+  vehicle_type: string
+  match_amounts: string
+  priority: number
+}
+
+function normalizeRuleVehicleType(value: any) {
+  const v = text(value).toLowerCase()
+  if (['car', '汽車'].includes(v)) return 'car'
+  if (['motorcycle', '機車'].includes(v)) return 'motorcycle'
+  if (['heavy_motorcycle', '重機'].includes(v)) return 'heavy_motorcycle'
+  return v
+}
+
+function parseRuleAmounts(value: any) {
+  return text(value)
+    .split(/[,，;；\s]+/)
+    .map((item) => Number(item.replace(/[^0-9.]/g, '')))
+    .filter((amount) => Number.isFinite(amount) && amount > 0)
+}
+
+function standardMonthlyFeeForRental(rental: any, rules: MonthlyTypeRule[]) {
+  const rentalType = text(rental?.rental_type).toLowerCase()
+  const vehicleType = normalizeRuleVehicleType(rental?.vehicle_type)
+  const candidates = rules
+    .filter((rule) =>
+      text(rule.parking_lot_id) === text(rental?.parking_lot_id) &&
+      text(rule.type_name).toLowerCase() === rentalType
+    )
+    .sort((a, b) => Number(a.priority || 100) - Number(b.priority || 100))
+  const vehicleMatched = candidates.filter(
+    (rule) => !vehicleType || normalizeRuleVehicleType(rule.vehicle_type) === vehicleType
+  )
+  const selected = vehicleMatched[0] || candidates[0]
+  if (!selected) return 0
+  const amounts = parseRuleAmounts(selected.match_amounts)
+  return amounts.length ? Math.min(...amounts) : 0
+}
+
 function toDate(value: string) {
   const match = text(value).match(
     /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/
@@ -1935,6 +1976,12 @@ async function readFiles(
           any[]
         >()
 
+      const typeRuleCache =
+        new Map<
+          string,
+          MonthlyTypeRule[]
+        >()
+
       for (
         const lot of parkingLots
       ) {
@@ -1948,7 +1995,10 @@ async function readFiles(
             )
             .select(`
               id,
+              parking_lot_id,
               vehicle_plate,
+              vehicle_type,
+              rental_type,
 
               customer_code,
               customer_name,
@@ -1988,6 +2038,20 @@ async function readFiles(
             lot.id,
             data || []
           )
+        }
+
+        const { data: ruleData, error: ruleError } = await supabase
+          .from('monthly_rental_type_rules')
+          .select('parking_lot_id,type_name,vehicle_type,match_amounts,priority,is_active')
+          .eq('parking_lot_id', lot.id)
+          .eq('is_active', true)
+          .order('priority', { ascending: true })
+
+        if (ruleError) {
+          console.error('月租類型設定讀取失敗', lot.name, ruleError)
+          typeRuleCache.set(lot.id, [])
+        } else {
+          typeRuleCache.set(lot.id, (ruleData || []) as MonthlyTypeRule[])
         }
       }
 
@@ -2172,8 +2236,13 @@ async function readFiles(
             rental.phone ||
             '',
 
+          // 預覽與後端同步都用「月租類型設定」的單月標準費。
+          // 舊總表 monthly_fee 可能是一整期總額，不可直接當單月費。
           monthlyFee:
-            Number(rental.monthly_fee || 0),
+            standardMonthlyFeeForRental(
+              rental,
+              typeRuleCache.get(lot.id) || []
+            ),
 
           rentalStartDate:
             rental.start_date ||
