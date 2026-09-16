@@ -78,15 +78,12 @@ function resolveStandardMonthlyFee(rental: any, rules: MonthlyTypeRule[]) {
   const candidates = rules
     .filter((rule) =>
       safeText(rule.parking_lot_id, 80) === safeText(rental?.parking_lot_id, 80) &&
-      safeText(rule.type_name, 100).toLowerCase() === rentalType
+      safeText(rule.type_name, 100).toLowerCase() === rentalType &&
+      normalizeVehicleType(rule.vehicle_type) === vehicleType
     )
     .sort((a, b) => Number(a.priority || 100) - Number(b.priority || 100))
 
-  const vehicleMatched = candidates.filter(
-    (rule) => !vehicleType || normalizeVehicleType(rule.vehicle_type) === vehicleType
-  )
-
-  const selected = vehicleMatched[0] || candidates[0]
+  const selected = candidates[0]
   if (!selected) return 0
 
   const amounts = ruleAmounts(selected.match_amounts)
@@ -198,14 +195,12 @@ export async function POST(request: NextRequest) {
         appliedFromDate = getNextCoverageStartDate({
           currentPaidThroughDate: rental.paid_through_date,
           termStartDate: rental.system_cycle_start_date,
-          paymentDate,
         })
 
         newPaidThroughDate = nextPaidThroughDate({
           currentPaidThroughDate: rental.paid_through_date,
           termStartDate: rental.system_cycle_start_date,
           termEndDate: rental.system_cycle_end_date,
-          paymentDate,
           months: amountDecision.months,
         })
 
@@ -283,12 +278,22 @@ export async function POST(request: NextRequest) {
         paymentHistoryId = String(insertedHistory.id)
         historySuccess++
       } else if (retryExistingFailedApplication) {
-        await admin
+        const { data: retriedPayment, error: retryStateError } = await admin
           .from('monthly_payments')
           .update({
             cycle_application_status: reviewReason ? 'pending_review' : 'processing',
           })
           .eq('id', paymentHistoryId)
+          .eq('cycle_application_status', 'failed')
+          .select('id')
+          .maybeSingle()
+
+        if (retryStateError || !retriedPayment?.id) {
+          failed++
+          historyFailed++
+          errors.push(`${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：此筆付款正在由其他同步作業處理，請稍後重新整理`)
+          continue
+        }
       }
 
       if (reviewReason) {
@@ -362,40 +367,51 @@ export async function POST(request: NextRequest) {
         continue
       }
 
-      const { data: updated, error: updateError } = await admin
-        .from('monthly_rentals')
-        .update({
-          paid_through_date: newPaidThroughDate,
-          // payment_status 僅為舊畫面相容欄位；新畫面不以此欄判斷是否續租。
-          payment_status: 'paid',
-          payment_date: paymentDate,
-          invoice_number: invoiceNumber,
-          last_payment_source: paymentSource,
-          updated_at: new Date().toISOString(),
+      // 月租戶與付款歷史必須在同一個資料庫交易內完成；函式會鎖定月租戶資料列，
+      // 並比對本次計算前的 paid_through_date，避免同時匯入時只更新其中一張表。
+      const { data: appliedRows, error: applyError } = await admin
+        .rpc('apply_monthly_payment_cycle', {
+          p_rental_id: rentalId,
+          p_payment_id: paymentHistoryId,
+          p_expected_paid_through_date: rental.paid_through_date || null,
+          p_new_paid_through_date: newPaidThroughDate,
+          p_payment_date: paymentDate,
+          p_invoice_number: invoiceNumber,
+          p_payment_source: paymentSource,
+          p_applied_months: amountDecision.months,
+          p_applied_from_date: appliedFromDate,
         })
-        .eq('id', rentalId)
-        .select('id')
-        .maybeSingle()
 
-      if (updateError || !updated?.id) {
+      const appliedResult = Array.isArray(appliedRows) ? appliedRows[0] : appliedRows
+      let applicationConfirmed = !applyError && Boolean(appliedResult?.applied)
+
+      // RPC 回應可能在交易提交後因網路中斷而遺失；先回讀付款狀態，
+      // 確認實際沒有套用後才能標成 failed。
+      if (!applicationConfirmed) {
+        const { data: latestPayment } = await admin
+          .from('monthly_payments')
+          .select('cycle_application_status,applied_to_date')
+          .eq('id', paymentHistoryId)
+          .maybeSingle()
+
+        if (latestPayment?.cycle_application_status === 'applied') {
+          newPaidThroughDate = validDate(latestPayment.applied_to_date) || newPaidThroughDate
+          applicationConfirmed = true
+        }
+      }
+
+      if (!applicationConfirmed) {
         await admin
           .from('monthly_payments')
           .update({ cycle_application_status: 'failed' })
           .eq('id', paymentHistoryId)
+          .eq('cycle_application_status', 'processing')
         failed++
         errors.push(`${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：繳費紀錄已保存，但本系統租期延長失敗，可重新同步此筆`)
         continue
       }
 
-      await admin
-        .from('monthly_payments')
-        .update({
-          cycle_application_status: 'applied',
-          applied_months: amountDecision.months,
-          applied_from_date: appliedFromDate || null,
-          applied_to_date: newPaidThroughDate,
-        })
-        .eq('id', paymentHistoryId)
+      newPaidThroughDate = validDate(appliedResult?.resulting_paid_through_date) || newPaidThroughDate
 
       // 同一份繳費報表可能同一租戶有多筆正式交易；本批下一筆必須
       // 從剛套用完成的已繳至日期繼續算，不能回到匯入前的舊日期。

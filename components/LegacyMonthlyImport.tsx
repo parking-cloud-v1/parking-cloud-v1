@@ -2,7 +2,6 @@
 
 import { useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { getInitialPaidThroughDate } from '@/lib/monthly-rental-cycle'
 import { decideRosterIdentity } from '@/lib/monthly-rental-roster'
 
 
@@ -138,64 +137,20 @@ type PreviewRow = {
 }
 
 /*
- * 舊月租總表只在「名冊匯入資格」使用舊 end_date：
- * - 月租金額為 0：直接略過。
- * - 舊總表 end_date 早於今天往前 3 個月：視為久未續租，直接略過。
- * - 其他舊 start_date / end_date 仍只保留作稽核，不會控制本系統正式租期、
- *   paid_through_date、付款狀態或簡訊名單。
+ * 舊月租總表的日期只保留作稽核，不參與是否匯入的判斷。
+ * 月租金額為 0 的列不是正常月租戶，直接略過，不進預覽、比對或正式匯入。
  */
-const IMPORT_EXPIRY_RETENTION_MONTHS = 3
-
-function importExpiryCutoffDateText(
-  today = new Date()
-) {
-  const cutoff = new Date(
-    today.getFullYear(),
-    today.getMonth() - IMPORT_EXPIRY_RETENTION_MONTHS,
-    today.getDate()
-  )
-
-  return `${cutoff.getFullYear()}-${String(
-    cutoff.getMonth() + 1
-  ).padStart(2, '0')}-${String(
-    cutoff.getDate()
-  ).padStart(2, '0')}`
-}
-
 function filterExpiredImportRows(
-  sourceRows: PreviewRow[],
-  today = new Date()
+  sourceRows: PreviewRow[]
 ) {
-  const cutoff = importExpiryCutoffDateText(today)
-  let zeroExcludedCount = 0
-  let expiredExcludedCount = 0
-
-  const rows = sourceRows.filter((item) => {
-    if (Number(item.monthly_fee || 0) <= 0) {
-      zeroExcludedCount++
-      return false
-    }
-
-    const endDate = normalizeDate(
-      String(item.end_date || '')
-    )
-
-    if (endDate && endDate < cutoff) {
-      expiredExcludedCount++
-      return false
-    }
-
-    return true
-  })
+  const rows = sourceRows.filter(
+    (item) => Number(item.monthly_fee || 0) > 0
+  )
 
   return {
     rows,
-    excludedCount:
-      zeroExcludedCount +
-      expiredExcludedCount,
-    zeroExcludedCount,
-    expiredExcludedCount,
-    cutoff,
+    excludedCount: sourceRows.length - rows.length,
+    cutoff: '舊系統日期不參與；0 元資料略過',
   }
 }
 
@@ -618,6 +573,45 @@ function rowRuleText(
       ' '
     )
     .toLowerCase()
+}
+
+function normalizeRuleVehicleType(
+  value: unknown
+) {
+  const source = String(value || '')
+    .trim()
+    .toLowerCase()
+
+  if (source === '汽車') return 'car'
+  if (source === '機車') return 'motorcycle'
+  if (source === '重機') return 'heavy_motorcycle'
+
+  return source
+}
+
+function resolveConfiguredMonthlyFee(
+  row: PreviewRow,
+  rules: MonthlyRentalTypeRule[]
+) {
+  const rentalType = String(row.rental_type || '')
+    .trim()
+    .toLowerCase()
+  const vehicleType = normalizeRuleVehicleType(row.vehicle_type)
+
+  const selected = [...rules]
+    .filter((rule) =>
+      rule.is_active &&
+      String(rule.type_name || '').trim().toLowerCase() === rentalType &&
+      normalizeRuleVehicleType(rule.vehicle_type) === vehicleType
+    )
+    .sort((a, b) => Number(a.priority || 100) - Number(b.priority || 100))[0]
+
+  if (!selected) return 0
+
+  const amounts = parseRuleAmounts(selected.match_amounts)
+    .filter((amount) => amount > 0)
+
+  return amounts.length ? Math.min(...amounts) : 0
 }
 
 function isActiveImportRow(row: PreviewRow) {
@@ -1799,7 +1793,7 @@ export default function LegacyMonthlyImport({
         setRows(rosterRows408)
 
         setMessage(
-          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，可匯入 ${rosterRows408.length} 筆，0 元略過 ${expiryFiltered408.zeroExcludedCount} 筆，舊總表到期超過 3 個月略過 ${expiryFiltered408.expiredExcludedCount} 筆（分界 ${expiryFiltered408.cutoff}）。舊開始日／結束日除名冊首次匯入的 3 個月排除外，只留作稽核，不參與本系統正式到期日或簡訊判斷；月租金只作正式繳費報表換算月數的基準。`
+          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，可匯入 ${rosterRows408.length} 筆，0 元略過 ${expiryFiltered408.excludedCount} 筆。舊開始日／結束日與月租金只留作稽核；本系統正式租期與單月費以主管設定為準。`
         )
 
         return
@@ -1823,7 +1817,7 @@ export default function LegacyMonthlyImport({
       const invalid = rosterRows.length - valid
 
       setMessage(
-        `已辨識 ${rosterRows.length} 筆，可匯入 ${valid} 筆，0 元略過 ${expiryFiltered.zeroExcludedCount} 筆，舊總表到期超過 3 個月略過 ${expiryFiltered.expiredExcludedCount} 筆（分界 ${expiryFiltered.cutoff}），格式異常 ${invalid} 筆；舊開始日／結束日除名冊首次匯入的 3 個月排除外，只留作稽核，不參與本系統正式到期日或簡訊判斷；月租金只作正式繳費報表換算月數的基準。`
+        `已辨識 ${rosterRows.length} 筆，可匯入 ${valid} 筆，0 元略過 ${expiryFiltered.excludedCount} 筆，格式異常 ${invalid} 筆；舊開始日／結束日與月租金只留作稽核；本系統正式租期與單月費以主管設定為準。`
       )
     } catch (
       error: any
@@ -2391,15 +2385,31 @@ export default function LegacyMonthlyImport({
         return
       }
 
-      /*
-       * 新架構調整：舊月票總表的「月租金額」可以同步成 monthly_fee，
-       * 只作為正式繳費報表換算繳費月數的基準；舊總表日期與付款狀態仍完全忽略。
-       */
-      const initialPaidThroughDate = getInitialPaidThroughDate({
-        today: todayText,
-        termStartDate: activeRentalTerm.start_date,
-        termEndDate: activeRentalTerm.end_date,
-      })
+      const { data: configuredTypeRules, error: configuredTypeRulesError } =
+        await supabase
+          .from('monthly_rental_type_rules')
+          .select(`
+            id,
+            parking_lot_id,
+            type_name,
+            vehicle_type,
+            match_amounts,
+            keywords,
+            keyword_mode,
+            priority,
+            is_active
+          `)
+          .eq('parking_lot_id', parkingLotId)
+          .eq('is_active', true)
+          .order('priority', { ascending: true })
+
+      if (configuredTypeRulesError) {
+        setMessage(`讀取月租類型設定失敗：${configuredTypeRulesError.message}`)
+        return
+      }
+
+      const activeTypeRules =
+        (configuredTypeRules || []) as MonthlyRentalTypeRule[]
 
       const {
         data:
@@ -2910,6 +2920,12 @@ export default function LegacyMonthlyImport({
             .filter(Boolean)
             .join(' / ')
 
+        const configuredMonthlyFee =
+          resolveConfiguredMonthlyFee(
+            newRow,
+            activeTypeRules
+          )
+
         if (
           !previous ||
           !currentRental
@@ -2968,7 +2984,7 @@ export default function LegacyMonthlyImport({
                     'legacy_import',
 
                   monthly_fee:
-                    Number(newRow.monthly_fee || 0),
+                    configuredMonthlyFee,
 
                   payment_status:
                     'unpaid',
@@ -2992,7 +3008,7 @@ export default function LegacyMonthlyImport({
                     activeRentalTerm.end_date,
 
                   paid_through_date:
-                    initialPaidThroughDate || null,
+                    null,
 
                   payment_review_status:
                     'clear',
@@ -3241,7 +3257,7 @@ export default function LegacyMonthlyImport({
                 'monthly_rentals'
               )
               .update({
-                // 既有客戶：同步姓名、電話、名冊狀態，以及舊月票總表的標準月租金額。
+                // 既有客戶：只同步姓名、電話與名冊狀態。
                 customer_name:
                   newRow.customer_name,
 
@@ -3249,12 +3265,8 @@ export default function LegacyMonthlyImport({
                   newRow.phone ||
                   null,
 
-                // 月租金只用來讓正式繳費報表換算月數；不代表已繳，也不改租期日期。
-                monthly_fee:
-                  Number(newRow.monthly_fee || 0),
-
                 /*
-                 * 舊名單不再變更本系統車種／月租類型、開始日、結束日或付款狀態。
+                 * 舊名單不再變更本系統車種／月租類型、月租金額、開始日、結束日或付款狀態。
                  */
 
                 rental_status:
@@ -3970,7 +3982,7 @@ export default function LegacyMonthlyImport({
         </h2>
 
         <p className="muted">
-          先分析與上一份舊系統總表的差異，確認後才正式匯入。名冊匯入時，舊總表月租金為 0 元的資料直接略過；舊總表到期日早於今天往前 3 個月的資料也直接略過，不進預覽、比對或正式匯入。其餘舊系統開始日／結束日只保留作稽核，正式租期仍以主管設定為準，不會被舊系統日期覆蓋，也不會改動本系統正式到期日、付款狀態或簡訊名單。只有「收款」或「繳費紀錄上傳」成功建立真正繳費紀錄後才會成為已繳；總表本身不建立繳費月份，也不直接判定已繳。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
+          先分析與上一份舊系統總表的差異，確認後才正式匯入。舊系統日期不再作為匯入排除條件；目前總表存在即視為名冊中的有效候選資料。正式租期仍以主管設定為準，不會被舊系統日期覆蓋。舊系統開始日、結束日、金額與付款欄位全部只作稽核，不會改動本系統正式租期、到期日、月租金額、付款狀態或簡訊名單。只有「收款」或「繳費紀錄上傳」成功建立真正繳費紀錄後才會成為已繳；總表本身不再建立繳費月份，也不會直接判定已繳。舊總表金額即使為 0 元也不會改變名冊資格；0 元付款是否成立只由正式繳費報表進入管理員待確認流程。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
         </p>
 
         <div
