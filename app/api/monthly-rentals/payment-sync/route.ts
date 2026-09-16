@@ -153,7 +153,7 @@ export async function POST(request: NextRequest) {
       const sourceReference = suppliedSourceReference
 
       // 金額主判斷：只在同停車場＋同車種的啟用規則中比對。
-      // 目前正式付款只允許 1 個月或 2 個月；3 個月以上的數學整除不列入候選。
+      // 每個月租類型依主管設定的 allowed_payment_months 決定可接受的繳費月份；未設定的舊規則相容預設 1、2 個月。
       // 舊 rental_type、現場備註與匯入文字都只供參考，不參與自動排除候選。
       const resolution = resolvePaymentRuleByAmount(
         {
@@ -169,7 +169,7 @@ export async function POST(request: NextRequest) {
           : 0
       const amountDecision = classifyPaymentAmount(amountPaid, standardMonthlyFee)
 
-      // 金額在 1／2 個月限制下唯一辨識身分時，同步正規化 rental_type。
+      // 金額在該類型允許繳費月份下唯一辨識身分時，同步正規化 rental_type。
       // 歧義時不使用舊類型或備註猜測；ambiguous/no_match 仍進待確認。
       if (resolution.kind === 'matched') {
         const currentType = safeText(rental.rental_type, 100).toLowerCase()

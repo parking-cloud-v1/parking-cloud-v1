@@ -10,6 +10,10 @@ import {
   createClient,
 } from '@/lib/supabase/client'
 
+import {
+  parseAllowedPaymentMonths,
+} from '@/lib/monthly-payment-preview'
+
 type ParkingLot = {
   id: string
   name: string
@@ -24,7 +28,7 @@ type Rule = {
     | 'motorcycle'
     | 'heavy_motorcycle'
   match_amounts: string
-  base_monthly_fee: number
+  allowed_payment_months: number[] | null
   keywords: string
   keyword_mode:
     | 'any'
@@ -41,7 +45,7 @@ type FormData = {
     | 'motorcycle'
     | 'heavy_motorcycle'
   match_amounts: string
-  base_monthly_fee: string
+  allowed_payment_months: string
   keywords: string
   keyword_mode:
     | 'any'
@@ -56,7 +60,7 @@ const EMPTY_FORM: FormData = {
   vehicle_type:
     'car',
   match_amounts: '',
-  base_monthly_fee: '',
+  allowed_payment_months: '1,2',
   keywords: '',
   keyword_mode:
     'any',
@@ -177,7 +181,7 @@ export default function MonthlyRentalTypeRuleManager({
             type_name,
             vehicle_type,
             match_amounts,
-            base_monthly_fee,
+            allowed_payment_months,
             keywords,
             keyword_mode,
             priority,
@@ -247,10 +251,10 @@ export default function MonthlyRentalTypeRuleManager({
         rule.match_amounts ||
         '',
 
-      base_monthly_fee:
-        rule.base_monthly_fee
-          ? String(rule.base_monthly_fee)
-          : '',
+      allowed_payment_months:
+        parseAllowedPaymentMonths(
+          rule.allowed_payment_months
+        ).join(','),
 
       keywords:
         rule.keywords ||
@@ -306,24 +310,23 @@ export default function MonthlyRentalTypeRuleManager({
       !form.match_amounts.trim()
     ) {
       setMessage(
-        '請設定至少一個「可辨識金額」。金額是主要判斷條件，關鍵字可不填。'
+        '請設定單月標準金額。正式付款會用實收金額 ÷ 單月標準金額判斷月份。'
       )
       return
     }
 
-    const baseMonthlyFee =
-      Number(
-        form.base_monthly_fee
+    const allowedPaymentMonths =
+      parseAllowedPaymentMonths(
+        form.allowed_payment_months,
+        []
       )
 
     if (
-      !Number.isFinite(
-        baseMonthlyFee
-      ) ||
-      baseMonthlyFee <= 0
+      !form.allowed_payment_months.trim() ||
+      allowedPaymentMonths.length === 0
     ) {
       setMessage(
-        '請設定大於 0 的「標準單月金額」，系統會用它自動判斷本次繳幾個月。'
+        '請設定至少一個允許繳費月份，例如 1,2；季繳可填 1,3。'
       )
       return
     }
@@ -381,8 +384,8 @@ export default function MonthlyRentalTypeRuleManager({
           form.match_amounts
             .trim(),
 
-        base_monthly_fee:
-          baseMonthlyFee,
+        allowed_payment_months:
+          allowedPaymentMonths,
 
         keywords:
           form.keywords
@@ -460,22 +463,6 @@ export default function MonthlyRentalTypeRuleManager({
         setMessage(
           '月租類型規則已新增'
         )
-      }
-
-      if (form.is_active && baseMonthlyFee > 0) {
-        const { error: feeSyncError } = await supabase
-          .from('monthly_rentals')
-          .update({
-            monthly_fee: baseMonthlyFee,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('parking_lot_id', selectedLotId)
-          .eq('rental_type', form.type_name.trim())
-          .neq('rental_status', 'cancelled')
-
-        if (feeSyncError) {
-          setMessage(`規則已儲存，但同步本系統月租金失敗：${feeSyncError.message}`)
-        }
       }
 
       resetForm()
@@ -628,7 +615,7 @@ export default function MonthlyRentalTypeRuleManager({
                 10,
             }}
           >
-            每個停車場獨立設定。請設定「標準單月金額」；系統會以實際月租金額 ÷ 標準單月金額，自動判斷 1、2、3…個月的簡訊週期。特殊首期金額才需要現場人工確認。
+            每個停車場獨立設定。正式繳費辨識只看「停車場＋車種＋實收金額＋此類型允許繳費月份」；現場文字、關鍵字與主管備註只供參考，不會自動決定付款身分。
           </div>
         </div>
       </div>
@@ -718,38 +705,7 @@ export default function MonthlyRentalTypeRuleManager({
 
           <div className="field">
             <label>
-              標準單月金額 *
-            </label>
-
-            <input
-              type="number"
-              min="1"
-              step="1"
-              value={
-                form.base_monthly_fee
-              }
-              onChange={(
-                e
-              ) =>
-                setForm({
-                  ...form,
-                  base_monthly_fee:
-                    e.target.value,
-                })
-              }
-              placeholder="例如：1800"
-            />
-
-            <small
-              className="muted"
-            >
-              用來判斷繳費月數。例如單月 1800，匯入 3600 就自動判斷為 2 個月。
-            </small>
-          </div>
-
-          <div className="field">
-            <label>
-              可辨識金額 *
+              單月標準金額 *
             </label>
 
             <input
@@ -766,19 +722,48 @@ export default function MonthlyRentalTypeRuleManager({
                       .value,
                 })
               }
-              placeholder="例如：1800,3600,5400"
+              placeholder="例如：3000"
             />
 
             <small
               className="muted"
             >
-              多個金額用逗號分開，仍作為月租類型辨識使用；「繳幾個月」改由上方標準單月金額計算。
+              正式辨識會以其中最小正數作單月標準費。建議每個類型只保留一個單月金額；舊資料若已有多個金額仍可相容。
             </small>
           </div>
 
           <div className="field">
             <label>
-              輔助關鍵字
+              允許繳費月份 *
+            </label>
+
+            <input
+              value={
+                form.allowed_payment_months
+              }
+              onChange={(
+                e
+              ) =>
+                setForm({
+                  ...form,
+                  allowed_payment_months:
+                    e.target
+                      .value,
+                })
+              }
+              placeholder="例如：1,2；季繳可填 1,3"
+            />
+
+            <small
+              className="muted"
+            >
+              多個月份用逗號分開，範圍 1～24。現在可先填 1,2；未來有季繳、半年繳時由主管直接修改，不必再改程式。
+            </small>
+          </div>
+
+          <div className="field">
+            <label>
+              現場／舊資料關鍵字（僅供參考）
             </label>
 
             <input
@@ -801,13 +786,13 @@ export default function MonthlyRentalTypeRuleManager({
             <small
               className="muted"
             >
-              可不填。只有同一金額同時符合多條規則時，才用關鍵字協助判斷。
+              可不填。這些文字可協助主管人工核對舊名冊，但不參與正式付款自動辨識。
             </small>
           </div>
 
           <div className="field">
             <label>
-              關鍵字條件
+              舊資料關鍵字方式
             </label>
 
             <select
@@ -859,7 +844,7 @@ export default function MonthlyRentalTypeRuleManager({
 
             <small
               className="muted">
-              數字越小越優先，例如 10 會先於 100。
+              數字越小排序越前；若有重複的同類型／同金額規則會優先保留較小值，但不會用它強行解除付款歧義。
             </small>
           </div>
 
@@ -898,7 +883,7 @@ export default function MonthlyRentalTypeRuleManager({
 
           <div className="field">
             <label>
-              備註
+              主管條件備註（僅供參考）
             </label>
 
             <input
@@ -915,7 +900,7 @@ export default function MonthlyRentalTypeRuleManager({
                       .value,
                 })
               }
-              placeholder="主管自己的設定說明"
+              placeholder="例如：目前只收單月、雙月；特殊方案另行公告"
             />
           </div>
         </div>
@@ -1024,7 +1009,7 @@ export default function MonthlyRentalTypeRuleManager({
             fontSize: 13,
           }}
         >
-          系統先依金額判斷。只有同一金額符合多條規則時，才使用關鍵字輔助；若關鍵字仍無法區分，就依「優先順序」選擇，數字越小越優先。
+          正式付款採金額主判斷：同停車場、同車種下，以單月標準金額與各類型「允許繳費月份」找唯一候選。若有兩個以上合法候選就進付款待確認，不使用現場備註或舊文字猜測。
         </div>
 
         <div
@@ -1055,11 +1040,12 @@ export default function MonthlyRentalTypeRuleManager({
                 <th>順序</th>
                 <th>類型</th>
                 <th>車種</th>
-                <th>金額條件</th>
-                <th>關鍵字</th>
-                <th>關鍵字方式</th>
+                <th>單月標準金額</th>
+                <th>允許月份</th>
+                <th>參考關鍵字</th>
+                <th>參考方式</th>
                 <th>狀態</th>
-                <th>備註</th>
+                <th>主管備註</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -1069,7 +1055,7 @@ export default function MonthlyRentalTypeRuleManager({
                 <tr>
                   <td
                     colSpan={
-                      9
+                      10
                     }
                     style={{
                       padding:
@@ -1084,7 +1070,7 @@ export default function MonthlyRentalTypeRuleManager({
                 <tr>
                   <td
                     colSpan={
-                      9
+                      10
                     }
                     style={{
                       padding:
@@ -1148,7 +1134,20 @@ export default function MonthlyRentalTypeRuleManager({
                         }}
                       >
                         {rule.match_amounts ||
-                          '不限'}
+                          '未設定'}
+                      </td>
+
+                      <td
+                        style={{
+                          padding:
+                            10,
+                          whiteSpace:
+                            'nowrap',
+                        }}
+                      >
+                        {parseAllowedPaymentMonths(
+                          rule.allowed_payment_months
+                        ).join('、')} 個月
                       </td>
 
                       <td

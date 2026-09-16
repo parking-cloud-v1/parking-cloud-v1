@@ -1941,7 +1941,7 @@ async function readFiles(
        *
        * 預覽與正式同步必須使用同一套「金額主判斷」：
        * 同停車場 + 同車種 -> 逐一測試本系統月租類型單月費。
-       * 目前正式付款只接受 1 個月或 2 個月；舊月租類型／現場文字僅供參考。
+       * 每個月租類型可由主管設定允許繳費月份；舊月租類型／現場文字僅供參考。
        * 不再拿 monthly_rentals.monthly_fee 當作單月費。
        */
 
@@ -2289,8 +2289,8 @@ async function readFiles(
               : ruleResolution.kind === 'zero_amount'
                 ? '0 元付款，待確認'
                 : ruleResolution.kind === 'ambiguous'
-                  ? `實收金額在 1／2 個月規則內仍可對應 ${ruleResolution.candidateCount} 種月租條件，需人工確認`
-                  : '同停車場／同車種中找不到符合 1／2 個月付款的月租條件，待確認',
+                  ? `實收金額依主管設定的允許月份仍可對應 ${ruleResolution.candidateCount} 種月租條件，需人工確認`
+                  : '同停車場／同車種中找不到符合目前允許繳費月份的月租條件，待確認',
         }
 
         matchedRow.sourceReference =

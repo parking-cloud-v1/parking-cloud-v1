@@ -4,6 +4,7 @@ export type MonthlyTypeRule = {
   vehicle_type?: unknown
   match_amounts?: unknown
   base_monthly_fee?: unknown
+  allowed_payment_months?: unknown
   priority?: unknown
   is_active?: unknown
 }
@@ -43,16 +44,69 @@ function ruleMonthlyFee(rule: MonthlyTypeRule) {
   return positiveNumber(rule.base_monthly_fee)
 }
 
-function normalizeAllowedMonths(values: readonly number[]) {
-  const normalized = [...new Set(
+function sanitizeAllowedMonths(values: readonly number[]) {
+  return [...new Set(
     values
       .map((value) => Number(value))
-      .filter((value) => Number.isInteger(value) && value > 0),
+      .filter(
+        (value) =>
+          Number.isInteger(value) &&
+          value >= 1 &&
+          value <= 24,
+      ),
   )].sort((a, b) => a - b)
+}
+
+function normalizeAllowedMonths(values: readonly number[]) {
+  const normalized = sanitizeAllowedMonths(values)
 
   return normalized.length
     ? normalized
     : [...DEFAULT_ALLOWED_PAYMENT_MONTHS]
+}
+
+export function parseAllowedPaymentMonths(
+  value: unknown,
+  fallback: readonly number[] = DEFAULT_ALLOWED_PAYMENT_MONTHS,
+) {
+  const fallbackMonths = sanitizeAllowedMonths(fallback)
+
+  if (Array.isArray(value)) {
+    const parsed = sanitizeAllowedMonths(
+      value.map((item) => Number(item)),
+    )
+
+    return parsed.length ? parsed : fallbackMonths
+  }
+
+  const text = safeText(value, 300)
+  if (!text) return fallbackMonths
+
+  const trimmed = text.trim()
+  let parts: unknown[] = []
+
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) parts = parsed
+    } catch {
+      parts = []
+    }
+  }
+
+  if (!parts.length) {
+    parts = trimmed
+      .replace(/^\{/, '')
+      .replace(/\}$/, '')
+      .split(/[,，;；\s]+/)
+      .filter(Boolean)
+  }
+
+  const normalized = sanitizeAllowedMonths(
+    parts.map((item) => Number(item)),
+  )
+
+  return normalized.length ? normalized : fallbackMonths
 }
 
 export function resolveStandardMonthlyFee(
@@ -168,7 +222,7 @@ export function resolvePaymentRuleByAmount(
 
   const parkingLotId = safeText(rental.parkingLotId, 80)
   const vehicleType = normalizeVehicleType(rental.vehicleType)
-  const allowed = new Set(normalizeAllowedMonths(allowedMonths))
+  const fallbackAllowedMonths = normalizeAllowedMonths(allowedMonths)
   const logicalCandidates = new Map<string, LogicalCandidate>()
 
   for (const rule of rules) {
@@ -187,7 +241,13 @@ export function resolvePaymentRuleByAmount(
     if (!Number.isInteger(rawMonths) || rawMonths <= 0) continue
 
     const months = Math.round(rawMonths)
-    if (!allowed.has(months)) continue
+    const ruleAllowedMonths = new Set(
+      parseAllowedPaymentMonths(
+        rule.allowed_payment_months,
+        fallbackAllowedMonths,
+      ),
+    )
+    if (!ruleAllowedMonths.has(months)) continue
 
     const priority = Number(rule.priority ?? 100)
     const key = `${normalizedType}|${fee}|${months}`
