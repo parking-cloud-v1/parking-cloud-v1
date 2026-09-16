@@ -49,11 +49,13 @@ function safeText(value: unknown, max = 500) {
 }
 
 type MonthlyTypeRule = {
-  parking_lot_id: string
-  type_name: string
-  vehicle_type: string
-  match_amounts: string
-  priority: number
+  parking_lot_id?: unknown
+  type_name?: unknown
+  vehicle_type?: unknown
+  match_amounts?: unknown
+  base_monthly_fee?: unknown
+  priority?: unknown
+  is_active?: unknown
 }
 
 function normalizeVehicleType(value: unknown) {
@@ -71,23 +73,34 @@ function ruleAmounts(value: unknown) {
     .filter((amount) => Number.isFinite(amount) && amount > 0)
 }
 
+function positiveNumber(value: unknown) {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? number : 0
+}
+
+function ruleMonthlyFee(rule: MonthlyTypeRule) {
+  // 2026-09-16 正式規則仍以 match_amounts 的最小正數作單月標準費。
+  // base_monthly_fee 僅作舊/過渡資料表結構的相容備援。
+  const amounts = ruleAmounts(rule.match_amounts)
+  if (amounts.length) return Math.min(...amounts)
+  return positiveNumber(rule.base_monthly_fee)
+}
+
 function resolveStandardMonthlyFee(rental: any, rules: MonthlyTypeRule[]) {
   const rentalType = safeText(rental?.rental_type, 100).toLowerCase()
   const vehicleType = normalizeVehicleType(rental?.vehicle_type)
 
   const candidates = rules
+    .filter((rule) => rule?.is_active !== false)
     .filter((rule) =>
       safeText(rule.parking_lot_id, 80) === safeText(rental?.parking_lot_id, 80) &&
       safeText(rule.type_name, 100).toLowerCase() === rentalType &&
       normalizeVehicleType(rule.vehicle_type) === vehicleType
     )
-    .sort((a, b) => Number(a.priority || 100) - Number(b.priority || 100))
+    .sort((a, b) => Number(a.priority ?? 100) - Number(b.priority ?? 100))
 
   const selected = candidates[0]
-  if (!selected) return 0
-
-  const amounts = ruleAmounts(selected.match_amounts)
-  return amounts.length ? Math.min(...amounts) : 0
+  return selected ? ruleMonthlyFee(selected) : 0
 }
 
 export async function POST(request: NextRequest) {
@@ -130,19 +143,34 @@ export async function POST(request: NextRequest) {
 
     let typeRules: MonthlyTypeRule[] = []
     if (lotIds.length) {
+      // 不再把欄位清單寫死在 PostgREST select。
+      // 正式資料庫曾有 match_amounts / base_monthly_fee 過渡版本；
+      // select('*') 可避免因單一欄位版本差異讓整批 14 筆交易直接中止。
       const { data: rulesData, error: rulesError } = await admin
         .from('monthly_rental_type_rules')
-        .select('parking_lot_id,type_name,vehicle_type,match_amounts,priority,is_active')
+        .select('*')
         .in('parking_lot_id', lotIds)
-        .eq('is_active', true)
-        .order('priority', { ascending: true })
 
       if (rulesError) {
-        console.error('[monthly-payment-sync] type rules read failed', rulesError.message)
-        return NextResponse.json({ error: '無法讀取本系統月租類型設定，已停止套用付款月份。' }, { status: 500 })
+        const code = safeText((rulesError as any)?.code, 50)
+        const message = safeText(rulesError.message, 300)
+        console.error('[monthly-payment-sync] type rules read failed', {
+          code,
+          message,
+          lotIds,
+        })
+
+        // 只回傳 Supabase 錯誤碼/訊息，不回傳任何 key 或環境變數；
+        // 若仍失敗，正式站畫面可直接看到真正原因，不再只剩模糊訊息。
+        const diagnostic = [code, message].filter(Boolean).join('：')
+        return NextResponse.json({
+          error: `無法讀取本系統月租類型設定，已停止套用付款月份${diagnostic ? `（${diagnostic}）` : ''}。`,
+        }, { status: 500 })
       }
 
-      typeRules = (rulesData || []) as MonthlyTypeRule[]
+      typeRules = ((rulesData || []) as MonthlyTypeRule[])
+        .filter((rule) => rule?.is_active !== false)
+        .sort((a, b) => Number(a.priority ?? 100) - Number(b.priority ?? 100))
     }
 
     let success = 0
