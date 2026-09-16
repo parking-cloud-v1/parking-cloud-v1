@@ -52,6 +52,14 @@ function safeText(value: unknown, max = 500) {
   return String(value || '').trim().slice(0, max)
 }
 
+function normalizeVehicleType(value: unknown) {
+  const normalized = safeText(value, 50).toLowerCase()
+  if (['car', '汽車'].includes(normalized)) return 'car'
+  if (['motorcycle', '機車'].includes(normalized)) return 'motorcycle'
+  if (['heavy_motorcycle', '重機'].includes(normalized)) return 'heavy_motorcycle'
+  return normalized
+}
+
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient()
@@ -152,9 +160,9 @@ export async function POST(request: NextRequest) {
       const paymentSource = 'payment_csv'
       const sourceReference = suppliedSourceReference
 
-      // 金額主判斷：只在同停車場＋同車種的啟用規則中比對。
+      // 金額主判斷：在同停車場所有啟用規則中比對，不再先相信舊 vehicle_type。
       // 每個月租類型依主管設定的 allowed_payment_months 決定可接受的繳費月份；未設定的舊規則相容預設 1、2 個月。
-      // 舊 rental_type、現場備註與匯入文字都只供參考，不參與自動排除候選。
+      // 舊 rental_type、舊車種、現場備註與匯入文字都只供參考；只有金額＋主管規則唯一命中才自動校正。
       const resolution = resolvePaymentRuleByAmount(
         {
           parkingLotId: rental.parking_lot_id,
@@ -169,28 +177,38 @@ export async function POST(request: NextRequest) {
           : 0
       const amountDecision = classifyPaymentAmount(amountPaid, standardMonthlyFee)
 
-      // 金額在該類型允許繳費月份下唯一辨識身分時，同步正規化 rental_type。
-      // 歧義時不使用舊類型或備註猜測；ambiguous/no_match 仍進待確認。
+      // 金額＋主管允許月份唯一辨識時，同步修正主檔車種、身分類型與標準單月費。
+      // 歧義時完全不猜；ambiguous/no_match 仍進待確認。
       if (resolution.kind === 'matched') {
-        const currentType = safeText(rental.rental_type, 100).toLowerCase()
         const resolvedType = safeText(resolution.matchedType, 100)
-        if (resolvedType && currentType !== resolvedType.toLowerCase()) {
+        const resolvedVehicleType = safeText(resolution.matchedVehicleType, 50)
+        const resolvedMonthlyFee = Number(resolution.standardMonthlyFee || 0)
+        const needsNormalize =
+          (resolvedType && safeText(rental.rental_type, 100).toLowerCase() !== resolvedType.toLowerCase()) ||
+          (resolvedVehicleType && normalizeVehicleType(rental.vehicle_type) !== normalizeVehicleType(resolvedVehicleType)) ||
+          (resolvedMonthlyFee > 0 && Number(rental.monthly_fee || 0) !== resolvedMonthlyFee)
+
+        if (needsNormalize) {
           const { error: typeUpdateError } = await admin
             .from('monthly_rentals')
             .update({
-              rental_type: resolvedType,
+              rental_type: resolvedType || rental.rental_type || null,
+              vehicle_type: resolvedVehicleType || rental.vehicle_type || null,
+              monthly_fee: resolvedMonthlyFee > 0 ? resolvedMonthlyFee : rental.monthly_fee,
               updated_at: new Date().toISOString(),
             })
             .eq('id', rentalId)
 
           if (typeUpdateError) {
-            console.error('[monthly-payment-sync] rental type normalize failed', {
+            console.error('[monthly-payment-sync] rental identity normalize failed', {
               rentalId,
               resolutionMethod: resolution.method,
               message: typeUpdateError.message,
             })
           } else {
-            rental.rental_type = resolvedType
+            rental.rental_type = resolvedType || rental.rental_type
+            rental.vehicle_type = resolvedVehicleType || rental.vehicle_type
+            if (resolvedMonthlyFee > 0) rental.monthly_fee = resolvedMonthlyFee
           }
         }
       }
@@ -209,12 +227,14 @@ export async function POST(request: NextRequest) {
         appliedFromDate = getNextCoverageStartDate({
           currentPaidThroughDate: rental.paid_through_date,
           termStartDate: rental.system_cycle_start_date,
+          paymentDate,
         })
 
         newPaidThroughDate = nextPaidThroughDate({
           currentPaidThroughDate: rental.paid_through_date,
           termStartDate: rental.system_cycle_start_date,
           termEndDate: rental.system_cycle_end_date,
+          paymentDate,
           months: amountDecision.months,
         })
 

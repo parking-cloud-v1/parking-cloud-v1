@@ -469,13 +469,24 @@ function detectVehicleType(
   | 'car'
   | 'motorcycle'
   | 'heavy_motorcycle' {
-  const source =
-    `${rentalType} ${legacyType}`
+  const kind = String(legacyType || '').trim()
+  const source = `${rentalType} ${legacyType}`
 
+  // 舊月票總表「月票種類」是正式車種來源：0=汽車類、1=機車。
+  // 重機會以文字另外標示，因此重機文字優先於 0。
   if (source.includes('重機')) {
     return 'heavy_motorcycle'
   }
 
+  if (kind === '1') {
+    return 'motorcycle'
+  }
+
+  if (kind === '0') {
+    return 'car'
+  }
+
+  // 相容其他舊版本：沒有 0/1 時才以文字備援。
   if (source.includes('機車')) {
     return 'motorcycle'
   }
@@ -1537,8 +1548,8 @@ async function parseLegacyFile(
 
         vehicle_type:
           detectVehicleType(
-            detectedRentalType,
-            typeSource
+            `${detectedRentalType} ${typeSource}`,
+            legacyType || ''
           ),
 
         rental_type:
@@ -1602,11 +1613,15 @@ async function parseLegacyFile(
       current.rental_type =
         cleanedType
 
-      current.vehicle_type =
-        detectVehicleType(
-          cleanedType,
-          ''
-        )
+      // 「里民／一般／身障」是身分類型，不是車種；不得把原本月票種類=1的機車改回汽車。
+      // 只有後續行明確寫出重機、機車或老師汽車單月時，才修正車種。
+      if (line.includes('重機')) {
+        current.vehicle_type = 'heavy_motorcycle'
+      } else if (line.includes('機車')) {
+        current.vehicle_type = 'motorcycle'
+      } else if (line.includes('老師汽車單月')) {
+        current.vehicle_type = 'car'
+      }
 
       continue
     }
@@ -1684,6 +1699,14 @@ function createChangeDetails(
 
   if (!sameValue(normalizePlate(oldRow.vehicle_plate || ''), normalizePlate(newRow.vehicle_plate || ''))) {
     details.push(`車牌差異（只記錄、不覆蓋）：${oldRow.vehicle_plate || '-'} → ${newRow.vehicle_plate || '-'}`)
+  }
+
+  if (!sameValue(oldRow.vehicle_type, newRow.vehicle_type)) {
+    details.push(`車種：${oldRow.vehicle_type || '-'} → ${newRow.vehicle_type || '-'}`)
+  }
+
+  if (newRow.rental_type && !sameValue(oldRow.rental_type, newRow.rental_type)) {
+    details.push(`類型：${oldRow.rental_type || '-'} → ${newRow.rental_type}`)
   }
 
   return details
@@ -3257,7 +3280,7 @@ export default function LegacyMonthlyImport({
                 'monthly_rentals'
               )
               .update({
-                // 既有客戶：只同步姓名、電話與名冊狀態。
+                // 既有客戶：名冊中的月票種類 0/1 與明確身分類型可校正車種／類型。
                 customer_name:
                   newRow.customer_name,
 
@@ -3265,9 +3288,18 @@ export default function LegacyMonthlyImport({
                   newRow.phone ||
                   null,
 
-                /*
-                 * 舊名單不再變更本系統車種／月租類型、月租金額、開始日、結束日或付款狀態。
-                 */
+                vehicle_type:
+                  newRow.vehicle_type,
+
+                rental_type:
+                  newRow.rental_type ||
+                  currentRental.rental_type ||
+                  null,
+
+                monthly_fee:
+                  configuredMonthlyFee > 0
+                    ? configuredMonthlyFee
+                    : currentRental.monthly_fee,
 
                 rental_status:
                   'active',
@@ -3476,7 +3508,7 @@ export default function LegacyMonthlyImport({
               'monthly_rentals'
             )
             .update({
-              // 既有客戶：舊月票總表只更新姓名、電話與名冊狀態。
+              // 既有客戶：以月票種類 0/1 校正車種，明確身分類型同步回主檔。
               customer_name:
                 newRow.customer_name,
 
@@ -3484,9 +3516,18 @@ export default function LegacyMonthlyImport({
                 newRow.phone ||
                 null,
 
-              /*
-               * 舊名單不再變更本系統車種／月租類型，避免間接影響系統月租金。
-               */
+              vehicle_type:
+                newRow.vehicle_type,
+
+              rental_type:
+                newRow.rental_type ||
+                currentRental.rental_type ||
+                null,
+
+              monthly_fee:
+                configuredMonthlyFee > 0
+                  ? configuredMonthlyFee
+                  : currentRental.monthly_fee,
 
               rental_status:
                 'active',

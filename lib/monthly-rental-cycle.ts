@@ -181,15 +181,11 @@ export function getNextCoverageStartDate({
   if (!termStart) return ''
 
   const currentPaidThrough = parseDateOnly(currentPaidThroughDate)
-  const payment = parseDateOnly(paymentDate)
-
-  // 已經有正式已繳期限時，一律從既有期限的下一個共同週期接續。
-  // 第一次付款尚無 paid_through_date 時，才以該筆付款日期為基準，
-  // 找這個停車場自己的下一個共同週期；不會固定成每月 1 號。
+  const paidAt = parseDateOnly(paymentDate)
   const targetStart = currentPaidThrough && currentPaidThrough.getTime() >= termStart.getTime()
     ? addDays(currentPaidThrough, 1)
-    : payment && payment.getTime() > termStart.getTime()
-      ? payment
+    : paidAt && paidAt.getTime() >= termStart.getTime()
+      ? paidAt
       : termStart
 
   return formatDateOnly(sharedCycleStartOnOrAfter(termStart, targetStart))
@@ -212,11 +208,11 @@ export function nextPaidThroughDate({
   if (!termStart || !Number.isFinite(months) || months <= 0 || !Number.isInteger(months)) return ''
 
   const currentPaidThrough = parseDateOnly(currentPaidThroughDate)
-  const payment = parseDateOnly(paymentDate)
+  const paidAt = parseDateOnly(paymentDate)
   const targetStart = currentPaidThrough && currentPaidThrough.getTime() >= termStart.getTime()
     ? addDays(currentPaidThrough, 1)
-    : payment && payment.getTime() > termStart.getTime()
-      ? payment
+    : paidAt && paidAt.getTime() >= termStart.getTime()
+      ? paidAt
       : termStart
   const nextStart = sharedCycleStartOnOrAfter(termStart, targetStart)
   const startIndex = Math.max(0, calendarMonthDistance(termStart, nextStart))

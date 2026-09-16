@@ -160,6 +160,7 @@ export type PaymentRuleResolution =
       kind: 'matched'
       method: 'amount_unique'
       matchedType: string
+      matchedVehicleType: string
       standardMonthlyFee: number
       months: number
       candidateCount: number
@@ -168,6 +169,7 @@ export type PaymentRuleResolution =
       kind: 'ambiguous'
       method: 'amount_ambiguous'
       matchedType: ''
+      matchedVehicleType: ''
       standardMonthlyFee: 0
       months: 0
       candidateCount: number
@@ -176,6 +178,7 @@ export type PaymentRuleResolution =
       kind: 'no_match'
       method: 'none'
       matchedType: ''
+      matchedVehicleType: ''
       standardMonthlyFee: 0
       months: 0
       candidateCount: 0
@@ -184,6 +187,7 @@ export type PaymentRuleResolution =
       kind: 'zero_amount'
       method: 'none'
       matchedType: ''
+      matchedVehicleType: ''
       standardMonthlyFee: 0
       months: 0
       candidateCount: 0
@@ -192,6 +196,7 @@ export type PaymentRuleResolution =
 type LogicalCandidate = {
   normalizedType: string
   typeName: string
+  vehicleType: string
   fee: number
   months: number
   priority: number
@@ -214,6 +219,7 @@ export function resolvePaymentRuleByAmount(
       kind: 'zero_amount',
       method: 'none',
       matchedType: '',
+      matchedVehicleType: '',
       standardMonthlyFee: 0,
       months: 0,
       candidateCount: 0,
@@ -221,14 +227,15 @@ export function resolvePaymentRuleByAmount(
   }
 
   const parkingLotId = safeText(rental.parkingLotId, 80)
-  const vehicleType = normalizeVehicleType(rental.vehicleType)
   const fallbackAllowedMonths = normalizeAllowedMonths(allowedMonths)
   const logicalCandidates = new Map<string, LogicalCandidate>()
 
   for (const rule of rules) {
     if (rule?.is_active === false) continue
     if (safeText(rule.parking_lot_id, 80) !== parkingLotId) continue
-    if (normalizeVehicleType(rule.vehicle_type) !== vehicleType) continue
+
+    const vehicleType = normalizeVehicleType(rule.vehicle_type)
+    if (!vehicleType) continue
 
     const typeName = safeText(rule.type_name, 100)
     const normalizedType = typeName.toLowerCase()
@@ -250,10 +257,11 @@ export function resolvePaymentRuleByAmount(
     if (!ruleAllowedMonths.has(months)) continue
 
     const priority = Number(rule.priority ?? 100)
-    const key = `${normalizedType}|${fee}|${months}`
+    const key = `${vehicleType}|${normalizedType}|${fee}|${months}`
     const next: LogicalCandidate = {
       normalizedType,
       typeName,
+      vehicleType,
       fee,
       months,
       priority: Number.isFinite(priority) ? priority : 100,
@@ -278,6 +286,7 @@ export function resolvePaymentRuleByAmount(
       kind: 'no_match',
       method: 'none',
       matchedType: '',
+      matchedVehicleType: '',
       standardMonthlyFee: 0,
       months: 0,
       candidateCount: 0,
@@ -290,6 +299,7 @@ export function resolvePaymentRuleByAmount(
       kind: 'matched',
       method: 'amount_unique',
       matchedType: selected.typeName,
+      matchedVehicleType: selected.vehicleType,
       standardMonthlyFee: selected.fee,
       months: selected.months,
       candidateCount: 1,
@@ -302,6 +312,7 @@ export function resolvePaymentRuleByAmount(
     kind: 'ambiguous',
     method: 'amount_ambiguous',
     matchedType: '',
+    matchedVehicleType: '',
     standardMonthlyFee: 0,
     months: 0,
     candidateCount: candidates.length,

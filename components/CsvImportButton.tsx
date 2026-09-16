@@ -49,6 +49,7 @@ type PaymentRow = {
   monthlyFee?: number
   standardMonthlyFee?: number
   resolvedRentalType?: string
+  resolvedVehicleType?: string
   resolvedMonths?: number
   ruleMatchMethod?: string
   ruleCandidateCount?: number
@@ -70,6 +71,14 @@ function normalizePlate(value: any) {
     .replace(/\s/g, '')
     .replace(/-/g, '')
     .toUpperCase()
+}
+
+function vehicleTypeLabel(value: unknown) {
+  const normalized = text(value).toLowerCase()
+  if (normalized === 'motorcycle' || normalized === '機車') return '機車'
+  if (normalized === 'heavy_motorcycle' || normalized === '重機') return '重機'
+  if (normalized === 'car' || normalized === '汽車') return '汽車'
+  return text(value) || '未設定'
 }
 
 function numberValue(value: any) {
@@ -2262,6 +2271,11 @@ async function readFiles(
               ? ruleResolution.matchedType
               : '',
 
+          resolvedVehicleType:
+            ruleResolution.kind === 'matched'
+              ? ruleResolution.matchedVehicleType
+              : '',
+
           resolvedMonths:
             ruleResolution.kind === 'matched'
               ? ruleResolution.months
@@ -2285,12 +2299,12 @@ async function readFiles(
 
           message:
             ruleResolution.kind === 'matched'
-              ? `可同步（${ruleResolution.matchedType}／單月 $${ruleResolution.standardMonthlyFee.toLocaleString()}／${ruleResolution.months} 個月）`
+              ? `可同步（${vehicleTypeLabel(ruleResolution.matchedVehicleType)}／${ruleResolution.matchedType}／單月 $${ruleResolution.standardMonthlyFee.toLocaleString()}／${ruleResolution.months} 個月）`
               : ruleResolution.kind === 'zero_amount'
                 ? '0 元付款，待確認'
                 : ruleResolution.kind === 'ambiguous'
                   ? `實收金額依主管設定的允許月份仍可對應 ${ruleResolution.candidateCount} 種月租條件，需人工確認`
-                  : '同停車場／同車種中找不到符合目前允許繳費月份的月租條件，待確認',
+                  : '同停車場中找不到符合實收金額＋主管允許月份的月租條件，待確認',
         }
 
         matchedRow.sourceReference =
