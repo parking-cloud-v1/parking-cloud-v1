@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 
 import { createClient } from '@/lib/supabase/server'
+import { createClient as createAdminClient } from '@supabase/supabase-js'
 
 import MonthlyRentalActions from '@/components/MonthlyRentalActions'
 import MonthlyRentalDeleteButton from '@/components/MonthlyRentalDeleteButton'
@@ -10,8 +11,23 @@ import CsvImportButton from '@/components/CsvImportButton'
 import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
 import {
   getMonthlyBillingState,
+  isWithinOperationalWindow,
 } from '@/lib/monthly-rental-cycle'
+import { buildAppliedPaymentAmountMap } from '@/lib/monthly-rental-payment-summary'
 import ui from '@/components/PlatformAdmin.module.css'
+
+function serviceClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+  if (!url || !key) {
+    throw new Error('伺服器環境變數未設定完整，無法讀取正式月租付款金額。')
+  }
+
+  return createAdminClient(url, key, {
+    auth: { persistSession: false },
+  })
+}
 
 function formatRentalPeriod(
   startDate?: string | null,
@@ -358,6 +374,32 @@ export default async function MonthlyRentalsPage({
   } =
     await query
 
+  const rentalIds = (rentals || [])
+    .map((item: any) => String(item.id || '').trim())
+    .filter(Boolean)
+
+  let appliedPaymentAmountMap = new Map<string, number>()
+
+  if (rentalIds.length) {
+    // monthly_rentals 仍由登入者權限篩選；付款金額只針對已取得的 rentalIds
+    // 由伺服器 service role 讀取，避免 monthly_payments 的 RLS 讓畫面靜默退回標準月租。
+    const paymentAdmin = serviceClient()
+    const {
+      data: appliedPayments,
+      error: appliedPaymentsError,
+    } = await paymentAdmin
+      .from('monthly_payments')
+      .select('monthly_rental_id,amount,cycle_application_status')
+      .in('monthly_rental_id', rentalIds)
+      .eq('cycle_application_status', 'applied')
+
+    if (appliedPaymentsError) {
+      throw new Error(`正式付款金額讀取失敗：${appliedPaymentsError.message}`)
+    }
+
+    appliedPaymentAmountMap = buildAppliedPaymentAmountMap(appliedPayments || [])
+  }
+
   /*
    * 不再讀取舊系統推算的繳費月份表。
    * 舊系統推算的月份與任何歷史 payment-month 資料都不能影響本頁。
@@ -366,11 +408,14 @@ export default async function MonthlyRentalsPage({
 
   const todayText = new Date().toISOString().slice(0, 10)
 
-  /*
-   * 月租總表必須顯示所有未退租月租戶。
-   * 3 個月逾期規則只用於操作／簡訊名單，不可把 active 月租戶從總表隱藏。
-   */
   const enrichedRentals: any[] = (rentals || [])
+    .filter((item: any) =>
+      isWithinOperationalWindow({
+        today: todayText,
+        paidThroughDate: item.paid_through_date,
+        months: 3,
+      })
+    )
     .map((item: any) => {
       const billing = getMonthlyBillingState({
         today: todayText,
@@ -384,6 +429,7 @@ export default async function MonthlyRentalsPage({
         _stored_payment_status: item.payment_status,
         payment_status: billing.status,
         _billing_state: billing,
+        _actual_applied_amount: appliedPaymentAmountMap.get(String(item.id)) || 0,
       }
     })
 
@@ -470,6 +516,7 @@ export default async function MonthlyRentalsPage({
 
         monthly_fee:
           Number(
+            item._actual_applied_amount ||
             item.monthly_fee ||
             0
           ),
@@ -1571,6 +1618,7 @@ export default async function MonthlyRentalsPage({
                         >
                           $
                           {Number(
+                            item._actual_applied_amount ||
                             item.monthly_fee ||
                             0
                           ).toLocaleString()}
