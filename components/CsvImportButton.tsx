@@ -12,6 +12,19 @@ type ParkingLot = {
   name: string
 }
 
+const WORK_LOT_STORAGE_KEY = 'current-work-parking-lot-id'
+const MONTHLY_LOT_STORAGE_KEY = 'monthly-rentals-current-lot'
+const WORK_LOT_COOKIE_KEY = 'current_work_parking_lot_id'
+
+function setCurrentWorkParkingLot(parkingLotId: string) {
+  const id = String(parkingLotId || '').trim()
+  if (!id || typeof window === 'undefined') return
+
+  window.localStorage.setItem(WORK_LOT_STORAGE_KEY, id)
+  window.localStorage.setItem(MONTHLY_LOT_STORAGE_KEY, id)
+  document.cookie = `${WORK_LOT_COOKIE_KEY}=${encodeURIComponent(id)}; path=/; max-age=31536000; samesite=lax`
+}
+
 type PaymentRow = {
   fileName: string
 
@@ -2547,6 +2560,16 @@ async function readFiles(
       (row) => row.matched && row.rentalId && row.parkingLotId && !row.duplicate
     )
 
+    // 同一批若只屬於一個停車場，成功後自動把該 UUID 設為目前工作停車場。
+    // 若意外混入多場資料則不自動切換，避免亂跳場站。
+    const syncLotIds = [
+      ...new Set(
+        syncRows
+          .map((row) => String(row.parkingLotId || '').trim())
+          .filter(Boolean)
+      ),
+    ]
+
     if (syncRows.length === 0) {
       alert('目前沒有可以同步的資料')
       return
@@ -2614,14 +2637,16 @@ async function readFiles(
         setPendingFolderSignatures([])
       }
 
+      if (success > 0 && syncLotIds.length === 1) {
+        setCurrentWorkParkingLot(syncLotIds[0])
+      }
+
       if (failed === 0 && success > 0) {
         setMessage(
-          `同步完成：處理 ${success} 筆，繳費歷史新增 ${historySuccess} 筆，已存在 ${historyDuplicate} 筆，待主管確認 ${pendingReview} 筆，即將重新整理月租管理…`
+          `同步完成：處理 ${success} 筆，繳費歷史新增 ${historySuccess} 筆，已存在 ${historyDuplicate} 筆，待主管確認 ${pendingReview} 筆，即將返回月租管理…`
         )
         setTimeout(() => {
-          // 保留目前網址上的 lot / q / payment / status 篩選條件。
-          // 原本跳到裸路徑會把 lot 清掉，月租頁因此查不到任何資料。
-          window.location.reload()
+          window.location.href = '/dashboard/monthly-rentals'
         }, 1000)
         return
       }

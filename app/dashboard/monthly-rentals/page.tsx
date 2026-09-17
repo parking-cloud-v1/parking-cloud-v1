@@ -2,32 +2,14 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 
 import { createClient } from '@/lib/supabase/server'
-import { createClient as createAdminClient } from '@supabase/supabase-js'
 
 import MonthlyRentalActions from '@/components/MonthlyRentalActions'
 import MonthlyRentalDeleteButton from '@/components/MonthlyRentalDeleteButton'
 import ExcelExportButton from '@/components/ExcelExportButton'
 import CsvImportButton from '@/components/CsvImportButton'
 import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
-import {
-  getMonthlyBillingState,
-  isWithinOperationalWindow,
-} from '@/lib/monthly-rental-cycle'
-import { buildAppliedPaymentAmountMap } from '@/lib/monthly-rental-payment-summary'
+import { getMonthlyBillingState } from '@/lib/monthly-rental-cycle'
 import ui from '@/components/PlatformAdmin.module.css'
-
-function serviceClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!url || !key) {
-    throw new Error('伺服器環境變數未設定完整，無法讀取正式月租付款金額。')
-  }
-
-  return createAdminClient(url, key, {
-    auth: { persistSession: false },
-  })
-}
 
 function formatRentalPeriod(
   startDate?: string | null,
@@ -374,30 +356,33 @@ export default async function MonthlyRentalsPage({
   } =
     await query
 
+  /*
+   * 畫面上的「金額」改顯示正式繳費報表最近一筆實收，
+   * 不再拿 monthly_fee（標準單月費）冒充實收金額。
+   * pending_review 也保留原始實收，方便管理員人工確認 1／2 個月。
+   */
+  const latestPaymentByRentalId = new Map<string, any>()
   const rentalIds = (rentals || [])
     .map((item: any) => String(item.id || '').trim())
     .filter(Boolean)
 
-  let appliedPaymentAmountMap = new Map<string, number>()
-
   if (rentalIds.length) {
-    // monthly_rentals 仍由登入者權限篩選；付款金額只針對已取得的 rentalIds
-    // 由伺服器 service role 讀取，避免 monthly_payments 的 RLS 讓畫面靜默退回標準月租。
-    const paymentAdmin = serviceClient()
-    const {
-      data: appliedPayments,
-      error: appliedPaymentsError,
-    } = await paymentAdmin
+    const { data: paymentRows, error: paymentRowsError } = await supabase
       .from('monthly_payments')
-      .select('monthly_rental_id,amount,cycle_application_status')
+      .select('monthly_rental_id,amount,payment_date,cycle_application_status,created_at')
       .in('monthly_rental_id', rentalIds)
-      .eq('cycle_application_status', 'applied')
+      .in('cycle_application_status', ['applied', 'pending_review'])
+      .order('payment_date', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false })
 
-    if (appliedPaymentsError) {
-      throw new Error(`正式付款金額讀取失敗：${appliedPaymentsError.message}`)
+    if (!paymentRowsError) {
+      for (const paymentRow of paymentRows || []) {
+        const key = String((paymentRow as any).monthly_rental_id || '')
+        if (key && !latestPaymentByRentalId.has(key)) {
+          latestPaymentByRentalId.set(key, paymentRow)
+        }
+      }
     }
-
-    appliedPaymentAmountMap = buildAppliedPaymentAmountMap(appliedPayments || [])
   }
 
   /*
@@ -408,14 +393,11 @@ export default async function MonthlyRentalsPage({
 
   const todayText = new Date().toISOString().slice(0, 10)
 
+  /*
+   * 月租管理主名單只以 rental_status 判斷是否仍在使用。
+   * paid_through_date 只決定已繳／未繳／待確認狀態，絕不能讓月租戶整筆消失。
+   */
   const enrichedRentals: any[] = (rentals || [])
-    .filter((item: any) =>
-      isWithinOperationalWindow({
-        today: todayText,
-        paidThroughDate: item.paid_through_date,
-        months: 3,
-      })
-    )
     .map((item: any) => {
       const billing = getMonthlyBillingState({
         today: todayText,
@@ -424,12 +406,15 @@ export default async function MonthlyRentalsPage({
         reminderDays: 15,
       })
 
+      const latestPayment = latestPaymentByRentalId.get(String(item.id || ''))
+
       return {
         ...item,
         _stored_payment_status: item.payment_status,
         payment_status: billing.status,
         _billing_state: billing,
-        _actual_applied_amount: appliedPaymentAmountMap.get(String(item.id)) || 0,
+        _latest_payment_amount: latestPayment?.amount ?? null,
+        _latest_payment_date: latestPayment?.payment_date || null,
       }
     })
 
@@ -516,10 +501,14 @@ export default async function MonthlyRentalsPage({
 
         monthly_fee:
           Number(
-            item._actual_applied_amount ||
             item.monthly_fee ||
             0
           ),
+
+        actual_payment_amount:
+          item._latest_payment_amount == null
+            ? ''
+            : Number(item._latest_payment_amount),
 
         payment_status:
           item.payment_status ||
@@ -530,6 +519,7 @@ export default async function MonthlyRentalsPage({
           '',
 
         payment_date:
+          item._latest_payment_date ||
           item.payment_date ||
           '',
 
@@ -1616,12 +1606,9 @@ export default async function MonthlyRentalsPage({
                               700,
                           }}
                         >
-                          $
-                          {Number(
-                            item._actual_applied_amount ||
-                            item.monthly_fee ||
-                            0
-                          ).toLocaleString()}
+                          {item._latest_payment_amount == null
+                            ? '-'
+                            : `$${Number(item._latest_payment_amount).toLocaleString()}`}
                         </td>
 
                         {/* 付款 */}
@@ -1654,7 +1641,7 @@ export default async function MonthlyRentalsPage({
                                 已繳
                               </div>
 
-                              {item.payment_date && (
+                              {(item._latest_payment_date || item.payment_date) && (
                                 <div
                                   style={{
                                     fontSize: 13,
@@ -1664,7 +1651,7 @@ export default async function MonthlyRentalsPage({
                                     fontWeight: 500,
                                   }}
                                 >
-                                  {item.payment_date}
+                                  {item._latest_payment_date || item.payment_date}
                                 </div>
                               )}
                             </div>

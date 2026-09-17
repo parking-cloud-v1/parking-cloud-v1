@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 
 type Review = {
   id: string
+  parking_lot_id: string
   monthly_rental_id: string
   amount: number
   monthly_fee: number
@@ -25,21 +26,58 @@ function reasonText(reason: string) {
   return reason
 }
 
+const WORK_LOT_STORAGE_KEY = 'current-work-parking-lot-id'
+
+function getCurrentWorkParkingLotId() {
+  if (typeof window === 'undefined') return ''
+
+  const stored = String(
+    window.localStorage.getItem(WORK_LOT_STORAGE_KEY) || ''
+  ).trim()
+  if (stored) return stored
+
+  const match = document.cookie.match(
+    /(?:^|;\s*)current_work_parking_lot_id=([^;]+)/
+  )
+  return match?.[1]
+    ? decodeURIComponent(match[1]).trim()
+    : ''
+}
+
 export default function MonthlyPaymentReviewClient() {
   const supabase = useMemo(() => createClient(), [])
   const [rows, setRows] = useState<Review[]>([])
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
   const [busyId, setBusyId] = useState('')
+  const [currentLotName, setCurrentLotName] = useState('')
 
   async function load() {
     setLoading(true)
     setMessage('')
 
+    const currentLotId = getCurrentWorkParkingLotId()
+    if (!currentLotId) {
+      setRows([])
+      setCurrentLotName('')
+      setMessage('請先從左側「目前工作停車場」選擇場站。')
+      setLoading(false)
+      return
+    }
+
+    const { data: lotRow } = await supabase
+      .from('parking_lots')
+      .select('name')
+      .eq('id', currentLotId)
+      .maybeSingle()
+
+    setCurrentLotName(String(lotRow?.name || '目前場站'))
+
     const { data: reviews, error } = await supabase
       .from('monthly_payment_reviews')
-      .select('id,monthly_rental_id,amount,monthly_fee,reason,created_at')
+      .select('id,parking_lot_id,monthly_rental_id,amount,monthly_fee,reason,created_at')
       .eq('status', 'pending')
+      .eq('parking_lot_id', currentLotId)
       .order('created_at', { ascending: true })
 
     if (error) {
@@ -108,12 +146,15 @@ export default function MonthlyPaymentReviewClient() {
       <div className="card">
         <h1 style={{ marginTop: 0 }}>月租付款待確認</h1>
         <p className="muted">待確認會保留正式繳費報表的原始實收金額；管理員只需確認這筆算 1 個月或 2 個月，原始金額不會被改寫。確認以前不延長租期。</p>
+        <div style={{ marginTop: 10, fontWeight: 700 }}>
+          目前工作停車場：{currentLotName || '尚未選擇'}
+        </div>
       </div>
 
       {message && <div className="card" style={{ marginTop: 16 }}>{message}</div>}
 
       <div className="card" style={{ marginTop: 16, overflowX: 'auto' }}>
-        {loading ? <div>讀取中…</div> : rows.length === 0 ? <div>目前沒有待確認付款。</div> : (
+        {loading ? <div>讀取中…</div> : rows.length === 0 ? <div>目前工作停車場沒有待確認付款。</div> : (
           <table style={{ width: '100%', minWidth: 980, borderCollapse: 'collapse' }}>
             <thead><tr><th>客戶</th><th>車牌</th><th>實收</th><th>系統月租</th><th>原因</th><th>目前已繳至</th><th>操作</th></tr></thead>
             <tbody>

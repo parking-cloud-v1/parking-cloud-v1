@@ -10,6 +10,19 @@ type ParkingLot = {
   name: string
 }
 
+const WORK_LOT_STORAGE_KEY = 'current-work-parking-lot-id'
+const MONTHLY_LOT_STORAGE_KEY = 'monthly-rentals-current-lot'
+const WORK_LOT_COOKIE_KEY = 'current_work_parking_lot_id'
+
+function setCurrentWorkParkingLot(parkingLotId: string) {
+  const id = String(parkingLotId || '').trim()
+  if (!id || typeof window === 'undefined') return
+
+  window.localStorage.setItem(WORK_LOT_STORAGE_KEY, id)
+  window.localStorage.setItem(MONTHLY_LOT_STORAGE_KEY, id)
+  document.cookie = `${WORK_LOT_COOKIE_KEY}=${encodeURIComponent(id)}; path=/; max-age=31536000; samesite=lax`
+}
+
 
 type LegacyComparisonItem = {
   type:
@@ -137,77 +150,20 @@ type PreviewRow = {
 }
 
 /*
- * 舊月租總表只用「結束日」判斷名冊匯入資格，不會拿這個日期去改正式租期或已繳至日期。
- * - 月租金額 <= 0：直接略過，不進預覽、比對或正式匯入。
- * - 結束日早於「今天往前 3 個月」：視為已超過 3 個月，直接略過。
- * - 結束日缺漏／無法辨識：不猜退租，先保留給管理員比對。
+ * 舊月租總表的日期只保留作稽核，不參與是否匯入的判斷。
+ * 月租金額為 0 的列不是正常月租戶，直接略過，不進預覽、比對或正式匯入。
  */
-function threeMonthsAgoDateText(
-  referenceDate: Date = new Date()
-) {
-  const cutoff = new Date(
-    referenceDate.getFullYear(),
-    referenceDate.getMonth() - 3,
-    referenceDate.getDate()
-  )
-
-  return `${cutoff.getFullYear()}-${String(
-    cutoff.getMonth() + 1
-  ).padStart(2, '0')}-${String(
-    cutoff.getDate()
-  ).padStart(2, '0')}`
-}
-
 function filterExpiredImportRows(
-  sourceRows: PreviewRow[],
-  referenceDate: Date = new Date()
+  sourceRows: PreviewRow[]
 ) {
-  const cutoff =
-    threeMonthsAgoDateText(
-      referenceDate
-    )
-
-  let zeroExcludedCount = 0
-  let expiredExcludedCount = 0
-
   const rows = sourceRows.filter(
-    (item) => {
-      if (
-        Number(
-          item.monthly_fee || 0
-        ) <= 0
-      ) {
-        zeroExcludedCount++
-        return false
-      }
-
-      const endDate =
-        normalizeDate(
-          String(
-            item.end_date || ''
-          )
-        )
-
-      if (
-        endDate &&
-        endDate < cutoff
-      ) {
-        expiredExcludedCount++
-        return false
-      }
-
-      return true
-    }
+    (item) => Number(item.monthly_fee || 0) > 0
   )
 
   return {
     rows,
-    excludedCount:
-      zeroExcludedCount +
-      expiredExcludedCount,
-    zeroExcludedCount,
-    expiredExcludedCount,
-    cutoff,
+    excludedCount: sourceRows.length - rows.length,
+    cutoff: '舊系統日期不參與；0 元資料略過',
   }
 }
 
@@ -526,24 +482,13 @@ function detectVehicleType(
   | 'car'
   | 'motorcycle'
   | 'heavy_motorcycle' {
-  const kind = String(legacyType || '').trim()
-  const source = `${rentalType} ${legacyType}`
+  const source =
+    `${rentalType} ${legacyType}`
 
-  // 舊月票總表「月票種類」是正式車種來源：0=汽車類、1=機車。
-  // 重機會以文字另外標示，因此重機文字優先於 0。
   if (source.includes('重機')) {
     return 'heavy_motorcycle'
   }
 
-  if (kind === '1') {
-    return 'motorcycle'
-  }
-
-  if (kind === '0') {
-    return 'car'
-  }
-
-  // 相容其他舊版本：沒有 0/1 時才以文字備援。
   if (source.includes('機車')) {
     return 'motorcycle'
   }
@@ -1605,8 +1550,8 @@ async function parseLegacyFile(
 
         vehicle_type:
           detectVehicleType(
-            `${detectedRentalType} ${typeSource}`,
-            legacyType || ''
+            detectedRentalType,
+            typeSource
           ),
 
         rental_type:
@@ -1670,15 +1615,11 @@ async function parseLegacyFile(
       current.rental_type =
         cleanedType
 
-      // 「里民／一般／身障」是身分類型，不是車種；不得把原本月票種類=1的機車改回汽車。
-      // 只有後續行明確寫出重機、機車或老師汽車單月時，才修正車種。
-      if (line.includes('重機')) {
-        current.vehicle_type = 'heavy_motorcycle'
-      } else if (line.includes('機車')) {
-        current.vehicle_type = 'motorcycle'
-      } else if (line.includes('老師汽車單月')) {
-        current.vehicle_type = 'car'
-      }
+      current.vehicle_type =
+        detectVehicleType(
+          cleanedType,
+          ''
+        )
 
       continue
     }
@@ -1756,14 +1697,6 @@ function createChangeDetails(
 
   if (!sameValue(normalizePlate(oldRow.vehicle_plate || ''), normalizePlate(newRow.vehicle_plate || ''))) {
     details.push(`車牌差異（只記錄、不覆蓋）：${oldRow.vehicle_plate || '-'} → ${newRow.vehicle_plate || '-'}`)
-  }
-
-  if (!sameValue(oldRow.vehicle_type, newRow.vehicle_type)) {
-    details.push(`車種：${oldRow.vehicle_type || '-'} → ${newRow.vehicle_type || '-'}`)
-  }
-
-  if (newRow.rental_type && !sameValue(oldRow.rental_type, newRow.rental_type)) {
-    details.push(`類型：${oldRow.rental_type || '-'} → ${newRow.rental_type}`)
   }
 
   return details
@@ -1873,7 +1806,7 @@ export default function LegacyMonthlyImport({
         setRows(rosterRows408)
 
         setMessage(
-          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，可匯入 ${rosterRows408.length} 筆，0 元略過 ${expiryFiltered408.zeroExcludedCount} 筆，結束日已超過 3 個月略過 ${expiryFiltered408.expiredExcludedCount} 筆（基準日 ${expiryFiltered408.cutoff}）。舊總表日期只用於名冊匯入資格；本系統正式租期、已繳至日期與單月費仍以本系統正式資料為準。`
+          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，可匯入 ${rosterRows408.length} 筆，0 元略過 ${expiryFiltered408.excludedCount} 筆。舊開始日／結束日與月租金只留作稽核；本系統正式租期與單月費以主管設定為準。`
         )
 
         return
@@ -1897,7 +1830,7 @@ export default function LegacyMonthlyImport({
       const invalid = rosterRows.length - valid
 
       setMessage(
-        `已辨識 ${rosterRows.length} 筆，可匯入 ${valid} 筆，0 元略過 ${expiryFiltered.zeroExcludedCount} 筆，結束日已超過 3 個月略過 ${expiryFiltered.expiredExcludedCount} 筆（基準日 ${expiryFiltered.cutoff}），格式異常 ${invalid} 筆；舊總表日期只用於名冊匯入資格；本系統正式租期、已繳至日期與單月費仍以本系統正式資料為準。`
+        `已辨識 ${rosterRows.length} 筆，可匯入 ${valid} 筆，0 元略過 ${expiryFiltered.excludedCount} 筆，格式異常 ${invalid} 筆；舊開始日／結束日與月租金只留作稽核；本系統正式租期與單月費以主管設定為準。`
       )
     } catch (
       error: any
@@ -3337,7 +3270,7 @@ export default function LegacyMonthlyImport({
                 'monthly_rentals'
               )
               .update({
-                // 既有客戶：名冊中的月票種類 0/1 與明確身分類型可校正車種／類型。
+                // 既有客戶：只同步姓名、電話與名冊狀態。
                 customer_name:
                   newRow.customer_name,
 
@@ -3345,18 +3278,9 @@ export default function LegacyMonthlyImport({
                   newRow.phone ||
                   null,
 
-                vehicle_type:
-                  newRow.vehicle_type,
-
-                rental_type:
-                  newRow.rental_type ||
-                  currentRental.rental_type ||
-                  null,
-
-                monthly_fee:
-                  configuredMonthlyFee > 0
-                    ? configuredMonthlyFee
-                    : currentRental.monthly_fee,
+                /*
+                 * 舊名單不再變更本系統車種／月租類型、月租金額、開始日、結束日或付款狀態。
+                 */
 
                 rental_status:
                   'active',
@@ -3565,7 +3489,7 @@ export default function LegacyMonthlyImport({
               'monthly_rentals'
             )
             .update({
-              // 既有客戶：以月票種類 0/1 校正車種，明確身分類型同步回主檔。
+              // 既有客戶：舊月票總表只更新姓名、電話與名冊狀態。
               customer_name:
                 newRow.customer_name,
 
@@ -3573,18 +3497,9 @@ export default function LegacyMonthlyImport({
                 newRow.phone ||
                 null,
 
-              vehicle_type:
-                newRow.vehicle_type,
-
-              rental_type:
-                newRow.rental_type ||
-                currentRental.rental_type ||
-                null,
-
-              monthly_fee:
-                configuredMonthlyFee > 0
-                  ? configuredMonthlyFee
-                  : currentRental.monthly_fee,
+              /*
+               * 舊名單不再變更本系統車種／月租類型，避免間接影響系統月租金。
+               */
 
               rental_status:
                 'active',
@@ -4001,6 +3916,10 @@ export default function LegacyMonthlyImport({
       if (
         failed === 0
       ) {
+        // 匯入哪一場，就同步切換「目前工作停車場」到該場 UUID。
+        // 避免回月租管理後仍顯示先前場站，看起來像資料不見。
+        setCurrentWorkParkingLot(parkingLotId)
+
         setTimeout(() => {
           window.location.href =
             '/dashboard/monthly-rentals'
@@ -4080,7 +3999,7 @@ export default function LegacyMonthlyImport({
         </h2>
 
         <p className="muted">
-          先分析與上一份舊系統總表的差異，確認後才正式匯入。名冊匯入資格固定為：月租金額 0 元直接略過；舊總表結束日若早於今天往前 3 個月也直接略過，不進預覽、比對或正式匯入。舊總表結束日只用來判斷這次名冊是否仍需匯入，絕不會改動本系統正式租期、已繳至日期、付款狀態或簡訊名單。車種仍優先依舊總表「月票種類」辨識：0 為汽車類、1 為機車，明確寫「重機」時辨識為重機；里民、一般、身障、老師等文字只用來辨識月租類型。只有正式收款或繳費紀錄成功建立後才會更新已繳狀態。備註內若含手機或市話，系統會自動辨識電話號碼；手機少了開頭 0（例如 912345678）也會自動補成 0912345678。
+          先分析與上一份舊系統總表的差異，確認後才正式匯入。舊系統日期不再作為匯入排除條件；目前總表存在即視為名冊中的有效候選資料。正式租期仍以主管設定為準，不會被舊系統日期覆蓋。舊系統開始日、結束日、金額與付款欄位全部只作稽核，不會改動本系統正式租期、到期日、月租金額、付款狀態或簡訊名單。只有「收款」或「繳費紀錄上傳」成功建立真正繳費紀錄後才會成為已繳；總表本身不再建立繳費月份，也不會直接判定已繳。舊總表金額即使為 0 元也不會改變名冊資格；0 元付款是否成立只由正式繳費報表進入管理員待確認流程。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
         </p>
 
         <div
