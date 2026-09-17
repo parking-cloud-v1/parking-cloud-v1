@@ -2616,10 +2616,12 @@ async function readFiles(
 
       if (failed === 0 && success > 0) {
         setMessage(
-          `同步完成：處理 ${success} 筆，繳費歷史新增 ${historySuccess} 筆，已存在 ${historyDuplicate} 筆，待主管確認 ${pendingReview} 筆，即將返回月租管理…`
+          `同步完成：處理 ${success} 筆，繳費歷史新增 ${historySuccess} 筆，已存在 ${historyDuplicate} 筆，待主管確認 ${pendingReview} 筆，即將重新整理月租管理…`
         )
         setTimeout(() => {
-          window.location.href = '/dashboard/monthly-rentals'
+          // 保留目前網址上的 lot / q / payment / status 篩選條件。
+          // 原本跳到裸路徑會把 lot 清掉，月租頁因此查不到任何資料。
+          window.location.reload()
         }, 1000)
         return
       }
