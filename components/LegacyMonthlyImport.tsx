@@ -10,19 +10,6 @@ type ParkingLot = {
   name: string
 }
 
-const WORK_LOT_STORAGE_KEY = 'current-work-parking-lot-id'
-const MONTHLY_LOT_STORAGE_KEY = 'monthly-rentals-current-lot'
-const WORK_LOT_COOKIE_KEY = 'current_work_parking_lot_id'
-
-function setCurrentWorkParkingLot(parkingLotId: string) {
-  const id = String(parkingLotId || '').trim()
-  if (!id || typeof window === 'undefined') return
-
-  window.localStorage.setItem(WORK_LOT_STORAGE_KEY, id)
-  window.localStorage.setItem(MONTHLY_LOT_STORAGE_KEY, id)
-  document.cookie = `${WORK_LOT_COOKIE_KEY}=${encodeURIComponent(id)}; path=/; max-age=31536000; samesite=lax`
-}
-
 
 type LegacyComparisonItem = {
   type:
@@ -150,20 +137,77 @@ type PreviewRow = {
 }
 
 /*
- * 舊月租總表的日期只保留作稽核，不參與是否匯入的判斷。
- * 月租金額為 0 的列不是正常月租戶，直接略過，不進預覽、比對或正式匯入。
+ * 舊月租總表只用「結束日」判斷名冊匯入資格，不會拿這個日期去改正式租期或已繳至日期。
+ * - 月租金額 <= 0：直接略過，不進預覽、比對或正式匯入。
+ * - 結束日早於「今天往前 3 個月」：視為已超過 3 個月，直接略過。
+ * - 結束日缺漏／無法辨識：不猜退租，先保留給管理員比對。
  */
-function filterExpiredImportRows(
-  sourceRows: PreviewRow[]
+function threeMonthsAgoDateText(
+  referenceDate: Date = new Date()
 ) {
+  const cutoff = new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth() - 3,
+    referenceDate.getDate()
+  )
+
+  return `${cutoff.getFullYear()}-${String(
+    cutoff.getMonth() + 1
+  ).padStart(2, '0')}-${String(
+    cutoff.getDate()
+  ).padStart(2, '0')}`
+}
+
+function filterExpiredImportRows(
+  sourceRows: PreviewRow[],
+  referenceDate: Date = new Date()
+) {
+  const cutoff =
+    threeMonthsAgoDateText(
+      referenceDate
+    )
+
+  let zeroExcludedCount = 0
+  let expiredExcludedCount = 0
+
   const rows = sourceRows.filter(
-    (item) => Number(item.monthly_fee || 0) > 0
+    (item) => {
+      if (
+        Number(
+          item.monthly_fee || 0
+        ) <= 0
+      ) {
+        zeroExcludedCount++
+        return false
+      }
+
+      const endDate =
+        normalizeDate(
+          String(
+            item.end_date || ''
+          )
+        )
+
+      if (
+        endDate &&
+        endDate < cutoff
+      ) {
+        expiredExcludedCount++
+        return false
+      }
+
+      return true
+    }
   )
 
   return {
     rows,
-    excludedCount: sourceRows.length - rows.length,
-    cutoff: '舊系統日期不參與；0 元資料略過',
+    excludedCount:
+      zeroExcludedCount +
+      expiredExcludedCount,
+    zeroExcludedCount,
+    expiredExcludedCount,
+    cutoff,
   }
 }
 
@@ -1806,7 +1850,7 @@ export default function LegacyMonthlyImport({
         setRows(rosterRows408)
 
         setMessage(
-          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，可匯入 ${rosterRows408.length} 筆，0 元略過 ${expiryFiltered408.excludedCount} 筆。舊開始日／結束日與月租金只留作稽核；本系統正式租期與單月費以主管設定為準。`
+          `408巷 Excel 已辨識：使用工作表「${parsed408.sheetName}」，可匯入 ${rosterRows408.length} 筆，0 元略過 ${expiryFiltered408.zeroExcludedCount} 筆，結束日已超過 3 個月略過 ${expiryFiltered408.expiredExcludedCount} 筆（基準日 ${expiryFiltered408.cutoff}）。舊總表日期只用於名冊匯入資格；本系統正式租期、已繳至日期與單月費仍以本系統正式資料為準。`
         )
 
         return
@@ -1830,7 +1874,7 @@ export default function LegacyMonthlyImport({
       const invalid = rosterRows.length - valid
 
       setMessage(
-        `已辨識 ${rosterRows.length} 筆，可匯入 ${valid} 筆，0 元略過 ${expiryFiltered.excludedCount} 筆，格式異常 ${invalid} 筆；舊開始日／結束日與月租金只留作稽核；本系統正式租期與單月費以主管設定為準。`
+        `已辨識 ${rosterRows.length} 筆，可匯入 ${valid} 筆，0 元略過 ${expiryFiltered.zeroExcludedCount} 筆，結束日已超過 3 個月略過 ${expiryFiltered.expiredExcludedCount} 筆（基準日 ${expiryFiltered.cutoff}），格式異常 ${invalid} 筆；舊總表日期只用於名冊匯入資格；本系統正式租期、已繳至日期與單月費仍以本系統正式資料為準。`
       )
     } catch (
       error: any
@@ -3916,10 +3960,6 @@ export default function LegacyMonthlyImport({
       if (
         failed === 0
       ) {
-        // 匯入哪一場，就同步切換「目前工作停車場」到該場 UUID。
-        // 避免回月租管理後仍顯示先前場站，看起來像資料不見。
-        setCurrentWorkParkingLot(parkingLotId)
-
         setTimeout(() => {
           window.location.href =
             '/dashboard/monthly-rentals'
@@ -3999,7 +4039,7 @@ export default function LegacyMonthlyImport({
         </h2>
 
         <p className="muted">
-          先分析與上一份舊系統總表的差異，確認後才正式匯入。舊系統日期不再作為匯入排除條件；目前總表存在即視為名冊中的有效候選資料。正式租期仍以主管設定為準，不會被舊系統日期覆蓋。舊系統開始日、結束日、金額與付款欄位全部只作稽核，不會改動本系統正式租期、到期日、月租金額、付款狀態或簡訊名單。只有「收款」或「繳費紀錄上傳」成功建立真正繳費紀錄後才會成為已繳；總表本身不再建立繳費月份，也不會直接判定已繳。舊總表金額即使為 0 元也不會改變名冊資格；0 元付款是否成立只由正式繳費報表進入管理員待確認流程。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
+          先分析與上一份舊系統總表的差異，確認後才正式匯入。月租總表的月租金額為 0 元，或舊總表結束日早於今天往前 3 個月，會直接略過，不進預覽、比對或正式匯入；結束日空白或無法辨識則保留給管理員確認。舊總表結束日只用來判斷名冊匯入資格，不會改動本系統正式租期或已繳至日期。正式租期與正式月租金仍以本系統主管設定為準；只有「收款」或「繳費紀錄上傳」成功建立真正繳費紀錄後才會成為已繳。0 元的正式繳費報表仍會進付款待確認，不受這個月租總表略過規則影響。備註內若含手機或市話，系統會自動辨識電話號碼，不需要特殊格式；手機若少了開頭 0（例如 912345678），也會自動補成 0912345678。
         </p>
 
         <div
