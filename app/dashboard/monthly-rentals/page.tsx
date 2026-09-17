@@ -8,7 +8,10 @@ import MonthlyRentalDeleteButton from '@/components/MonthlyRentalDeleteButton'
 import ExcelExportButton from '@/components/ExcelExportButton'
 import CsvImportButton from '@/components/CsvImportButton'
 import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
-import { getMonthlyBillingState } from '@/lib/monthly-rental-cycle'
+import {
+  getMonthlyBillingState,
+  isWithinOperationalWindow,
+} from '@/lib/monthly-rental-cycle'
 import ui from '@/components/PlatformAdmin.module.css'
 
 function formatRentalPeriod(
@@ -362,7 +365,6 @@ export default async function MonthlyRentalsPage({
    * pending_review 也保留原始實收，方便管理員人工確認 1／2 個月。
    */
   const latestPaymentByRentalId = new Map<string, any>()
-  const paidThroughFromHistoryByRentalId = new Map<string, string>()
   const rentalIds = (rentals || [])
     .map((item: any) => String(item.id || '').trim())
     .filter(Boolean)
@@ -370,7 +372,7 @@ export default async function MonthlyRentalsPage({
   if (rentalIds.length) {
     const { data: paymentRows, error: paymentRowsError } = await supabase
       .from('monthly_payments')
-      .select('monthly_rental_id,amount,payment_date,applied_to_date,cycle_application_status,created_at')
+      .select('monthly_rental_id,amount,payment_date,cycle_application_status,created_at')
       .in('monthly_rental_id', rentalIds)
       .in('cycle_application_status', ['applied', 'pending_review'])
       .order('payment_date', { ascending: false, nullsFirst: false })
@@ -381,18 +383,6 @@ export default async function MonthlyRentalsPage({
         const key = String((paymentRow as any).monthly_rental_id || '')
         if (key && !latestPaymentByRentalId.has(key)) {
           latestPaymentByRentalId.set(key, paymentRow)
-        }
-
-        if (
-          key &&
-          (paymentRow as any).cycle_application_status === 'applied' &&
-          (paymentRow as any).applied_to_date
-        ) {
-          const historyDate = String((paymentRow as any).applied_to_date)
-          const currentHistoryDate = paidThroughFromHistoryByRentalId.get(key) || ''
-          if (!currentHistoryDate || historyDate > currentHistoryDate) {
-            paidThroughFromHistoryByRentalId.set(key, historyDate)
-          }
         }
       }
     }
@@ -406,33 +396,26 @@ export default async function MonthlyRentalsPage({
 
   const todayText = new Date().toISOString().slice(0, 10)
 
-  /*
-   * 月租管理主名單只以 rental_status 判斷是否仍在使用。
-   * paid_through_date 只決定已繳／未繳／待確認狀態，絕不能讓月租戶整筆消失。
-   */
   const enrichedRentals: any[] = (rentals || [])
+    .filter((item: any) =>
+      isWithinOperationalWindow({
+        today: todayText,
+        paidThroughDate: item.paid_through_date,
+        months: 3,
+      })
+    )
     .map((item: any) => {
-      const rentalId = String(item.id || '')
-      const historyPaidThroughDate =
-        paidThroughFromHistoryByRentalId.get(rentalId) || ''
-      const storedPaidThroughDate = String(item.paid_through_date || '')
-      const effectivePaidThroughDate =
-        historyPaidThroughDate > storedPaidThroughDate
-          ? historyPaidThroughDate
-          : storedPaidThroughDate
-
       const billing = getMonthlyBillingState({
         today: todayText,
-        paidThroughDate: effectivePaidThroughDate,
+        paidThroughDate: item.paid_through_date,
         paymentReviewStatus: item.payment_review_status,
         reminderDays: 15,
       })
 
-      const latestPayment = latestPaymentByRentalId.get(rentalId)
+      const latestPayment = latestPaymentByRentalId.get(String(item.id || ''))
 
       return {
         ...item,
-        paid_through_date: effectivePaidThroughDate || null,
         _stored_payment_status: item.payment_status,
         payment_status: billing.status,
         _billing_state: billing,
@@ -1720,6 +1703,7 @@ export default async function MonthlyRentalsPage({
                         >
                           <MonthlyRentalActions
                             rental={item}
+                            canCorrectPaidThrough={profile.role === 'supervisor'}
                           />
 
                           <MonthlyRentalDeleteButton
