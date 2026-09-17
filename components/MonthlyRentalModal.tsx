@@ -1,11 +1,7 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import {
-  getManualPaymentOptions,
-  type ManualPaymentRule,
-} from '@/lib/monthly-manual-payment'
 
 type Mode = 'payment' | 'renew' | 'edit'
 
@@ -62,10 +58,8 @@ export default function MonthlyRentalModal({
   const [invoiceNumber, setInvoiceNumber] = useState('')
   const [notes, setNotes] = useState('')
 
-  const [allowedMonths, setAllowedMonths] = useState<number[]>([])
   const [paymentMonths, setPaymentMonths] = useState(1)
-  const [manualMonthlyFee, setManualMonthlyFee] = useState(0)
-  const [paymentOptionsLoading, setPaymentOptionsLoading] = useState(false)
+  const [manualPaymentAmount, setManualPaymentAmount] = useState('')
   const [manualRequestId, setManualRequestId] = useState('')
 
   const [loading, setLoading] = useState(false)
@@ -88,58 +82,13 @@ export default function MonthlyRentalModal({
 
     if (mode !== 'payment') return
 
-    let cancelled = false
-    setPaymentOptionsLoading(true)
-    setAllowedMonths([])
-    setManualMonthlyFee(0)
-
-    async function loadPaymentOptions() {
-      const supabase = createClient()
-      const { data, error } = await supabase
-        .from('monthly_rental_type_rules')
-        .select('parking_lot_id,type_name,vehicle_type,match_amounts,base_monthly_fee,allowed_payment_months,priority,is_active')
-        .eq('parking_lot_id', rental.parking_lot_id)
-        .eq('is_active', true)
-
-      if (cancelled) return
-
-      if (error) {
-        setMessage('讀取月租類型設定失敗：' + error.message)
-        setPaymentOptionsLoading(false)
-        return
-      }
-
-      const result = getManualPaymentOptions(
-        {
-          parkingLotId: rental.parking_lot_id,
-          rentalType: rental.rental_type,
-          vehicleType: rental.vehicle_type,
-        },
-        (data || []) as ManualPaymentRule[],
-      )
-
-      if (!result.ok) {
-        setMessage(result.error)
-        setPaymentOptionsLoading(false)
-        return
-      }
-
-      setAllowedMonths(result.allowedMonths)
-      setPaymentMonths(result.allowedMonths[0] || 1)
-      setManualMonthlyFee(result.monthlyFee)
-      setPaymentOptionsLoading(false)
-    }
-
-    void loadPaymentOptions()
-    return () => {
-      cancelled = true
-    }
+    setPaymentMonths(1)
+    setManualPaymentAmount(
+      Number(rental.monthly_fee || 0) > 0
+        ? String(Number(rental.monthly_fee || 0))
+        : ''
+    )
   }, [open, mode, rental])
-
-  const manualAmount = useMemo(
-    () => manualMonthlyFee * paymentMonths,
-    [manualMonthlyFee, paymentMonths],
-  )
 
   if (!open) return null
 
@@ -148,8 +97,13 @@ export default function MonthlyRentalModal({
       setMessage('請輸入繳費日期')
       return
     }
-    if (!allowedMonths.includes(paymentMonths)) {
-      setMessage('請選擇此月租類型允許的繳費月數')
+    if (!Number.isInteger(paymentMonths) || paymentMonths < 1 || paymentMonths > 24) {
+      setMessage('本次繳費月數請輸入 1～24 個月')
+      return
+    }
+    const amountPaid = Number(manualPaymentAmount)
+    if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
+      setMessage('請輸入正確的本次收款金額')
       return
     }
 
@@ -165,6 +119,7 @@ export default function MonthlyRentalModal({
           paymentDate,
           invoiceNumber: invoiceNumber.trim() || null,
           months: paymentMonths,
+          amountPaid: manualPaymentAmount,
           requestId: manualRequestId || newRequestId(),
         }),
       })
@@ -275,20 +230,29 @@ export default function MonthlyRentalModal({
 
             <div className="field">
               <label>本次繳費月數 *</label>
-              {paymentOptionsLoading ? (
-                <div style={{ padding: 10, color: '#64748b' }}>讀取月租類型設定中…</div>
-              ) : (
-                <select value={paymentMonths} onChange={(e) => setPaymentMonths(Number(e.target.value))} disabled={!allowedMonths.length}>
-                  {allowedMonths.map((months) => (
-                    <option key={months} value={months}>{months} 個月</option>
-                  ))}
-                </select>
-              )}
+              <input
+                type="number"
+                min={1}
+                max={24}
+                step={1}
+                value={paymentMonths}
+                onChange={(e) => setPaymentMonths(Number(e.target.value))}
+              />
             </div>
 
             <div className="field">
-              <label>本次收款金額</label>
-              <input type="text" value={`$${Number(manualAmount || 0).toLocaleString()}`} disabled />
+              <label>本次收款金額 *</label>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={manualPaymentAmount}
+                onChange={(e) => setManualPaymentAmount(e.target.value)}
+                placeholder="請輸入本次實收金額"
+              />
+              <div style={{ marginTop: 6, color: '#64748b', fontSize: 13 }}>
+                目前月租參考：${Number(rental.monthly_fee || 0).toLocaleString()}；本次實收可自行修改。
+              </div>
             </div>
 
             <div className="field">
@@ -307,7 +271,7 @@ export default function MonthlyRentalModal({
           <div className="card" style={{ background: '#f8fafc' }}>
             <strong>續租請直接使用「收款」</strong>
             <div style={{ marginTop: 8, color: '#64748b' }}>
-              可依月租類型設定選擇 1／2／3…個月，系統會從目前已繳至日期往後接續；正式租期到期後需先建立下一期租約。
+              可自行輸入本次繳費月數與實收金額，系統仍會從目前已繳至日期往後接續；正式租期到期後需先建立下一期租約。
             </div>
           </div>
         )}
@@ -338,7 +302,7 @@ export default function MonthlyRentalModal({
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
           <button type="button" onClick={onClose} disabled={loading} style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer' }}>取消</button>
-          <button type="button" onClick={submit} disabled={loading || (mode === 'payment' && (paymentOptionsLoading || !allowedMonths.length))} style={{ padding: '9px 18px', borderRadius: 8, border: 0, background: '#0f172a', color: '#fff', cursor: 'pointer' }}>
+          <button type="button" onClick={submit} disabled={loading} style={{ padding: '9px 18px', borderRadius: 8, border: 0, background: '#0f172a', color: '#fff', cursor: 'pointer' }}>
             {loading ? '儲存中…' : mode === 'payment' ? '確認收款' : mode === 'renew' ? '前往收款' : '儲存修改'}
           </button>
         </div>

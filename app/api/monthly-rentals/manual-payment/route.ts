@@ -7,10 +7,7 @@ import {
   isRentalTermExhausted,
   nextPaidThroughDate,
 } from '@/lib/monthly-rental-cycle'
-import {
-  prepareManualPayment,
-  type ManualPaymentRule,
-} from '@/lib/monthly-manual-payment'
+import { prepareManualPayment } from '@/lib/monthly-manual-payment'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -89,9 +86,10 @@ export async function POST(request: NextRequest) {
     const paymentDate = validDate(body?.paymentDate)
     const invoiceNumber = safeText(body?.invoiceNumber, 100) || null
     const months = Number(body?.months || 0)
+    const amountPaid = Number(body?.amountPaid || 0)
     const requestId = safeText(body?.requestId, 120)
 
-    if (!rentalId || !paymentDate || !Number.isInteger(months) || months < 1 || !requestId) {
+    if (!rentalId || !paymentDate || !Number.isInteger(months) || months < 1 || months > 24 || !Number.isFinite(amountPaid) || amountPaid <= 0 || !requestId) {
       return NextResponse.json({ error: '手動收款資料不完整。' }, { status: 400 })
     }
 
@@ -124,24 +122,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '此月租戶尚未綁定正式租期，請先確認租期設定。' }, { status: 400 })
     }
 
-    const { data: rulesData, error: rulesError } = await admin
-      .from('monthly_rental_type_rules')
-      .select('parking_lot_id,type_name,vehicle_type,match_amounts,base_monthly_fee,allowed_payment_months,priority,is_active')
-      .eq('parking_lot_id', rental.parking_lot_id)
-      .eq('is_active', true)
-
-    if (rulesError) {
-      return NextResponse.json({ error: '無法讀取月租類型設定。' }, { status: 500 })
-    }
-
     const prepared = prepareManualPayment(
       {
         parkingLotId: rental.parking_lot_id,
         rentalType: rental.rental_type,
         vehicleType: rental.vehicle_type,
       },
-      (rulesData || []) as ManualPaymentRule[],
+      [],
       months,
+      amountPaid,
     )
 
     if (!prepared.ok) {

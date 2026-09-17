@@ -93,6 +93,7 @@ export function prepareManualPayment(
   },
   rules: ManualPaymentRule[],
   requestedMonths: unknown,
+  requestedAmount?: unknown,
 ) {
   const parkingLotId = safeText(rental.parkingLotId, 80)
   const rentalType = safeText(rental.rentalType, 100).toLowerCase()
@@ -103,6 +104,24 @@ export function prepareManualPayment(
     return { ok: false as const, error: '繳費月數格式不正確。', allowedMonths: [] as number[] }
   }
 
+  const manualAmount = Number(requestedAmount)
+  if (requestedAmount !== undefined) {
+    if (!Number.isFinite(manualAmount) || manualAmount <= 0) {
+      return { ok: false as const, error: '本次收款金額格式不正確。', allowedMonths: [] as number[] }
+    }
+
+    // 手動收款由管理員明確輸入「月份 + 實收金額」。
+    // 日期只依月份往後接；金額照實保存，不受類型允許月數限制。
+    return {
+      ok: true as const,
+      monthlyFee: 0,
+      months,
+      amountPaid: manualAmount,
+      allowedMonths: [] as number[],
+    }
+  }
+
+  // 沒有傳入自訂金額時保留舊行為，避免影響其他既有呼叫。
   const candidates = rules
     .filter((rule) => rule?.is_active !== false)
     .filter((rule) => safeText(rule.parking_lot_id, 80) === parkingLotId)
