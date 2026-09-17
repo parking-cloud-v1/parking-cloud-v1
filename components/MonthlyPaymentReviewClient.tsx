@@ -98,7 +98,21 @@ export default function MonthlyPaymentReviewClient() {
     }
 
     const rentalMap = new Map(rentals.map((r: any) => [r.id, r]))
-    setRows((reviews || []).map((r: any) => ({ ...r, ...(rentalMap.get(r.monthly_rental_id) || {}) })))
+    setRows((reviews || []).map((review: any) => {
+      const rental = rentalMap.get(review.monthly_rental_id) || {}
+
+      // 重要：monthly_rentals 也有 id。
+      // 合併顯示資料時不可讓 rental.id 蓋掉 review.id，
+      // 否則按「確認」時會把 monthly_rental_id 當成 reviewId 傳給 API，
+      // 後端就會回「找不到待確認付款」。
+      return {
+        ...review,
+        customer_code: rental.customer_code,
+        customer_name: rental.customer_name,
+        vehicle_plate: rental.vehicle_plate,
+        paid_through_date: rental.paid_through_date,
+      }
+    }))
     setLoading(false)
   }
 
