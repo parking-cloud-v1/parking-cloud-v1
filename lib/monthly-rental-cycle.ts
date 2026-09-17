@@ -168,6 +168,60 @@ export function isWithinOperationalWindow({
 }
 
 
+
+export function getInitialPaymentBaselineDate({
+  paymentDate,
+  termStartDate,
+  termEndDate,
+  reminderDays = 15,
+}: {
+  paymentDate: string
+  termStartDate: string
+  termEndDate?: string | null
+  reminderDays?: number
+}) {
+  const payment = parseDateOnly(paymentDate)
+  const termStart = parseDateOnly(termStartDate)
+  const termEnd = parseDateOnly(termEndDate)
+  if (!payment || !termStart) return ''
+  if (payment.getTime() < termStart.getTime()) return ''
+  if (termEnd && payment.getTime() > termEnd.getTime()) return ''
+
+  const cycleStart = sharedCycleStartForDate(termStart, payment)
+  const cycleIndex = Math.max(0, calendarMonthDistance(termStart, cycleStart))
+  const nextCycleStart = addMonthsKeepingDay(termStart, cycleIndex + 1)
+  const naturalCycleEnd = addDays(nextCycleStart, -1)
+  const cycleEnd = termEnd && naturalCycleEnd.getTime() > termEnd.getTime()
+    ? termEnd
+    : naturalCycleEnd
+  const reminderStart = addDays(cycleEnd, -Math.max(0, reminderDays))
+
+  // 第一次中途導入沒有 paid_through_date 可接續時，才用付款日定位一次。
+  // 付款發生在目前週期到期前 15 天內，視為下一共同週期的續繳；
+  // 其餘視為目前共同週期。初始化完成後，後續付款一律由 paid_through_date 往後補，
+  // 不再用付款日跳月份。
+  const canTargetNextCycle = !termEnd || nextCycleStart.getTime() <= termEnd.getTime()
+  const targetCycleStart =
+    payment.getTime() >= reminderStart.getTime() && canTargetNextCycle
+      ? nextCycleStart
+      : cycleStart
+
+  return formatDateOnly(addDays(targetCycleStart, -1))
+}
+
+export function isRentalTermExhausted({
+  paidThroughDate,
+  termEndDate,
+}: {
+  paidThroughDate?: string | null
+  termEndDate?: string | null
+}) {
+  const paidThrough = parseDateOnly(paidThroughDate)
+  const termEnd = parseDateOnly(termEndDate)
+  if (!paidThrough || !termEnd) return false
+  return paidThrough.getTime() >= termEnd.getTime()
+}
+
 export function getNextCoverageStartDate({
   currentPaidThroughDate,
   termStartDate,

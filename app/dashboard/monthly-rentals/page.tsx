@@ -362,6 +362,7 @@ export default async function MonthlyRentalsPage({
    * pending_review 也保留原始實收，方便管理員人工確認 1／2 個月。
    */
   const latestPaymentByRentalId = new Map<string, any>()
+  const paidThroughFromHistoryByRentalId = new Map<string, string>()
   const rentalIds = (rentals || [])
     .map((item: any) => String(item.id || '').trim())
     .filter(Boolean)
@@ -369,7 +370,7 @@ export default async function MonthlyRentalsPage({
   if (rentalIds.length) {
     const { data: paymentRows, error: paymentRowsError } = await supabase
       .from('monthly_payments')
-      .select('monthly_rental_id,amount,payment_date,cycle_application_status,created_at')
+      .select('monthly_rental_id,amount,payment_date,applied_to_date,cycle_application_status,created_at')
       .in('monthly_rental_id', rentalIds)
       .in('cycle_application_status', ['applied', 'pending_review'])
       .order('payment_date', { ascending: false, nullsFirst: false })
@@ -380,6 +381,18 @@ export default async function MonthlyRentalsPage({
         const key = String((paymentRow as any).monthly_rental_id || '')
         if (key && !latestPaymentByRentalId.has(key)) {
           latestPaymentByRentalId.set(key, paymentRow)
+        }
+
+        if (
+          key &&
+          (paymentRow as any).cycle_application_status === 'applied' &&
+          (paymentRow as any).applied_to_date
+        ) {
+          const historyDate = String((paymentRow as any).applied_to_date)
+          const currentHistoryDate = paidThroughFromHistoryByRentalId.get(key) || ''
+          if (!currentHistoryDate || historyDate > currentHistoryDate) {
+            paidThroughFromHistoryByRentalId.set(key, historyDate)
+          }
         }
       }
     }
@@ -399,17 +412,27 @@ export default async function MonthlyRentalsPage({
    */
   const enrichedRentals: any[] = (rentals || [])
     .map((item: any) => {
+      const rentalId = String(item.id || '')
+      const historyPaidThroughDate =
+        paidThroughFromHistoryByRentalId.get(rentalId) || ''
+      const storedPaidThroughDate = String(item.paid_through_date || '')
+      const effectivePaidThroughDate =
+        historyPaidThroughDate > storedPaidThroughDate
+          ? historyPaidThroughDate
+          : storedPaidThroughDate
+
       const billing = getMonthlyBillingState({
         today: todayText,
-        paidThroughDate: item.paid_through_date,
+        paidThroughDate: effectivePaidThroughDate,
         paymentReviewStatus: item.payment_review_status,
         reminderDays: 15,
       })
 
-      const latestPayment = latestPaymentByRentalId.get(String(item.id || ''))
+      const latestPayment = latestPaymentByRentalId.get(rentalId)
 
       return {
         ...item,
+        paid_through_date: effectivePaidThroughDate || null,
         _stored_payment_status: item.payment_status,
         payment_status: billing.status,
         _billing_state: billing,

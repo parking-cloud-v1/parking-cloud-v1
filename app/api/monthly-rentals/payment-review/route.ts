@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import {
+  getInitialPaymentBaselineDate,
   getNextCoverageStartDate,
+  isRentalTermExhausted,
   nextPaidThroughDate,
 } from '@/lib/monthly-rental-cycle'
 
@@ -19,6 +21,55 @@ function serviceClient() {
 function validDate(value: unknown) {
   const text = String(value || '').trim()
   return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null
+}
+
+
+async function bindNextRentalTermIfNeeded(admin: any, rental: any, paymentDate: string) {
+  if (!isRentalTermExhausted({
+    paidThroughDate: rental?.paid_through_date,
+    termEndDate: rental?.system_cycle_end_date,
+  })) {
+    return rental
+  }
+
+  const currentEnd = validDate(rental?.system_cycle_end_date)
+  const lotId = String(rental?.parking_lot_id || '').trim()
+  if (!currentEnd || !lotId) return rental
+
+  const { data: nextTerm, error: nextTermError } = await admin
+    .from('parking_lot_rental_terms')
+    .select('id,start_date,end_date,term_name')
+    .eq('parking_lot_id', lotId)
+    .gt('start_date', currentEnd)
+    .order('start_date', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (nextTermError || !nextTerm?.id || !nextTerm.start_date || !nextTerm.end_date) {
+    return rental
+  }
+
+  // 正式租約到期後才切換下一期；即使下一期已預先建立，也不在開始日前提早切約。
+  if (!validDate(paymentDate) || paymentDate < nextTerm.start_date) {
+    return rental
+  }
+
+  const { error: bindError } = await admin
+    .from('monthly_rentals')
+    .update({
+      system_term_id: nextTerm.id,
+      system_cycle_start_date: nextTerm.start_date,
+      system_cycle_end_date: nextTerm.end_date,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', rental.id)
+
+  if (bindError) return rental
+
+  rental.system_term_id = nextTerm.id
+  rental.system_cycle_start_date = nextTerm.start_date
+  rental.system_cycle_end_date = nextTerm.end_date
+  return rental
 }
 
 export async function POST(request: NextRequest) {
@@ -63,7 +114,7 @@ export async function POST(request: NextRequest) {
 
     const { data: rental, error: rentalError } = await supabase
       .from('monthly_rentals')
-      .select('id,system_cycle_start_date,system_cycle_end_date,paid_through_date')
+      .select('id,parking_lot_id,system_term_id,system_cycle_start_date,system_cycle_end_date,paid_through_date')
       .eq('id', review.monthly_rental_id)
       .maybeSingle()
 
@@ -92,6 +143,20 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    if (action === 'approve') {
+      await bindNextRentalTermIfNeeded(admin, rental, reviewPaymentDate!)
+
+      if (review.monthly_payment_id && rental.system_cycle_start_date && rental.system_cycle_end_date) {
+        await admin
+          .from('monthly_payments')
+          .update({
+            rental_start_date: rental.system_cycle_start_date,
+            rental_end_date: rental.system_cycle_end_date,
+          })
+          .eq('id', review.monthly_payment_id)
+      }
+    }
+
     let appliedFromDate: string | null = null
     let paidThroughDate: string | null = null
 
@@ -104,17 +169,24 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: '這位月租戶尚未綁定本系統正式租期，請先設定租期。' }, { status: 400 })
       }
 
+      const initialBaseline = rental.paid_through_date
+        ? rental.paid_through_date
+        : getInitialPaymentBaselineDate({
+            paymentDate: reviewPaymentDate!,
+            termStartDate: rental.system_cycle_start_date,
+            termEndDate: rental.system_cycle_end_date,
+            reminderDays: 15,
+          })
+
       appliedFromDate = getNextCoverageStartDate({
-        currentPaidThroughDate: rental.paid_through_date,
+        currentPaidThroughDate: initialBaseline,
         termStartDate: rental.system_cycle_start_date,
-        paymentDate: reviewPaymentDate,
       }) || null
 
       paidThroughDate = nextPaidThroughDate({
-        currentPaidThroughDate: rental.paid_through_date,
+        currentPaidThroughDate: initialBaseline,
         termStartDate: rental.system_cycle_start_date,
         termEndDate: rental.system_cycle_end_date,
-        paymentDate: reviewPaymentDate,
         months: approvedMonths,
       }) || null
 

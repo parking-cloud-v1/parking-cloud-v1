@@ -3,7 +3,9 @@ import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import {
   classifyPaymentAmount,
+  getInitialPaymentBaselineDate,
   getNextCoverageStartDate,
+  isRentalTermExhausted,
   nextPaidThroughDate,
 } from '@/lib/monthly-rental-cycle'
 import {
@@ -27,6 +29,14 @@ type PaymentRow = {
   invoiceNumber?: string | null
   sourceReference?: string | null
   notes?: string | null
+  reportMonth?: string | null
+}
+
+type PaymentHistoryReconciliationResult = {
+  hadHistory: boolean
+  ok: boolean
+  error?: string
+  appliedCount?: number
 }
 
 type ReviewReason =
@@ -60,6 +70,218 @@ function normalizeVehicleType(value: unknown) {
   return normalized
 }
 
+
+function sortPaymentRowsChronologically(rows: PaymentRow[]) {
+  return [...rows].sort((a, b) => {
+    const aDate = validDate(a.paymentDate) || '9999-12-31'
+    const bDate = validDate(b.paymentDate) || '9999-12-31'
+    if (aDate !== bDate) return aDate.localeCompare(bDate)
+
+    const aMonth = safeText(a.reportMonth, 20)
+    const bMonth = safeText(b.reportMonth, 20)
+    if (aMonth !== bMonth) return aMonth.localeCompare(bMonth)
+
+    return safeText(a.sourceReference, 300).localeCompare(
+      safeText(b.sourceReference, 300),
+    )
+  })
+}
+
+async function bindNextRentalTermIfNeeded(admin: any, rental: any, paymentDate: string) {
+  if (!isRentalTermExhausted({
+    paidThroughDate: rental?.paid_through_date,
+    termEndDate: rental?.system_cycle_end_date,
+  })) {
+    return rental
+  }
+
+  const currentEnd = validDate(rental?.system_cycle_end_date)
+  const lotId = safeText(rental?.parking_lot_id, 80)
+  if (!currentEnd || !lotId) return rental
+
+  const { data: nextTerm, error: nextTermError } = await admin
+    .from('parking_lot_rental_terms')
+    .select('id,start_date,end_date,term_name')
+    .eq('parking_lot_id', lotId)
+    .gt('start_date', currentEnd)
+    .order('start_date', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  if (nextTermError || !nextTerm?.id || !nextTerm.start_date || !nextTerm.end_date) {
+    return rental
+  }
+
+  // 正式租約到期後才切換下一期；即使下一期已預先建立，也不在開始日前提早切約。
+  if (!validDate(paymentDate) || paymentDate < nextTerm.start_date) {
+    return rental
+  }
+
+  const { error: bindError } = await admin
+    .from('monthly_rentals')
+    .update({
+      system_term_id: nextTerm.id,
+      system_cycle_start_date: nextTerm.start_date,
+      system_cycle_end_date: nextTerm.end_date,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', rental.id)
+
+  if (bindError) return rental
+
+  rental.system_term_id = nextTerm.id
+  rental.system_cycle_start_date = nextTerm.start_date
+  rental.system_cycle_end_date = nextTerm.end_date
+  return rental
+}
+
+async function reconcileRentalPaymentHistory(
+  admin: any,
+  rental: any,
+  typeRules: MonthlyTypeRule[],
+): Promise<PaymentHistoryReconciliationResult> {
+  const rentalId = safeText(rental?.id, 80)
+  if (!rentalId) return { hadHistory: false, ok: true }
+
+  const { data: historyRows, error: historyError } = await admin
+    .from('monthly_payments')
+    .select(`
+      id,source,payment_date,amount,invoice_number,cycle_application_status,
+      applied_months,applied_from_date,applied_to_date,
+      rental_start_date,rental_end_date,created_at
+    `)
+    .eq('monthly_rental_id', rentalId)
+    .eq('source', 'payment_csv')
+    .order('payment_date', { ascending: true, nullsFirst: false })
+    .order('created_at', { ascending: true })
+
+  if (historyError) {
+    return { hadHistory: false, ok: false, error: historyError.message }
+  }
+
+  const history = historyRows || []
+  if (!history.length) return { hadHistory: false, ok: true }
+
+  let authoritativePaidThrough = ''
+  let latestAppliedPaymentDate = ''
+  let latestAppliedInvoice: string | null = null
+  let appliedCount = 0
+
+  for (const payment of history) {
+    if (payment.cycle_application_status !== 'applied') continue
+
+    const paymentDate = validDate(payment.payment_date)
+    const termStart = validDate(payment.rental_start_date) || validDate(rental.system_cycle_start_date)
+    const termEnd = validDate(payment.rental_end_date) || validDate(rental.system_cycle_end_date)
+    if (!paymentDate || !termStart || !termEnd) {
+      return { hadHistory: true, ok: false, error: '既有繳費歷史缺少付款日期或正式租期' }
+    }
+
+    let months = Number(payment.applied_months || 0)
+    if (!Number.isInteger(months) || months <= 0) {
+      const resolution = resolvePaymentRuleByAmount(
+        {
+          parkingLotId: rental.parking_lot_id,
+          vehicleType: rental.vehicle_type,
+        },
+        Number(payment.amount || 0),
+        typeRules,
+      )
+      months = resolution.kind === 'matched' ? resolution.months : 0
+    }
+
+    if (!Number.isInteger(months) || months <= 0) {
+      return { hadHistory: true, ok: false, error: '既有已套用付款無法確認繳費月數' }
+    }
+
+    if (!authoritativePaidThrough) {
+      authoritativePaidThrough = getInitialPaymentBaselineDate({
+        paymentDate,
+        termStartDate: termStart,
+        termEndDate: termEnd,
+        reminderDays: 15,
+      })
+    }
+
+    if (!authoritativePaidThrough) {
+      return { hadHistory: true, ok: false, error: '無法建立第一次中途導入基準' }
+    }
+
+    const appliedFromDate = getNextCoverageStartDate({
+      currentPaidThroughDate: authoritativePaidThrough,
+      termStartDate: termStart,
+    })
+    const appliedToDate = nextPaidThroughDate({
+      currentPaidThroughDate: authoritativePaidThrough,
+      termStartDate: termStart,
+      termEndDate: termEnd,
+      months,
+    })
+
+    if (!appliedFromDate || !appliedToDate) {
+      return { hadHistory: true, ok: false, error: '既有付款重建時超出該筆正式租期' }
+    }
+
+    const { error: paymentUpdateError } = await admin
+      .from('monthly_payments')
+      .update({
+        applied_months: months,
+        applied_from_date: appliedFromDate,
+        applied_to_date: appliedToDate,
+      })
+      .eq('id', payment.id)
+
+    if (paymentUpdateError) {
+      return { hadHistory: true, ok: false, error: paymentUpdateError.message }
+    }
+
+    authoritativePaidThrough = appliedToDate
+    appliedCount++
+    if (!latestAppliedPaymentDate || paymentDate >= latestAppliedPaymentDate) {
+      latestAppliedPaymentDate = paymentDate
+      latestAppliedInvoice = safeText(payment.invoice_number, 100) || null
+    }
+  }
+
+  const { count: pendingReviews } = await admin
+    .from('monthly_payment_reviews')
+    .select('id', { count: 'exact', head: true })
+    .eq('monthly_rental_id', rentalId)
+    .eq('status', 'pending')
+
+  const updateData: Record<string, unknown> = {
+    payment_review_status: pendingReviews ? 'pending' : 'clear',
+    updated_at: new Date().toISOString(),
+  }
+
+  if (authoritativePaidThrough) {
+    updateData.paid_through_date = authoritativePaidThrough
+    updateData.payment_status = 'paid'
+    updateData.last_payment_source = 'payment_csv'
+    if (latestAppliedPaymentDate) updateData.payment_date = latestAppliedPaymentDate
+    if (latestAppliedInvoice) updateData.invoice_number = latestAppliedInvoice
+  }
+
+  const { error: rentalUpdateError } = await admin
+    .from('monthly_rentals')
+    .update(updateData)
+    .eq('id', rentalId)
+
+  if (rentalUpdateError) {
+    return { hadHistory: true, ok: false, error: rentalUpdateError.message }
+  }
+
+  if (authoritativePaidThrough) {
+    rental.paid_through_date = authoritativePaidThrough
+    rental.payment_status = 'paid'
+    rental.payment_date = latestAppliedPaymentDate || rental.payment_date
+    if (latestAppliedInvoice) rental.invoice_number = latestAppliedInvoice
+  }
+  rental.payment_review_status = pendingReviews ? 'pending' : 'clear'
+
+  return { hadHistory: true, ok: true, appliedCount }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient()
@@ -74,7 +296,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '沒有可更新的繳費資料。' }, { status: 400 })
     }
 
-    const ids = [...new Set(rows.map((r) => safeText(r.rentalId, 80)).filter(Boolean))]
+    const orderedRows = sortPaymentRowsChronologically(rows)
+    const ids = [...new Set(orderedRows.map((r) => safeText(r.rentalId, 80)).filter(Boolean))]
 
     const { data: allowedRows, error: accessError } = await supabase
       .from('monthly_rentals')
@@ -130,6 +353,23 @@ export async function POST(request: NextRequest) {
         .sort((a, b) => Number(a.priority ?? 100) - Number(b.priority ?? 100))
     }
 
+    // 每次同步前先把這批租戶既有正式付款歷史依「第一次中途導入」規則重建一次。
+    // 這是冪等修復：只改既有 applied_from/to 與月租主檔摘要，不新增付款、不增加月數。
+    const reconciliationErrors = new Map<string, string>()
+    for (const rentalId of ids) {
+      const rental: any = allowed.get(rentalId)
+      if (!rental) continue
+      const reconciled = await reconcileRentalPaymentHistory(admin, rental, typeRules)
+      if (!reconciled.ok) {
+        const message = safeText(reconciled.error, 300) || '既有付款歷史重建失敗'
+        reconciliationErrors.set(rentalId, message)
+        console.error('[monthly-payment-sync] payment history reconciliation failed', {
+          rentalId,
+          error: message,
+        })
+      }
+    }
+
     let success = 0
     let failed = 0
     let historySuccess = 0
@@ -138,7 +378,7 @@ export async function POST(request: NextRequest) {
     let pendingReview = 0
     const errors: string[] = []
 
-    for (const input of rows) {
+    for (const input of orderedRows) {
       const rentalId = safeText(input.rentalId, 80)
       const rental: any = allowed.get(rentalId)
       if (!rental) {
@@ -147,7 +387,15 @@ export async function POST(request: NextRequest) {
         continue
       }
 
+      const reconciliationError = reconciliationErrors.get(rentalId)
+      if (reconciliationError) {
+        failed++
+        errors.push(`${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：${reconciliationError}`)
+        continue
+      }
+
       const paymentDate = validDate(input.paymentDate) || new Date().toISOString().slice(0, 10)
+      await bindNextRentalTermIfNeeded(admin, rental, paymentDate)
       const invoiceNumber = safeText(input.invoiceNumber, 100) || null
       const amountPaid = Number(input.amountPaid || 0)
       const suppliedSourceReference = safeText(input.sourceReference, 300)
@@ -224,21 +472,28 @@ export async function POST(request: NextRequest) {
       let appliedFromDate = ''
 
       if (!reviewReason && amountDecision.kind === 'auto_apply') {
+        const initialBaseline = rental.paid_through_date
+          ? rental.paid_through_date
+          : getInitialPaymentBaselineDate({
+              paymentDate,
+              termStartDate: rental.system_cycle_start_date,
+              termEndDate: rental.system_cycle_end_date,
+              reminderDays: 15,
+            })
+
         appliedFromDate = getNextCoverageStartDate({
-          currentPaidThroughDate: rental.paid_through_date,
+          currentPaidThroughDate: initialBaseline,
           termStartDate: rental.system_cycle_start_date,
-          paymentDate,
         })
 
         newPaidThroughDate = nextPaidThroughDate({
-          currentPaidThroughDate: rental.paid_through_date,
+          currentPaidThroughDate: initialBaseline,
           termStartDate: rental.system_cycle_start_date,
           termEndDate: rental.system_cycle_end_date,
-          paymentDate,
           months: amountDecision.months,
         })
 
-        if (!newPaidThroughDate) {
+        if (!newPaidThroughDate || !appliedFromDate) {
           reviewReason = 'term_overflow'
         }
       }
@@ -249,7 +504,7 @@ export async function POST(request: NextRequest) {
       if (suppliedSourceReference) {
         const { data: existing, error: duplicateCheckError } = await admin
           .from('monthly_payments')
-          .select('id,cycle_application_status')
+          .select('id,monthly_rental_id,cycle_application_status')
           .eq('source_reference', suppliedSourceReference)
           .limit(1)
           .maybeSingle()
@@ -262,6 +517,12 @@ export async function POST(request: NextRequest) {
         }
 
         if (existing?.id) {
+          if (safeText(existing.monthly_rental_id, 80) !== rentalId) {
+            failed++
+            errors.push(`${safeText(input.vehiclePlate, 30) || rental.vehicle_plate || rentalId}：既有繳費紀錄連結到不同月租戶，已停止自動處理`)
+            continue
+          }
+
           paymentHistoryId = String(existing.id)
           historyDuplicate++
 

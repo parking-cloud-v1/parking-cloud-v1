@@ -2419,8 +2419,8 @@ async function readFiles(
       }
 
       /*
-       * 已存在於繳費歷史的資料，
-       * 標記為重複，不再同步。
+       * 已存在於繳費歷史的資料仍標記為重複，
+       * 但可再次送到 API 做安全修復：只回填既有付款結果，不重複加月份。
        */
       const finalRows =
         checked.map(
@@ -2498,7 +2498,7 @@ async function readFiles(
         ).length
 
       setMessage(
-        `共找到 ${finalRows.length} 筆交易明細，可同步 ${syncCount} 筆，未匹配 ${unmatched} 筆，付款待確認 ${review} 筆，重複 ${duplicate} 筆`
+        `共找到 ${finalRows.length} 筆交易明細，新增同步 ${syncCount} 筆，既有資料可修復 ${duplicate} 筆，未匹配 ${unmatched} 筆，付款待確認 ${review} 筆`
       )
     } catch (
       error: any
@@ -2556,9 +2556,15 @@ async function readFiles(
    */
 
   async function confirmSync() {
+    // 已存在的付款也要送到後端做「安全修復」：
+    // 只從既有 monthly_payments 回填繳費日期 / 已繳至 / 待確認狀態，
+    // 絕不再次新增繳費歷史、也絕不重複延長月份。
     const syncRows = rows.filter(
-      (row) => row.matched && row.rentalId && row.parkingLotId && !row.duplicate
+      (row) => row.matched && row.rentalId && row.parkingLotId
     )
+
+    const newSyncCount = syncRows.filter((row) => !row.duplicate).length
+    const duplicateRepairCount = syncRows.filter((row) => row.duplicate).length
 
     // 同一批若只屬於一個停車場，成功後自動把該 UUID 設為目前工作停車場。
     // 若意外混入多場資料則不自動切換，避免亂跳場站。
@@ -2576,12 +2582,13 @@ async function readFiles(
     }
 
     const confirmed = window.confirm(
-      `確定同步 ${syncRows.length} 筆繳費資料？\n\n` +
+      `確定處理 ${syncRows.length} 筆繳費資料？\n` +
+      `新增同步 ${newSyncCount} 筆；既有資料修復 ${duplicateRepairCount} 筆。\n\n` +
       `系統會：\n` +
-      `1. 永久保存正式繳費歷史\n` +
-      `2. 實收為系統月租金整數倍時，自動計算繳交月數並延長本系統到期日\n` +
-      `3. 0 元或非整數倍金額進入「付款待確認」，不會先延長租期\n\n` +
-      `舊月票總表日期不參與本次判斷；未匹配及重複交易不會寫入。`
+      `1. 新交易永久保存正式繳費歷史\n` +
+      `2. 正常金額依正式週期延長已繳至日期\n` +
+      `3. 0 元或異常金額進入「付款待確認」\n` +
+      `4. 已匯入過的交易只用既有歷史回填繳費日期／已繳至／待確認，不會重複加月份。`
     )
 
     if (!confirmed) return
@@ -2603,6 +2610,7 @@ async function readFiles(
           row.paymentMethod || null,
         invoiceNumber: row.invoiceNumber || null,
         sourceReference: row.sourceReference || buildSourceReference(row),
+        reportMonth: row.dataMonth || null,
         notes: [
           row.amountPaid <= 0 ? '0 元付款：待管理員確認是否因找零不足已完成繳費，或需退款後重繳' : '',
           row.fileName ? `匯入檔案：${row.fileName}` : '',
@@ -2685,12 +2693,23 @@ async function readFiles(
     }
   }
 
-  const syncCount =
+  const newSyncCount =
     rows.filter(
       (row) =>
         row.matched &&
         !row.duplicate
     ).length
+
+  const duplicateRepairCount =
+    rows.filter(
+      (row) =>
+        row.matched &&
+        row.duplicate
+    ).length
+
+  const syncCount =
+    newSyncCount +
+    duplicateRepairCount
 
   const unmatchedCount =
     rows.filter(
@@ -3078,7 +3097,7 @@ async function readFiles(
                   </div>
 
                   <div className="card">
-                    可同步：
+                    可處理：
                     <strong>
                       {syncCount}
                     </strong>
