@@ -406,7 +406,7 @@ export async function POST(request: NextRequest) {
         continue
       }
 
-      const paymentSource = input.sourceKind === '408_excel' ? '408_excel' : 'payment_csv'
+      const paymentSource = 'payment_csv'
       const sourceReference = suppliedSourceReference
 
       // 金額主判斷：在同停車場所有啟用規則中比對，不再先相信舊 vehicle_type。

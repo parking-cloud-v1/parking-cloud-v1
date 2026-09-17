@@ -218,7 +218,7 @@ export async function POST(request: NextRequest) {
         invoice_number: invoiceNumber,
         rental_start_date: rental.system_cycle_start_date,
         rental_end_date: rental.system_cycle_end_date,
-        source: 'manual_payment',
+        source: 'manual',
         source_reference: sourceReference,
         notes: `後台手動收款：${prepared.months} 個月`,
         created_by: user.id,
@@ -239,7 +239,7 @@ export async function POST(request: NextRequest) {
         p_new_paid_through_date: newPaidThroughDate,
         p_payment_date: paymentDate,
         p_invoice_number: invoiceNumber,
-        p_payment_source: 'manual_payment',
+        p_payment_source: 'manual',
         p_applied_months: prepared.months,
         p_applied_from_date: appliedFromDate,
       })
