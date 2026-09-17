@@ -30,6 +30,7 @@ type PaymentRow = {
   sourceReference?: string | null
   notes?: string | null
   reportMonth?: string | null
+  sourceKind?: 'payment_csv' | '408_excel'
 }
 
 type PaymentHistoryReconciliationResult = {
@@ -151,7 +152,7 @@ async function reconcileRentalPaymentHistory(
       rental_start_date,rental_end_date,created_at
     `)
     .eq('monthly_rental_id', rentalId)
-    .eq('source', 'payment_csv')
+    .in('source', ['payment_csv', '408_excel', 'manual_payment'])
     .order('payment_date', { ascending: true, nullsFirst: false })
     .order('created_at', { ascending: true })
 
@@ -405,7 +406,7 @@ export async function POST(request: NextRequest) {
         continue
       }
 
-      const paymentSource = 'payment_csv'
+      const paymentSource = input.sourceKind === '408_excel' ? '408_excel' : 'payment_csv'
       const sourceReference = suppliedSourceReference
 
       // 金額主判斷：在同停車場所有啟用規則中比對，不再先相信舊 vehicle_type。

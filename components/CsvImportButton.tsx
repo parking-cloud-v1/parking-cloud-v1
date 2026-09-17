@@ -6,6 +6,10 @@ import {
   resolvePaymentRuleByAmount,
   type MonthlyTypeRule,
 } from '@/lib/monthly-payment-preview'
+import {
+  is408MonthlySheet,
+  parse408PaymentSheet,
+} from '@/lib/monthly-408-payment'
 
 type ParkingLot = {
   id: string
@@ -71,6 +75,8 @@ type PaymentRow = {
   rentalEndDate?: string
 
   sourceReference?: string
+  sourceKind?: 'payment_csv' | '408_excel'
+  sourceSheet?: string
 
   message: string
 }
@@ -889,6 +895,73 @@ function buildSourceReference(
       row.amountPaid || 0
     ),
   ].join('|')
+}
+
+
+async function extract408WorkbookTransactions(file: File): Promise<PaymentRow[]> {
+  const XLSX = await import('xlsx')
+  const buffer = await file.arrayBuffer()
+  const workbook = XLSX.read(buffer, {
+    type: 'array',
+    cellDates: true,
+    raw: true,
+  })
+
+  const rows: PaymentRow[] = []
+  const monthlySheets = workbook.SheetNames.filter(is408MonthlySheet)
+
+  if (monthlySheets.length === 0) {
+    throw new Error('這份 Excel 找不到 408巷月租工作表，例如「408巷115-09-10」。')
+  }
+
+  for (const sheetName of monthlySheets) {
+    const sheet = workbook.Sheets[sheetName]
+    const matrix = XLSX.utils.sheet_to_json<any[]>(sheet, {
+      header: 1,
+      raw: true,
+      defval: '',
+    }) as unknown[][]
+
+    const parsed = parse408PaymentSheet(sheetName, matrix)
+
+    for (const item of parsed) {
+      const sourceReference = [
+        '408_excel',
+        item.sourceSheet,
+        item.customerCode,
+        normalizePlate(item.vehiclePlate),
+        item.paymentDate,
+        String(item.amountPaid || 0),
+      ].join('|')
+
+      rows.push({
+        fileName: file.name,
+        lotName: '408巷',
+        dataMonth: item.reportMonth,
+        workstation: '408巷人工月租表',
+        sequenceNo: item.customerCode,
+        ticketNo: `${item.sourceSheet}|${item.customerCode}`,
+        entryTime: '',
+        exitTime: `${item.paymentDate} 00:00:00`,
+        vehiclePlate: item.vehiclePlate,
+        rateName: item.rentalType,
+        amountDue: item.amountPaid,
+        discountAmount: 0,
+        amountPaid: item.amountPaid,
+        paymentMethod: item.paymentMethod,
+        invoiceNumber: item.invoiceNumber,
+        paymentDate: item.paymentDate,
+        matched: false,
+        duplicate: false,
+        sourceReference,
+        sourceKind: '408_excel',
+        sourceSheet: item.sourceSheet,
+        message: '408巷人工月租表付款',
+      })
+    }
+  }
+
+  return rows
 }
 
 
@@ -1878,6 +1951,15 @@ async function readFiles(
       for (
         const file of files
       ) {
+        if (/\.xlsx?$/i.test(file.name)) {
+          const transactions = await extract408WorkbookTransactions(file)
+          allRows = [
+            ...allRows,
+            ...transactions,
+          ]
+          continue
+        }
+
         const csvText =
           await readCsvFile(
             file
@@ -1906,7 +1988,7 @@ async function readFiles(
         setRows([])
 
         setMessage(
-          '沒有找到可辨識的交易明細。請確認 CSV 內包含車牌、出場時間與交易資料。'
+          '沒有找到可辨識的交易明細。CSV 請確認包含車牌與交易資料；408巷 Excel 則需有 408巷XXX-XX-XX 月租工作表及繳費日期。'
         )
 
         return
@@ -2321,6 +2403,7 @@ async function readFiles(
         }
 
         matchedRow.sourceReference =
+          row.sourceReference ||
           buildSourceReference(
             matchedRow
           )
@@ -2611,7 +2694,9 @@ async function readFiles(
         invoiceNumber: row.invoiceNumber || null,
         sourceReference: row.sourceReference || buildSourceReference(row),
         reportMonth: row.dataMonth || null,
+        sourceKind: row.sourceKind || 'payment_csv',
         notes: [
+          row.sourceSheet ? `408巷工作表：${row.sourceSheet}` : '',
           row.amountPaid <= 0 ? '0 元付款：待管理員確認是否因找零不足已完成繳費，或需退款後重繳' : '',
           row.fileName ? `匯入檔案：${row.fileName}` : '',
           row.ticketNo ? `票號：${row.ticketNo}` : '',
@@ -2737,7 +2822,7 @@ async function readFiles(
       <input
         ref={inputRef}
         type="file"
-        accept=".csv,.CSV"
+        accept=".csv,.CSV,.xlsx,.XLSX,.xls,.XLS"
         multiple
         style={{
           display: 'none',

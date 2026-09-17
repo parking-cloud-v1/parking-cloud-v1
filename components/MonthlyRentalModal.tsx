@@ -1,7 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import {
+  getManualPaymentOptions,
+  type ManualPaymentRule,
+} from '@/lib/monthly-manual-payment'
 
 type Mode = 'payment' | 'renew' | 'edit'
 
@@ -21,6 +25,20 @@ type Rental = {
   payment_date: string | null
   invoice_number: string | null
   notes: string | null
+  paid_through_date?: string | null
+  system_cycle_start_date?: string | null
+  system_cycle_end_date?: string | null
+}
+
+function todayText() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function newRequestId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 export default function MonthlyRentalModal({
@@ -40,11 +58,15 @@ export default function MonthlyRentalModal({
   const [vehiclePlate, setVehiclePlate] = useState('')
   const [vehicleType, setVehicleType] = useState('car')
   const [rentalType, setRentalType] = useState('')
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate] = useState('')
   const [paymentDate, setPaymentDate] = useState('')
   const [invoiceNumber, setInvoiceNumber] = useState('')
   const [notes, setNotes] = useState('')
+
+  const [allowedMonths, setAllowedMonths] = useState<number[]>([])
+  const [paymentMonths, setPaymentMonths] = useState(1)
+  const [manualMonthlyFee, setManualMonthlyFee] = useState(0)
+  const [paymentOptionsLoading, setPaymentOptionsLoading] = useState(false)
+  const [manualRequestId, setManualRequestId] = useState('')
 
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
@@ -58,30 +80,112 @@ export default function MonthlyRentalModal({
     setVehiclePlate(rental.vehicle_plate || '')
     setVehicleType(rental.vehicle_type || 'car')
     setRentalType(rental.rental_type || '')
-    setStartDate(rental.start_date || '')
-    setEndDate(rental.end_date || '')
-
-    setPaymentDate(
-      rental.payment_date ||
-        (
-          rental.payment_status === 'paid'
-            ? new Date().toISOString().slice(0, 10)
-            : ''
-        )
-    )
-    setInvoiceNumber(rental.invoice_number || '')
+    setPaymentDate(todayText())
+    setInvoiceNumber('')
     setNotes(rental.notes || '')
     setMessage('')
-  }, [open, rental])
+    setManualRequestId(newRequestId())
+
+    if (mode !== 'payment') return
+
+    let cancelled = false
+    setPaymentOptionsLoading(true)
+    setAllowedMonths([])
+    setManualMonthlyFee(0)
+
+    async function loadPaymentOptions() {
+      const supabase = createClient()
+      const { data, error } = await supabase
+        .from('monthly_rental_type_rules')
+        .select('parking_lot_id,type_name,vehicle_type,match_amounts,base_monthly_fee,allowed_payment_months,priority,is_active')
+        .eq('parking_lot_id', rental.parking_lot_id)
+        .eq('is_active', true)
+
+      if (cancelled) return
+
+      if (error) {
+        setMessage('讀取月租類型設定失敗：' + error.message)
+        setPaymentOptionsLoading(false)
+        return
+      }
+
+      const result = getManualPaymentOptions(
+        {
+          parkingLotId: rental.parking_lot_id,
+          rentalType: rental.rental_type,
+          vehicleType: rental.vehicle_type,
+        },
+        (data || []) as ManualPaymentRule[],
+      )
+
+      if (!result.ok) {
+        setMessage(result.error)
+        setPaymentOptionsLoading(false)
+        return
+      }
+
+      setAllowedMonths(result.allowedMonths)
+      setPaymentMonths(result.allowedMonths[0] || 1)
+      setManualMonthlyFee(result.monthlyFee)
+      setPaymentOptionsLoading(false)
+    }
+
+    void loadPaymentOptions()
+    return () => {
+      cancelled = true
+    }
+  }, [open, mode, rental])
+
+  const manualAmount = useMemo(
+    () => manualMonthlyFee * paymentMonths,
+    [manualMonthlyFee, paymentMonths],
+  )
 
   if (!open) return null
 
   async function savePayment() {
-    setMessage('新架構中付款只能由正式繳費報表匯入；0 元或異常金額請到「付款待確認」處理。')
+    if (!paymentDate) {
+      setMessage('請輸入繳費日期')
+      return
+    }
+    if (!allowedMonths.includes(paymentMonths)) {
+      setMessage('請選擇此月租類型允許的繳費月數')
+      return
+    }
+
+    setLoading(true)
+    setMessage('')
+
+    try {
+      const response = await fetch('/api/monthly-rentals/manual-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rentalId: rental.id,
+          paymentDate,
+          invoiceNumber: invoiceNumber.trim() || null,
+          months: paymentMonths,
+          requestId: manualRequestId || newRequestId(),
+        }),
+      })
+
+      const result = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setMessage(result?.error || '手動收款失敗')
+        setLoading(false)
+        return
+      }
+
+      setMessage(`收款完成，已繳至 ${result?.paidThroughDate || '最新週期'}`)
+      setTimeout(() => window.location.reload(), 500)
+    } catch (error: any) {
+      setMessage('手動收款失敗：' + (error?.message || '網路連線異常'))
+      setLoading(false)
+    }
   }
 
   async function saveRenew() {
-    setMessage('新架構中不再手動修改到期日。請匯入正式繳費報表；0 元或非整數倍金額請到「付款待確認」處理。')
+    setMessage('續租不直接修改日期；請用正式繳費報表或「收款」功能，系統會依已繳至日期往後接。')
   }
 
   async function saveEdit() {
@@ -89,12 +193,10 @@ export default function MonthlyRentalModal({
       setMessage('客戶編號不可空白')
       return
     }
-
     if (!customerName.trim()) {
       setMessage('姓名不可空白')
       return
     }
-
     if (!vehiclePlate.trim()) {
       setMessage('車牌不可空白')
       return
@@ -102,9 +204,7 @@ export default function MonthlyRentalModal({
 
     setLoading(true)
     setMessage('')
-
     const supabase = createClient()
-
     const { error } = await supabase
       .from('monthly_rentals')
       .update({
@@ -124,357 +224,122 @@ export default function MonthlyRentalModal({
       setLoading(false)
       return
     }
-
     window.location.reload()
   }
 
   async function submit() {
-    if (mode === 'payment') {
-      await savePayment()
-      return
-    }
-
-    if (mode === 'renew') {
-      await saveRenew()
-      return
-    }
-
-    await saveEdit()
+    if (mode === 'payment') return savePayment()
+    if (mode === 'renew') return saveRenew()
+    return saveEdit()
   }
 
   const title =
     mode === 'payment'
-      ? '月租收款'
+      ? '手動收款'
       : mode === 'renew'
-        ? '續租（由繳費報表處理）'
+        ? '續租'
         : '編輯月租資料'
 
   return (
     <div
       onClick={onClose}
       style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(15, 23, 42, 0.55)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 9999,
-        padding: 20,
+        position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.55)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 9999, padding: 20,
       }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: '#fff',
-          width: '100%',
-          maxWidth: mode === 'edit' ? 760 : 520,
-          maxHeight: '90vh',
-          overflowY: 'auto',
-          borderRadius: 16,
-          padding: 24,
+          background: '#fff', width: '100%', maxWidth: mode === 'edit' ? 760 : 560,
+          maxHeight: '90vh', overflowY: 'auto', borderRadius: 16, padding: 24,
           boxShadow: '0 20px 60px rgba(0,0,0,.25)',
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: 16,
-            marginBottom: 20,
-          }}
-        >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, marginBottom: 20 }}>
           <div>
             <h2 style={{ margin: 0 }}>{title}</h2>
-
-            <div
-              style={{
-                marginTop: 5,
-                color: '#64748b',
-              }}
-            >
+            <div style={{ marginTop: 5, color: '#64748b' }}>
               {rental.customer_name} ・ {rental.vehicle_plate}
             </div>
           </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              border: 0,
-              background: '#f1f5f9',
-              borderRadius: 8,
-              width: 36,
-              height: 36,
-              cursor: 'pointer',
-              fontSize: 18,
-            }}
-          >
-            ×
-          </button>
+          <button type="button" onClick={onClose} style={{ border: 0, background: '#f1f5f9', borderRadius: 8, width: 36, height: 36, cursor: 'pointer', fontSize: 18 }}>×</button>
         </div>
 
         {mode === 'payment' && (
-          <div
-            style={{
-              display: 'grid',
-              gap: 16,
-            }}
-          >
-            <div className="field">
-              <label>本次收款金額</label>
-
-              <input
-                type="text"
-                value={`$${Number(
-                  rental.monthly_fee || 0
-                ).toLocaleString()}`}
-                disabled
-              />
+          <div style={{ display: 'grid', gap: 16 }}>
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, color: '#475569', fontSize: 14 }}>
+              目前已繳至：<strong>{rental.paid_through_date || '尚未建立'}</strong>。手收也走正式週期，提前繳或晚繳都從目前最早未繳月份往後接，不直接改到期日。
             </div>
 
             <div className="field">
-              <label>收款日期 *</label>
+              <label>本次繳費月數 *</label>
+              {paymentOptionsLoading ? (
+                <div style={{ padding: 10, color: '#64748b' }}>讀取月租類型設定中…</div>
+              ) : (
+                <select value={paymentMonths} onChange={(e) => setPaymentMonths(Number(e.target.value))} disabled={!allowedMonths.length}>
+                  {allowedMonths.map((months) => (
+                    <option key={months} value={months}>{months} 個月</option>
+                  ))}
+                </select>
+              )}
+            </div>
 
-              <input
-                type="date"
-                value={paymentDate}
-                onChange={(e) =>
-                  setPaymentDate(e.target.value)
-                }
-              />
+            <div className="field">
+              <label>本次收款金額</label>
+              <input type="text" value={`$${Number(manualAmount || 0).toLocaleString()}`} disabled />
+            </div>
+
+            <div className="field">
+              <label>繳費日期 *</label>
+              <input type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} />
             </div>
 
             <div className="field">
               <label>發票號碼</label>
-
-              <input
-                value={invoiceNumber}
-                onChange={(e) =>
-                  setInvoiceNumber(e.target.value)
-                }
-                placeholder="沒有可留空"
-              />
+              <input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value.toUpperCase())} placeholder="沒有可留空" />
             </div>
           </div>
         )}
 
         {mode === 'renew' && (
           <div className="card" style={{ background: '#f8fafc' }}>
-            <strong>續租改由正式繳費報表處理</strong>
+            <strong>續租請直接使用「收款」</strong>
             <div style={{ marginTop: 8, color: '#64748b' }}>
-              系統會依本系統月租金與實收金額計算繳交月數；0 元或非整數倍金額會進入「付款待確認」。不再手動修改到期日。
+              可依月租類型設定選擇 1／2／3…個月，系統會從目前已繳至日期往後接續；正式租期到期後需先建立下一期租約。
             </div>
           </div>
         )}
 
         {mode === 'edit' && (
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns:
-                'repeat(auto-fit, minmax(240px, 1fr))',
-              gap: 16,
-            }}
-          >
-            <div className="field">
-              <label>客戶編號 *</label>
-
-              <input
-                value={customerCode}
-                onChange={(e) =>
-                  setCustomerCode(e.target.value)
-                }
-                placeholder="例如：3506"
-              />
-            </div>
-
-            <div className="field">
-              <label>姓名 *</label>
-
-              <input
-                value={customerName}
-                onChange={(e) =>
-                  setCustomerName(e.target.value)
-                }
-              />
-            </div>
-
-            <div className="field">
-              <label>電話</label>
-
-              <input
-                value={phone}
-                onChange={(e) =>
-                  setPhone(e.target.value)
-                }
-              />
-            </div>
-
-            <div className="field">
-              <label>車牌 *</label>
-
-              <input
-                value={vehiclePlate}
-                onChange={(e) =>
-                  setVehiclePlate(e.target.value)
-                }
-              />
-            </div>
-
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
+            <div className="field"><label>客戶編號 *</label><input value={customerCode} onChange={(e) => setCustomerCode(e.target.value)} /></div>
+            <div className="field"><label>姓名 *</label><input value={customerName} onChange={(e) => setCustomerName(e.target.value)} /></div>
+            <div className="field"><label>電話</label><input value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
+            <div className="field"><label>車牌 *</label><input value={vehiclePlate} onChange={(e) => setVehiclePlate(e.target.value)} /></div>
             <div className="field">
               <label>車種</label>
-
-              <select
-                value={vehicleType}
-                onChange={(e) =>
-                  setVehicleType(e.target.value)
-                }
-              >
-                <option value="car">汽車</option>
-                <option value="motorcycle">機車</option>
-                <option value="heavy_motorcycle">
-                  重機
-                </option>
+              <select value={vehicleType} onChange={(e) => setVehicleType(e.target.value)}>
+                <option value="car">汽車</option><option value="motorcycle">機車</option><option value="heavy_motorcycle">重機</option>
               </select>
             </div>
-
-            <div className="field">
-              <label>月租類型</label>
-
-              <input
-                value={rentalType}
-                onChange={(e) =>
-                  setRentalType(e.target.value)
-                }
-                placeholder="例如：一般、里民、身障"
-              />
+            <div className="field"><label>月租類型</label><input value={rentalType} onChange={(e) => setRentalType(e.target.value)} /></div>
+            <div className="field"><label>月租金額</label><div style={{ padding: '10px 12px', background: '#f8fafc', borderRadius: 8, color: '#475569' }}>${Number(rental.monthly_fee || 0).toLocaleString()}（由月租類型設定統一管理）</div></div>
+            <div className="field"><label>正式租期</label><div style={{ padding: '10px 12px', background: '#f8fafc', borderRadius: 8, color: '#475569' }}>由「租期設定」統一管理。</div></div>
+            <div style={{ gridColumn: '1 / -1', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, color: '#475569', fontSize: 14 }}>
+              付款狀態不在「編輯」直接修改；手收請使用「收款」，自動報表則使用「匯入繳費報表」。
             </div>
-
-            <div className="field">
-              <label>月租金額</label>
-              <div style={{ padding: '10px 12px', background: '#f8fafc', borderRadius: 8, color: '#475569' }}>
-                ${Number(rental.monthly_fee || 0).toLocaleString()}（由「月租類型設定」統一管理）
-              </div>
-            </div>
-
-            <div className="field">
-              <label>正式租期</label>
-              <div style={{ padding: '10px 12px', background: '#f8fafc', borderRadius: 8, color: '#475569' }}>
-                由「租期設定」統一管理，不在客戶基本資料內修改。
-              </div>
-            </div>
-
-            <div
-              style={{
-                gridColumn: '1 / -1',
-                background: '#f8fafc',
-                border: '1px solid #e2e8f0',
-                borderRadius: 10,
-                padding: 12,
-                color: '#475569',
-                fontSize: 14,
-              }}
-            >
-              目前付款狀態：
-              <strong
-                style={{
-                  marginLeft: 6,
-                  color:
-                    rental.payment_status === 'paid'
-                      ? '#15803d'
-                      : '#dc2626',
-                }}
-              >
-                {rental.payment_status === 'paid'
-                  ? '已繳'
-                  : '未繳'}
-              </strong>
-              <span style={{ marginLeft: 8 }}>
-                付款狀態不可在「編輯」直接修改；請匯入正式繳費報表。
-              </span>
-            </div>
-
-            <div
-              className="field"
-              style={{
-                gridColumn: '1 / -1',
-              }}
-            >
-              <label>備註</label>
-
-              <textarea
-                rows={4}
-                value={notes}
-                onChange={(e) =>
-                  setNotes(e.target.value)
-                }
-                style={{
-                  width: '100%',
-                  padding: 10,
-                  border: '1px solid #cbd5e1',
-                  borderRadius: 8,
-                }}
-              />
-            </div>
+            <div className="field" style={{ gridColumn: '1 / -1' }}><label>備註</label><textarea rows={4} value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: '100%', padding: 10, border: '1px solid #cbd5e1', borderRadius: 8 }} /></div>
           </div>
         )}
 
-        {message && (
-          <div
-            style={{
-              color: '#b91c1c',
-              marginTop: 16,
-            }}
-          >
-            {message}
-          </div>
-        )}
+        {message && <div style={{ color: '#b91c1c', marginTop: 16 }}>{message}</div>}
 
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: 10,
-            marginTop: 24,
-          }}
-        >
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={loading}
-            style={{
-              padding: '9px 16px',
-              borderRadius: 8,
-              border: '1px solid #cbd5e1',
-              background: '#fff',
-              cursor: 'pointer',
-            }}
-          >
-            取消
-          </button>
-
-          <button
-            type="button"
-            onClick={submit}
-            disabled={loading}
-            style={{
-              padding: '9px 18px',
-              borderRadius: 8,
-              border: 0,
-              background: '#0f172a',
-              color: '#fff',
-              cursor: 'pointer',
-            }}
-          >
-            {loading
-              ? '儲存中…'
-              : mode === 'payment'
-                ? '確認收款'
-                : mode === 'renew'
-                  ? '確認續租'
-                  : '儲存修改'}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
+          <button type="button" onClick={onClose} disabled={loading} style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer' }}>取消</button>
+          <button type="button" onClick={submit} disabled={loading || (mode === 'payment' && (paymentOptionsLoading || !allowedMonths.length))} style={{ padding: '9px 18px', borderRadius: 8, border: 0, background: '#0f172a', color: '#fff', cursor: 'pointer' }}>
+            {loading ? '儲存中…' : mode === 'payment' ? '確認收款' : mode === 'renew' ? '前往收款' : '儲存修改'}
           </button>
         </div>
       </div>

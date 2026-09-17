@@ -64,7 +64,10 @@ export default function MonthlyRentalActions({
       <div>
         <div className="monthly-rental-actions" style={{
             display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {/* 付款與續租只由正式繳費報表／付款待確認流程處理，不提供手動改期。 */}
+          {/* 手收付款走正式付款週期；不直接手動改到期日。 */}
+          <button type="button" onClick={() => setModalMode('payment')} disabled={loading} style={{ padding: '6px 10px', border: 0, borderRadius: 6, background: '#0f172a', color: '#fff', cursor: 'pointer' }}>
+            收款
+          </button>
           <button type="button" onClick={() => setModalMode('edit')} disabled={loading} style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', cursor: 'pointer' }}>
             編輯
           </button>
