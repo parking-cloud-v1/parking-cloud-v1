@@ -1703,7 +1703,6 @@ export default async function MonthlyRentalsPage({
                         >
                           <MonthlyRentalActions
                             rental={item}
-                            canCorrectPaidThrough={profile.role === 'supervisor'}
                           />
 
                           <MonthlyRentalDeleteButton
