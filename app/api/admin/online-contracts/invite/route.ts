@@ -37,6 +37,8 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const contractId = String(body?.contract_id || '').trim()
     const source = String(body?.source || 'contract_detail').trim()
+    const delivery = String(body?.delivery || 'sms').trim()
+    const onsiteMode = delivery === 'onsite'
 
     if (!contractId) {
       return NextResponse.json({ error: '缺少契約編號。' }, { status: 400 })
@@ -117,15 +119,22 @@ export async function POST(request: NextRequest) {
       `客戶編號 ${contract.customer_code || '-'}，契約編號 ${contract.contract_no}。` +
       `請於 72 小時內完成電子簽約：${signUrl}`
 
-    const sms = await sendSms(contract.phone, smsMessage)
+    const sms = onsiteMode
+      ? {
+          ok: true,
+          provider: 'onsite',
+          error: null as string | null,
+        }
+      : await sendSms(contract.phone, smsMessage)
 
     await admin
       .from('contracts')
       .update({
-        sign_invitation_sent_at: sms.ok ? now : null,
+        sign_invitation_sent_at: onsiteMode ? null : sms.ok ? now : null,
         sign_invitation_provider: sms.provider,
-        sign_invitation_status: sms.ok ? 'sent' : 'failed',
-        sign_invitation_error: sms.ok ? null : sms.error || '簡訊發送失敗',
+        sign_invitation_status: onsiteMode ? 'onsite' : sms.ok ? 'sent' : 'failed',
+        sign_invitation_error:
+          onsiteMode || sms.ok ? null : sms.error || '簡訊發送失敗',
         updated_at: now,
       })
       .eq('id', contract.id)
@@ -139,7 +148,8 @@ export async function POST(request: NextRequest) {
         customer_code: contract.customer_code || null,
         contract_no: contract.contract_no,
         expires_at: expiresAt,
-        sms_status: sms.ok ? 'sent' : 'failed',
+        delivery_mode: onsiteMode ? 'onsite' : 'sms',
+        sms_status: onsiteMode ? 'skipped_onsite' : sms.ok ? 'sent' : 'failed',
         sms_provider: sms.provider,
         sms_error: sms.error || null,
       },
@@ -154,11 +164,13 @@ export async function POST(request: NextRequest) {
         contract_id: contract.id,
         reminder_type: 'sign_link_regenerated',
         delivery_status:
-          sms.ok && sms.provider === 'development'
-            ? 'development'
-            : sms.ok
-              ? 'sent'
-              : 'failed',
+          onsiteMode
+            ? 'onsite'
+            : sms.ok && sms.provider === 'development'
+              ? 'development'
+              : sms.ok
+                ? 'sent'
+                : 'failed',
         provider: sms.provider,
         error: sms.error || null,
         actor_user_id: actorUserId,
@@ -177,12 +189,15 @@ export async function POST(request: NextRequest) {
       event_type: 'SIGN_LINK_REGENERATED',
       previous_status: 'sent',
       new_status: 'sent',
-      note: '重新產生 72 小時簽約連結',
+      note: onsiteMode
+        ? '產生現場 72 小時簽約連結'
+        : '重新產生 72 小時簽約連結',
       metadata: {
         contract_no: contract.contract_no,
         customer_code: contract.customer_code || null,
         expires_at: expiresAt,
-        sms_status: sms.ok ? 'sent' : 'failed',
+        delivery_mode: onsiteMode ? 'onsite' : 'sms',
+        sms_status: onsiteMode ? 'skipped_onsite' : sms.ok ? 'sent' : 'failed',
         sms_provider: sms.provider,
         sms_error: sms.error || null,
       },
@@ -192,7 +207,8 @@ export async function POST(request: NextRequest) {
       ok: true,
       sign_url: signUrl,
       expires_at: expiresAt,
-      sms_status: sms.ok ? 'sent' : 'failed',
+      delivery_mode: onsiteMode ? 'onsite' : 'sms',
+      sms_status: onsiteMode ? 'skipped_onsite' : sms.ok ? 'sent' : 'failed',
       sms_provider: sms.provider,
       sms_error: sms.error || null,
       dev_mode: process.env.OTP_DEV_MODE === 'true',
