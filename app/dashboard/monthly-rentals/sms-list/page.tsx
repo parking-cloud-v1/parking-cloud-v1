@@ -4,7 +4,6 @@
 import {
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from 'react'
 
@@ -54,8 +53,6 @@ function statusText(row: SmsRow) {
 
 export default function SmsListPage() {
   const supabase = useMemo(() => createClient(), [])
-  const lineFileRef = useRef<HTMLInputElement>(null)
-
   const [parkingLots, setParkingLots] = useState<ParkingLot[]>([])
   const [currentLotId, setCurrentLotId] = useState('')
   const [rows, setRows] = useState<SmsRow[]>([])
@@ -174,7 +171,7 @@ export default function SmsListPage() {
     (row) => !normalizePhone(row.phone || '')
   ).length
 
-  function exportCsv() {
+  function buildCsvFile() {
     const headers = [
       '停車場',
       '姓名',
@@ -206,40 +203,75 @@ export default function SmsListPage() {
       ),
     ]
 
-    const blob = new Blob(
+    const fileName =
+      `${currentLot?.name || '停車場'}_月租續租簡訊名單.csv`
+
+    return new File(
       ['\uFEFF' + lines.join('\r\n')],
-      { type: 'text/csv;charset=utf-8;' }
+      fileName,
+      {
+        type: 'text/csv;charset=utf-8',
+      }
     )
-    const url = URL.createObjectURL(blob)
+  }
+
+  function exportCsv() {
+    if (!currentLotId || filteredRows.length === 0) {
+      return
+    }
+
+    const file = buildCsvFile()
+    const url = URL.createObjectURL(file)
     const a = document.createElement('a')
+
     a.href = url
-    a.download = `${currentLot?.name || '停車場'}_月租續租簡訊名單.csv`
+    a.download = file.name
+
     document.body.appendChild(a)
     a.click()
     a.remove()
+
     URL.revokeObjectURL(url)
   }
 
-  async function chooseCsvForLine(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    if (!file) return
+  async function shareCsv() {
+    if (!currentLotId || filteredRows.length === 0) {
+      return
+    }
+
+    const file = buildCsvFile()
 
     try {
-      if (
-        typeof navigator.share !== 'function' ||
-        (typeof navigator.canShare === 'function' && !navigator.canShare({ files: [file] }))
-      ) {
-        alert('目前瀏覽器不支援直接分享 CSV 檔案。請改用支援檔案分享的瀏覽器或裝置。')
+      if (typeof navigator.share !== 'function') {
+        alert(
+          '目前瀏覽器不支援直接分享檔案。請改用手機 Chrome、Edge 或支援系統分享功能的瀏覽器。'
+        )
         return
       }
 
-      await navigator.share({ files: [file], title: file.name })
+      const shareData: ShareData = {
+        files: [file],
+        title: file.name,
+      }
+
+      if (
+        typeof navigator.canShare === 'function' &&
+        !navigator.canShare(shareData)
+      ) {
+        alert(
+          '目前這個裝置不支援直接分享 CSV 檔案。請改用支援檔案分享的手機或瀏覽器。'
+        )
+        return
+      }
+
+      await navigator.share(shareData)
     } catch (error: any) {
       if (error?.name !== 'AbortError') {
-        alert('CSV 檔案分享失敗：' + (error?.message || '請稍後再試'))
+        alert(
+          'CSV 檔案分享失敗：' +
+            (error?.message || '請稍後再試')
+        )
       }
-    } finally {
-      event.target.value = ''
     }
   }
 
@@ -262,19 +294,22 @@ export default function SmsListPage() {
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button type="button" className="btn" onClick={exportCsv} disabled={!currentLotId}>
+          <button
+            type="button"
+            className="btn"
+            onClick={exportCsv}
+            disabled={!currentLotId || filteredRows.length === 0}
+          >
             匯出 CSV
           </button>
-          <button type="button" className="btn" onClick={() => lineFileRef.current?.click()}>
-            CSV 轉 LINE
+          <button
+            type="button"
+            className="btn"
+            onClick={shareCsv}
+            disabled={!currentLotId || filteredRows.length === 0}
+          >
+            分享 CSV
           </button>
-          <input
-            ref={lineFileRef}
-            type="file"
-            accept=".csv,text/csv"
-            style={{ display: 'none' }}
-            onChange={chooseCsvForLine}
-          />
         </div>
       </div>
 
