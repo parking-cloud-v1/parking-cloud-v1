@@ -708,6 +708,12 @@ export default async function MonthlyRentalsPage({
 
           <ExcelExportButton
             rows={exportRows}
+            parkingLotName={
+              parkingLotOptions.find(
+                (item: any) =>
+                  item.id === lot
+              )?.name || '停車場'
+            }
           />
 
           <Link
