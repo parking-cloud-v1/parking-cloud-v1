@@ -10,7 +10,6 @@ import CsvImportButton from '@/components/CsvImportButton'
 import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
 import {
   getMonthlyBillingState,
-  isWithinOperationalWindow,
 } from '@/lib/monthly-rental-cycle'
 import ui from '@/components/PlatformAdmin.module.css'
 
@@ -397,13 +396,6 @@ export default async function MonthlyRentalsPage({
   const todayText = new Date().toISOString().slice(0, 10)
 
   const enrichedRentals: any[] = (rentals || [])
-    .filter((item: any) =>
-      isWithinOperationalWindow({
-        today: todayText,
-        paidThroughDate: item.paid_through_date,
-        months: 3,
-      })
-    )
     .map((item: any) => {
       const billing = getMonthlyBillingState({
         today: todayText,
@@ -1703,6 +1695,7 @@ export default async function MonthlyRentalsPage({
                         >
                           <MonthlyRentalActions
                             rental={item}
+                            canCorrectPaidThrough={profile.role === 'supervisor'}
                           />
 
                           <MonthlyRentalDeleteButton
