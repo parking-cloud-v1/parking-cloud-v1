@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
+import { sendViolationLineAlert } from '@/lib/line/violation-alert'
 
 export const dynamic = 'force-dynamic'
 
@@ -207,6 +208,61 @@ export async function POST(request: Request) {
       })
     } catch {
       // 稽核寫入失敗不阻止案件建立。
+    }
+
+    // 內部「違規即時通知」已由 supervisor_status=pending 建立。
+    // LINE 是第二通知管道；即使 LINE 設定錯誤或暫時發送失敗，案件仍須成功建立。
+    try {
+      const { data: lotRow } = await db
+        .from('parking_lots')
+        .select('name')
+        .eq('id', parkingLotId)
+        .maybeSingle()
+
+      const lineResult = await sendViolationLineAlert({
+        caseId: data.id,
+        parkingLotName: String(lotRow?.name || '停車場'),
+        caseType,
+        reservedType: caseType === 'reserved_violation' ? reservedType : null,
+        vehiclePlate: caseType === 'unplated' ? null : plate,
+        locationText,
+        startDate,
+        notes,
+      })
+
+      await db.from('system_logs').insert({
+        user_id: user.id,
+        parking_lot_id: parkingLotId,
+        action: lineResult.configured
+          ? lineResult.failed > 0
+            ? 'VIOLATION_LINE_ALERT_PARTIAL'
+            : 'VIOLATION_LINE_ALERT_SENT'
+          : 'VIOLATION_LINE_ALERT_NOT_CONFIGURED',
+        entity_type: 'violation_parking_case',
+        entity_id: data.id,
+        detail: {
+          configured: lineResult.configured,
+          attempted: lineResult.attempted,
+          sent: lineResult.sent,
+          failed: lineResult.failed,
+          errors: lineResult.errors,
+        },
+      })
+    } catch (lineError: any) {
+      try {
+        await db.from('system_logs').insert({
+          user_id: user.id,
+          parking_lot_id: parkingLotId,
+          action: 'VIOLATION_LINE_ALERT_FAILED',
+          entity_type: 'violation_parking_case',
+          entity_id: data.id,
+          detail: {
+            error: String(lineError?.message || 'LINE 發送失敗').slice(0, 500),
+          },
+        })
+      } catch {
+        // LINE/稽核失敗都不可影響違規案件本身。
+      }
     }
 
     return NextResponse.json({ ok: true, id: data.id })
