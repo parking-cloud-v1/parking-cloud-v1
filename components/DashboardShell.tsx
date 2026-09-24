@@ -60,8 +60,8 @@ export default async function DashboardShell({ children }: { children: React.Rea
   return <div className={ui.shell}>
     <header className={ui.topbar}>
       <div className={ui.brandWrap}>
-        <div className={ui.brandMark}>ZY</div>
-        <div><div className={ui.brandText}>智驛停車營運雲端平台</div><div className={ui.brandSub}>智驛科技有限公司</div></div>
+        <div className={ui.brandMark}><img src="/brand-logo.png" alt="智驛科技" /></div>
+        <div><div className={ui.brandText}>智驛科技</div><div className={ui.brandSub}>停車場營運管理平台</div></div>
       </div>
       <div className={ui.userBox}><span><span className={ui.userName}>{profile?.display_name || user?.email || '未登入'}</span> · {roleText}</span><LogoutButton /></div>
     </header>

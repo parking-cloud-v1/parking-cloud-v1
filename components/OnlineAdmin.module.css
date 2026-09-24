@@ -464,3 +464,18 @@
   .navIcon{font-size:22px}.navTitle{font-size:21px}.navBadge{font-size:18px}.navDesc{font-size:17px}.chip{font-size:16px}
 }
 @media screen and (max-width:640px){.page h1{font-size:32px}}
+
+
+/* 2026 bright visual refinement — presentation only */
+.page{color:#263f63}
+.headerPanel{border:1px solid #d8e8fb!important;border-radius:19px!important;background:linear-gradient(112deg,#ffffff 0%,#f1f7ff 58%,#e6f2ff 100%)!important;box-shadow:0 10px 26px rgba(47,91,148,.065)!important;padding:22px 24px!important}
+.eyebrow{color:#3b82f6!important;font-size:12px!important}
+.headerPanel h1{color:#12335d!important;font-size:30px!important}
+.headerActions a{border-color:#d3e3f6!important;border-radius:9px!important;background:#fff!important;color:#4a6282!important;box-shadow:0 3px 10px rgba(50,89,140,.04)}
+.lotBanner{color:#7487a5!important}.lotDot{background:#24ba7b!important;box-shadow:0 0 0 4px #e0f8ee!important}
+.navGrid{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))!important;gap:12px!important}
+.navCard{min-height:145px!important;border:1px solid #dfe9f6!important;border-radius:15px!important;padding:18px!important;box-shadow:0 7px 20px rgba(46,83,134,.048)!important}
+.navCard:hover{border-color:#bfd9fa!important;box-shadow:0 12px 26px rgba(44,89,151,.085)!important}
+.navCard::after{background:#f0f7ff!important;width:105px!important;height:105px!important}
+.navIcon{background:linear-gradient(135deg,#eaf4ff,#f8fbff)!important;color:#3278dc!important;border:1px solid #dceaff}
+.metricCard{border-color:#dfe9f6!important;border-radius:14px!important;box-shadow:0 5px 15px rgba(47,84,134,.04)!important}

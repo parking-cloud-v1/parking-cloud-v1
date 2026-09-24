@@ -446,3 +446,126 @@ svg {
     font-weight: 800;
   }
 }
+
+/* =========================================================
+   智驛科技｜2026 全系統亮色 UI 視覺層
+   只調整 presentation，不變更任何資料、計算、API 或流程
+   ========================================================= */
+:root{
+  --zy-blue:#2f7df6;
+  --zy-blue-2:#63a5ff;
+  --zy-blue-soft:#edf6ff;
+  --zy-indigo:#6f62f6;
+  --zy-green:#22b97a;
+  --zy-orange:#f59e0b;
+  --zy-red:#f05252;
+  --zy-ink:#10244a;
+  --zy-text:#263b5f;
+  --zy-muted:#7587a7;
+  --zy-line:#dbe8f7;
+  --zy-panel:#ffffff;
+  --zy-bg:#f5f9ff;
+  --zy-shadow:0 10px 28px rgba(45,87,145,.08);
+}
+
+html,body{background:var(--zy-bg)!important;color:var(--zy-text)!important}
+body{font-family:Inter,"Noto Sans TC","Microsoft JhengHei",Arial,sans-serif!important}
+
+/* 主工作區背景 */
+.main{
+  background:
+    radial-gradient(circle at 88% 5%, rgba(105,170,255,.10), transparent 26%),
+    linear-gradient(180deg,#f8fbff 0%,#f3f8ff 100%)!important;
+}
+
+/* 所有後台頁面的標題 */
+.main h1{
+  color:var(--zy-ink)!important;
+  font-weight:900!important;
+  letter-spacing:-.035em!important;
+}
+.main h2,.main h3{color:#193766!important}
+.main p,.main small{color:var(--zy-muted)}
+
+/* 全站卡片語言 */
+.main .card,
+.main section[style*="background"],
+.main article[style*="background"]{
+  border:1px solid var(--zy-line)!important;
+  border-radius:18px!important;
+  background:rgba(255,255,255,.96)!important;
+  box-shadow:var(--zy-shadow)!important;
+}
+
+/* 一般頁面第一層容器，不改 layout 邏輯 */
+.main > div > section,
+.main > section{
+  scroll-margin-top:86px;
+}
+
+/* 表單區塊 */
+.main input:not([type="checkbox"]):not([type="radio"]),
+.main select,
+.main textarea{
+  border:1px solid #cbdcf1!important;
+  border-radius:11px!important;
+  background:#fff!important;
+  color:#1d3557!important;
+  box-shadow:inset 0 1px 1px rgba(30,64,120,.025)!important;
+  transition:border-color .15s ease,box-shadow .15s ease!important;
+}
+.main input:not([type="checkbox"]):not([type="radio"]):focus,
+.main select:focus,.main textarea:focus{
+  outline:none!important;
+  border-color:#75adff!important;
+  box-shadow:0 0 0 3px rgba(47,125,246,.11)!important;
+}
+.main label{color:#43597c!important;font-weight:750!important}
+
+/* 按鈕：原功能不變，只改外觀 */
+.main button,.main .btn,.main a.btn{
+  border-radius:10px!important;
+  font-weight:800!important;
+  transition:transform .12s ease,box-shadow .12s ease,filter .12s ease!important;
+}
+.main button:hover:not(:disabled),.main .btn:hover{
+  transform:translateY(-1px);
+}
+.main button:not([style*="background"]),.main .btn:not(.secondary){
+  box-shadow:0 4px 12px rgba(34,94,180,.08);
+}
+
+/* 表格：全系統統一 */
+.main table{
+  width:100%;
+  border-collapse:separate!important;
+  border-spacing:0!important;
+  background:#fff;
+  color:#31496d;
+}
+.main table thead th{
+  background:#f1f7ff!important;
+  color:#4b6385!important;
+  font-weight:850!important;
+  border-top:1px solid #dfebf8!important;
+  border-bottom:1px solid #d8e6f5!important;
+}
+.main table thead th:first-child{border-top-left-radius:10px}
+.main table thead th:last-child{border-top-right-radius:10px}
+.main table tbody td{border-bottom:1px solid #edf3fa!important}
+.main table tbody tr:hover td{background:#f8fbff!important}
+
+/* 空資料區域看起來不像壞掉 */
+.main td[colspan],.main [style*="text-align: center"],.main [style*="textAlign: 'center'"]{
+  color:#8798b4;
+}
+
+/* 滾動條輕量化 */
+.sidebar::-webkit-scrollbar,.main *::-webkit-scrollbar{width:8px;height:8px}
+.sidebar::-webkit-scrollbar-thumb,.main *::-webkit-scrollbar-thumb{background:#c6d9ef;border-radius:999px}
+.sidebar::-webkit-scrollbar-track,.main *::-webkit-scrollbar-track{background:transparent}
+
+/* 手機保留原功能且不造成整頁橫向溢出 */
+@media(max-width:900px){
+  .main{background:#f6f9fe!important}
+}
