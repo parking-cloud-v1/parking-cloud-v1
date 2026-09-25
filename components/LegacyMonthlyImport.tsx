@@ -315,32 +315,33 @@ function importIdentityKeys(
     vehicle_plate?: string | null
   }
 ) {
-  const keys: string[] = []
-
-  const customerCode =
-    normalizeCustomerCode(
-      row.customer_code
-    )
-
-  if (customerCode) {
-    keys.push(
-      `customer:${customerCode}`
-    )
-  }
-
   const plate =
     normalizePlate(
       row.vehicle_plate ||
         ''
     )
 
+  /*
+   * 一般舊月租資料以車牌作為主要識別。
+   * 客戶編號在部分場站會重複使用（例如 0119 同時對應多位月租戶），
+   * 因此只在沒有車牌時才以客戶編號備援，避免不同人被誤認成同一筆。
+   */
   if (plate) {
-    keys.push(
-      `plate:${plate}`
-    )
+    return [
+      `plate:${plate}`,
+    ]
   }
 
-  return keys
+  const customerCode =
+    normalizeCustomerCode(
+      row.customer_code
+    )
+
+  return customerCode
+    ? [
+        `customer:${customerCode}`,
+      ]
+    : []
 }
 
 function setImportIdentity<T>(
@@ -2955,63 +2956,10 @@ export default function LegacyMonthlyImport({
         )
 
       /*
-       * 重建本次有效名單。
-       * 已退租資料即使再次出現在匯入檔，
-       * 也不視為目前有效月租戶。
+       * newMap 代表本次 CSV 的完整有效名單（validRows）。
+       * effectiveRows 只控制哪些資料允許新增／更新，
+       * 不能拿來判斷某月租戶是否從總表消失。
        */
-      newMap.clear()
-
-      for (
-        const row of
-        effectiveRows
-      ) {
-        setImportIdentity(
-          newMap,
-          row,
-          row
-        )
-      }
-
-      /*
-       * 名單異常縮水保護：
-       * 如果上一份完整總表已有一定筆數，而這次解析後突然只剩很少資料，
-       * 不允許直接進入後續「缺少即退租」流程。
-       *
-       * 這是為了防止 CSV 欄位格式、編碼或客戶編號格式不同，
-       * 導致只辨識到 1～少數幾筆後，誤把整場其他月租戶退租。
-       */
-      if (
-        previousMembers.length >= 10 &&
-        effectiveRows.length <
-          Math.max(
-            2,
-            Math.ceil(
-              previousMembers.length *
-                0.6
-            )
-          )
-      ) {
-        await supabase
-          .from(
-            'monthly_import_batches'
-          )
-          .update({
-            status: 'failed',
-            notes:
-              `安全保護停止：上一份 ${previousMembers.length} 筆，本次只辨識 ${effectiveRows.length} 筆；未執行主檔退租。請先確認原始檔格式。`,
-          })
-          .eq(
-            'id',
-            batchId
-          )
-
-        setMessage(
-          `安全保護已停止本次正式匯入：上一份完整總表有 ${previousMembers.length} 筆，但這次只辨識到 ${effectiveRows.length} 筆。系統沒有執行大量退租，請先確認舊月租檔格式後再匯入。`
-        )
-
-        return
-      }
-
       const rentalMapByPlate =
         new Map<
           string,
@@ -3089,26 +3037,26 @@ export default function LegacyMonthlyImport({
           vehicle_plate?: string | null
         }
       ) {
-        const customerCodeKey =
-          normalizeCustomerCode(
-            row.customer_code
-          )
-
-        if (customerCodeKey) {
-          return rentalMapByCustomerCode.get(
-            customerCodeKey
-          )
-        }
-
         const plateKey =
           normalizePlate(
             row.vehicle_plate ||
               ''
           )
 
-        return plateKey
-          ? rentalMapByPlate.get(
-              plateKey
+        if (plateKey) {
+          return rentalMapByPlate.get(
+            plateKey
+          )
+        }
+
+        const customerCodeKey =
+          normalizeCustomerCode(
+            row.customer_code
+          )
+
+        return customerCodeKey
+          ? rentalMapByCustomerCode.get(
+              customerCodeKey
             )
           : undefined
       }
