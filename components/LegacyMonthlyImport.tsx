@@ -1518,11 +1518,11 @@ async function parseLegacyFile(
 
     const isMainRow =
       columns.length >= 8 &&
-      /^\d+$/.test(
-        customerCode
-      ) &&
       Boolean(columns[1]) &&
-      Boolean(columns[2])
+      Boolean(columns[2]) &&
+      !/^(客戶編號|合計|總計|小計)$/i.test(
+        customerCode
+      )
 
     if (isMainRow) {
       finishCurrent()
@@ -2970,6 +2970,46 @@ export default function LegacyMonthlyImport({
           row,
           row
         )
+      }
+
+      /*
+       * 名單異常縮水保護：
+       * 如果上一份完整總表已有一定筆數，而這次解析後突然只剩很少資料，
+       * 不允許直接進入後續「缺少即退租」流程。
+       *
+       * 這是為了防止 CSV 欄位格式、編碼或客戶編號格式不同，
+       * 導致只辨識到 1～少數幾筆後，誤把整場其他月租戶退租。
+       */
+      if (
+        previousMembers.length >= 10 &&
+        effectiveRows.length <
+          Math.max(
+            2,
+            Math.ceil(
+              previousMembers.length *
+                0.6
+            )
+          )
+      ) {
+        await supabase
+          .from(
+            'monthly_import_batches'
+          )
+          .update({
+            status: 'failed',
+            notes:
+              `安全保護停止：上一份 ${previousMembers.length} 筆，本次只辨識 ${effectiveRows.length} 筆；未執行主檔退租。請先確認原始檔格式。`,
+          })
+          .eq(
+            'id',
+            batchId
+          )
+
+        setMessage(
+          `安全保護已停止本次正式匯入：上一份完整總表有 ${previousMembers.length} 筆，但這次只辨識到 ${effectiveRows.length} 筆。系統沒有執行大量退租，請先確認舊月租檔格式後再匯入。`
+        )
+
+        return
       }
 
       const rentalMapByPlate =
