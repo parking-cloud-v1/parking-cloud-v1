@@ -60,8 +60,8 @@ export default async function DashboardShell({ children }: { children: React.Rea
   return <div className={ui.shell}>
     <header className={ui.topbar}>
       <div className={ui.brandWrap}>
-        <div className={ui.brandMark}><img src="/brand-logo.png" alt="智驛科技" /></div>
-        <div><div className={ui.brandText}>智驛科技</div><div className={ui.brandSub}>停車場營運管理平台</div></div>
+        <div className={ui.brandMark}>ZY</div>
+        <div><div className={ui.brandText}>智驛停車營運雲端平台</div><div className={ui.brandSub}>智驛科技有限公司</div></div>
       </div>
       <div className={ui.userBox}><span><span className={ui.userName}>{profile?.display_name || user?.email || '未登入'}</span> · {roleText}</span><LogoutButton /></div>
     </header>
@@ -102,7 +102,7 @@ export default async function DashboardShell({ children }: { children: React.Rea
               <div className={ui.navGroup}><div className={ui.navTitle}>報表</div><Nav href="/dashboard/reports" icon="報">報表中心</Nav></div>
             )}
             <div className={ui.navGroup}><div className={ui.navTitle}>基本管理</div><Nav href="/dashboard/parking-lots" icon="場">停車場管理</Nav></div>
-            {profile?.role === 'supervisor' && <div className={ui.navGroup}><div className={ui.navTitle}>系統管理</div><Nav href="/dashboard/settings" icon="設">系統設定</Nav><Nav href="/dashboard/data-maintenance" icon="清">資料維護</Nav><Nav href="/dashboard/online/audit" icon="稽">操作紀錄</Nav><Nav href="/dashboard/online/health" icon="安">上線安全檢查</Nav></div>}
+            {profile?.role === 'supervisor' && <div className={ui.navGroup}><div className={ui.navTitle}>系統管理</div><Nav href="/dashboard/staff-leave" icon="休">休假／代班通知</Nav><Nav href="/dashboard/settings" icon="設">系統設定</Nav><Nav href="/dashboard/data-maintenance" icon="清">資料維護</Nav><Nav href="/dashboard/online/audit" icon="稽">操作紀錄</Nav><Nav href="/dashboard/online/health" icon="安">上線安全檢查</Nav></div>}
           </>
       </aside>
       <main className={ui.main}>{children}</main>
