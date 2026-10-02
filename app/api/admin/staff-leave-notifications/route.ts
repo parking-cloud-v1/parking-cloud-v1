@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
+import { createStaffLeaveCalendarEvent, updateStaffLeaveCalendarEvent, deleteStaffLeaveCalendarEvent } from '@/lib/google-calendar/staff-leave-calendar'
 
 async function requireSupervisor() {
   const supabase = await createClient()
@@ -23,27 +24,14 @@ export async function GET() {
   if ('error' in auth) return auth.error
   const { supabase } = auth
 
-  const [{ data: items, error: itemError }, { data: managers }, { data: lots }] = await Promise.all([
-    supabase
-      .from('staff_leave_notifications')
-      .select('*')
-      .order('leave_date', { ascending: true })
-      .order('created_at', { ascending: true }),
-    supabase
-      .from('profiles')
-      .select('id,display_name,role,is_active')
-      .eq('role', 'manager')
-      .eq('is_active', true)
-      .order('display_name'),
-    supabase
-      .from('parking_lots')
-      .select('id,name,status')
-      .eq('status', 'active')
-      .order('name'),
-  ])
+  const { data: items, error: itemError } = await supabase
+    .from('staff_leave_notifications')
+    .select('*')
+    .order('leave_date', { ascending: true })
+    .order('created_at', { ascending: true })
 
   if (itemError) return NextResponse.json({ error: itemError.message }, { status: 500 })
-  return NextResponse.json({ items: items || [], managers: managers || [], parkingLots: lots || [] })
+  return NextResponse.json({ items: items || [] })
 }
 
 export async function POST(request: NextRequest) {
@@ -52,38 +40,28 @@ export async function POST(request: NextRequest) {
   const { supabase, user } = auth
   const body = await request.json().catch(() => ({}))
 
-  const staffUserId = String(body.staff_user_id || '').trim()
-  const parkingLotId = String(body.parking_lot_id || '').trim()
+  const staffName = String(body.staff_name || '').trim()
+  const parkingLotName = String(body.parking_lot_name || '').trim()
   const leaveDate = String(body.leave_date || '').trim()
+  const leaveShift = String(body.leave_shift || '').trim()
   const leaveType = String(body.leave_type || '排休').trim() || '排休'
   const substituteName = String(body.substitute_name || '').trim()
   const substituteShift = String(body.substitute_shift || '').trim()
   const notes = String(body.notes || '').trim()
 
-  if (!staffUserId || !parkingLotId || !/^\d{4}-\d{2}-\d{2}$/.test(leaveDate)) {
-    return NextResponse.json({ error: '請選擇休假人員、場站與日期' }, { status: 400 })
-  }
-
-  const [{ data: staff }, { data: lot }] = await Promise.all([
-    supabase.from('profiles').select('id,display_name,role,is_active').eq('id', staffUserId).maybeSingle(),
-    supabase.from('parking_lots').select('id,name,status').eq('id', parkingLotId).maybeSingle(),
-  ])
-
-  if (!staff?.is_active || staff.role !== 'manager') {
-    return NextResponse.json({ error: '休假人員必須是有效的場站管理員' }, { status: 400 })
-  }
-  if (!lot || lot.status !== 'active') {
-    return NextResponse.json({ error: '停車場資料無效' }, { status: 400 })
+  if (!staffName || !parkingLotName || !leaveShift || !/^\d{4}-\d{2}-\d{2}$/.test(leaveDate)) {
+    return NextResponse.json({ error: '請輸入管理員姓名、停車場、休假日期與休假時段' }, { status: 400 })
   }
 
   const { data, error } = await supabase
     .from('staff_leave_notifications')
     .insert({
-      staff_user_id: staff.id,
-      staff_name: staff.display_name || '未命名管理員',
-      parking_lot_id: lot.id,
-      parking_lot_name: lot.name,
+      staff_user_id: null,
+      staff_name: staffName,
+      parking_lot_id: null,
+      parking_lot_name: parkingLotName,
       leave_date: leaveDate,
+      leave_shift: leaveShift,
       leave_type: leaveType,
       substitute_name: substituteName || null,
       substitute_shift: substituteShift || null,
@@ -94,7 +72,43 @@ export async function POST(request: NextRequest) {
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ item: data })
+
+  try {
+    const event = await createStaffLeaveCalendarEvent({
+      staffName,
+      parkingLotName,
+      leaveDate,
+      leaveShift,
+      leaveType,
+      substituteName,
+      substituteShift,
+      notes,
+    })
+
+    const { data: synced, error: syncError } = await supabase
+      .from('staff_leave_notifications')
+      .update({
+        google_event_id: event.id,
+        google_calendar_synced_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', data.id)
+      .select('*')
+      .single()
+
+    if (syncError) {
+      await deleteStaffLeaveCalendarEvent(event.id).catch(() => undefined)
+      await supabase.from('staff_leave_notifications').delete().eq('id', data.id)
+      return NextResponse.json({ error: `Google 行事曆同步後資料庫更新失敗：${syncError.message}` }, { status: 500 })
+    }
+
+    return NextResponse.json({ item: synced })
+  } catch (calendarError) {
+    await supabase.from('staff_leave_notifications').delete().eq('id', data.id)
+    return NextResponse.json({
+      error: `Google 行事曆同步失敗：${String(calendarError instanceof Error ? calendarError.message : calendarError)}`,
+    }, { status: 502 })
+  }
 }
 
 export async function PATCH(request: NextRequest) {
@@ -105,21 +119,80 @@ export async function PATCH(request: NextRequest) {
   const id = String(body.id || '').trim()
   if (!id) return NextResponse.json({ error: '缺少資料 ID' }, { status: 400 })
 
-  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
-  for (const key of ['leave_date','leave_type','substitute_name','substitute_shift','notes']) {
-    if (key in body) updates[key] = body[key] || null
+  const { data: current, error: currentError } = await supabase
+    .from('staff_leave_notifications')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle()
+
+  if (currentError) return NextResponse.json({ error: currentError.message }, { status: 500 })
+  if (!current) return NextResponse.json({ error: '找不到這筆休假資料' }, { status: 404 })
+
+  const merged = {
+    staff_name: 'staff_name' in body ? String(body.staff_name || '').trim() : current.staff_name,
+    parking_lot_name: 'parking_lot_name' in body ? String(body.parking_lot_name || '').trim() : current.parking_lot_name,
+    leave_date: 'leave_date' in body ? String(body.leave_date || '').trim() : current.leave_date,
+    leave_shift: 'leave_shift' in body ? String(body.leave_shift || '').trim() : current.leave_shift,
+    leave_type: 'leave_type' in body ? String(body.leave_type || '排休').trim() : current.leave_type,
+    substitute_name: 'substitute_name' in body ? String(body.substitute_name || '').trim() : (current.substitute_name || ''),
+    substitute_shift: 'substitute_shift' in body ? String(body.substitute_shift || '').trim() : (current.substitute_shift || ''),
+    notes: 'notes' in body ? String(body.notes || '').trim() : (current.notes || ''),
   }
 
-  // 已經發過的提醒若修改內容，不自動重發；維持「只提醒一次」。
-  const { data, error } = await supabase
-    .from('staff_leave_notifications')
-    .update(updates)
-    .eq('id', id)
-    .select('*')
-    .single()
+  if (!merged.staff_name || !merged.parking_lot_name || !merged.leave_shift || !/^\d{4}-\d{2}-\d{2}$/.test(merged.leave_date)) {
+    return NextResponse.json({ error: '請輸入管理員姓名、停車場、休假日期與休假時段' }, { status: 400 })
+  }
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ item: data })
+  try {
+    let googleEventId = current.google_event_id as string | null
+
+    if (googleEventId) {
+      await updateStaffLeaveCalendarEvent(googleEventId, {
+        staffName: merged.staff_name,
+        parkingLotName: merged.parking_lot_name,
+        leaveDate: merged.leave_date,
+        leaveShift: merged.leave_shift,
+        leaveType: merged.leave_type,
+        substituteName: merged.substitute_name,
+        substituteShift: merged.substitute_shift,
+        notes: merged.notes,
+      })
+    } else {
+      const event = await createStaffLeaveCalendarEvent({
+        staffName: merged.staff_name,
+        parkingLotName: merged.parking_lot_name,
+        leaveDate: merged.leave_date,
+        leaveShift: merged.leave_shift,
+        leaveType: merged.leave_type,
+        substituteName: merged.substitute_name,
+        substituteShift: merged.substitute_shift,
+        notes: merged.notes,
+      })
+      googleEventId = event.id
+    }
+
+    const { data, error } = await supabase
+      .from('staff_leave_notifications')
+      .update({
+        ...merged,
+        substitute_name: merged.substitute_name || null,
+        substitute_shift: merged.substitute_shift || null,
+        notes: merged.notes || null,
+        google_event_id: googleEventId,
+        google_calendar_synced_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select('*')
+      .single()
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ item: data })
+  } catch (calendarError) {
+    return NextResponse.json({
+      error: `Google 行事曆同步失敗：${String(calendarError instanceof Error ? calendarError.message : calendarError)}`,
+    }, { status: 502 })
+  }
 }
 
 export async function DELETE(request: NextRequest) {
@@ -128,6 +201,25 @@ export async function DELETE(request: NextRequest) {
   const { supabase } = auth
   const id = new URL(request.url).searchParams.get('id') || ''
   if (!id) return NextResponse.json({ error: '缺少資料 ID' }, { status: 400 })
+
+  const { data: current, error: currentError } = await supabase
+    .from('staff_leave_notifications')
+    .select('id,google_event_id')
+    .eq('id', id)
+    .maybeSingle()
+
+  if (currentError) return NextResponse.json({ error: currentError.message }, { status: 500 })
+  if (!current) return NextResponse.json({ ok: true })
+
+  if (current.google_event_id) {
+    try {
+      await deleteStaffLeaveCalendarEvent(current.google_event_id)
+    } catch (calendarError) {
+      return NextResponse.json({
+        error: `Google 行事曆刪除失敗：${String(calendarError instanceof Error ? calendarError.message : calendarError)}`,
+      }, { status: 502 })
+    }
+  }
 
   const { error } = await supabase.from('staff_leave_notifications').delete().eq('id', id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
