@@ -199,33 +199,35 @@ function applyDefaultSubstitute(row: RecognizedLeave) {
 }
 
 function parseEmployeeTable(words: VisionWord[], fullText: string, year: number, month: number, defaultLot: string) {
-  const numeric = words.filter(w => /^\d{1,2}$/.test(w.text) && Number(w.text) >= 1 && Number(w.text) <= 31)
+  const numeric = words.filter(
+    w => /^\d{1,2}$/.test(w.text) && Number(w.text) >= 1 && Number(w.text) <= 31
+  )
+
   const groups = groupByY(numeric, 12)
-    .map(g => ({ words: g, score: new Set(g.map(w => Number(w.text))).size }))
+    .map(g => ({
+      words: g,
+      score: new Set(g.map(w => Number(w.text))).size,
+    }))
     .sort((a, b) => b.score - a.score)
+
   const dateHeader = groups[0]?.words || []
   if (dateHeader.length < 10) return [] as RecognizedLeave[]
 
-  const headerY = dateHeader.reduce((sum, w) => sum + w.y, 0) / dateHeader.length
+  const headerY =
+    dateHeader.reduce((sum, w) => sum + w.y, 0) /
+    dateHeader.length
+
   const minDateX = Math.min(...dateHeader.map(w => w.x))
   const maxDateX = Math.max(...dateHeader.map(w => w.x))
+
   const dateMap = new Map<number, VisionWord>()
   for (const word of dateHeader) {
     const day = Number(word.text)
     if (!dateMap.has(day)) dateMap.set(day, word)
   }
 
-  const nameCandidates = words
-    .filter(w => w.y > headerY + 20 && w.x < minDateX - 10 && isLikelyName(w.text))
-    .sort((a, b) => a.y - b.y)
-
-  const names: VisionWord[] = []
-  for (const word of nameCandidates) {
-    if (!names.some(n => Math.abs(n.y - word.y) < 12)) names.push(word)
-  }
-  names.sort((a, b) => a.y - b.y)
-
   const lot = guessLotFromText(fullText, defaultLot)
+
   const leaveWords = words.filter(
     w =>
       normalizeChinese(w.text) === '休' &&
@@ -233,24 +235,63 @@ function parseEmployeeTable(words: VisionWord[], fullText: string, year: number,
       w.x >= minDateX - 10 &&
       w.x <= maxDateX + 20
   )
+
+  /*
+   * 樹七站這類「姓名 × 日期」班表：
+   * 不再先做全表姓名清單。
+   * 每個「休」直接尋找同一橫列、日期欄左側的姓名文字。
+   * 這可以處理 Vision 把姓名拆成單字或不同 word 的情況。
+   */
+  function nameForLeave(leave: VisionWord) {
+    const sameRowLeft = words
+      .filter(w => {
+        if (w.x >= minDateX - 8) return false
+        if (w.y <= headerY + 15) return false
+        if (Math.abs(w.y - leave.y) > 22) return false
+
+        const t = normalizeChinese(w.text)
+        if (!t) return false
+        if (/^\d+$/.test(t)) return false
+        if (t === '休' || t === '✓' || t === '√') return false
+        if (
+          /^(姓名|加時數|班表|計薪表|備註|主管|國慶日|光復節)$/.test(t)
+        ) return false
+
+        // 姓名欄只接受中文字，避免把其他欄位雜訊拼進來。
+        return /^[\u4e00-\u9fff]{1,5}$/.test(t)
+      })
+      .sort((a, b) => a.x - b.x)
+
+    if (sameRowLeft.length === 0) return ''
+
+    // Vision 可能把「劉」「睿」「琪」拆成三個 word，
+    // 也可能直接辨識成「劉睿琪」，因此把同列文字依 X 串起來。
+    const combined = sameRowLeft
+      .map(w => normalizeChinese(w.text))
+      .join('')
+      .replace(/(姓名|加時數|班表|計薪表|備註|主管)/g, '')
+      .trim()
+
+    // 若串起來太長，優先找 2~4 字的完整中文姓名 token。
+    if (combined.length >= 2 && combined.length <= 4) {
+      return combined
+    }
+
+    const wholeName = sameRowLeft.find(w => {
+      const t = normalizeChinese(w.text)
+      return /^[\u4e00-\u9fff]{2,4}$/.test(t)
+    })
+
+    if (wholeName) return normalizeChinese(wholeName.text)
+
+    // 最後保留最靠近姓名欄的 2~4 個中文字。
+    const chars = combined.replace(/[^\u4e00-\u9fff]/g, '')
+    if (chars.length >= 2) return chars.slice(0, 4)
+
+    return ''
+  }
+
   const result: RecognizedLeave[] = []
-
-  // 用相鄰姓名的中點建立每位員工的列範圍。
-  // 這樣第二列的「休」不會被錯配到第一列姓名。
-  const rowBands = names.map((name, index) => {
-    const previous = names[index - 1]
-    const next = names[index + 1]
-
-    const top = previous
-      ? (previous.y + name.y) / 2
-      : name.y - (next ? (next.y - name.y) / 2 : 24)
-
-    const bottom = next
-      ? (name.y + next.y) / 2
-      : name.y + (previous ? (name.y - previous.y) / 2 : 24)
-
-    return { name, top, bottom }
-  })
 
   for (const leave of leaveWords) {
     let nearestDay: number | null = null
@@ -264,15 +305,18 @@ function parseEmployeeTable(words: VisionWord[], fullText: string, year: number,
       }
     }
 
-    if (!nearestDay || nearestDay > daysInMonth(year, month)) continue
+    if (
+      !nearestDay ||
+      nearestDay > daysInMonth(year, month)
+    ) {
+      continue
+    }
 
-    const row = rowBands.find(
-      band => leave.y >= band.top && leave.y < band.bottom
-    )
-    if (!row) continue
+    const staffName = nameForLeave(leave)
+    if (!staffName) continue
 
     result.push({
-      staff_name: normalizeChinese(row.name.text),
+      staff_name: staffName,
       parking_lot_name: lot,
       leave_date: isoDate(year, month, nearestDay),
       leave_shift: '全天',
@@ -280,7 +324,7 @@ function parseEmployeeTable(words: VisionWord[], fullText: string, year: number,
       substitute_name: '',
       substitute_shift: '',
       notes: '由班表照片辨識；匯入前請主管確認',
-      confidence_note: '班表「休」欄位依姓名列與日期欄定位',
+      confidence_note: '班表「休」依同一橫列左側姓名與日期欄定位',
     })
   }
 
