@@ -107,41 +107,42 @@ function parseYearMonth(yearMonth: string) {
 function guessLotFromText(fullText: string, fallback = '') {
   if (fallback.trim()) return fallback.trim()
 
+  const cleanCandidate = (value: string) =>
+    value
+      .replace(/[0-9０-９]+年[0-9０-９]+月份?/g, '')
+      .replace(/[0-9０-９]+月份?/g, '')
+      .replace(/^[0-9０-９]+/, '')
+      .replace(/^(?:年|月|月份)+/, '')
+      .replace(/^(?:班表|計薪表)+/, '')
+      .replace(/\s+/g, '')
+      .trim()
+
   const lines = fullText
     .split(/\r?\n/)
-    .map(line => line.replace(/\s+/g, '').trim())
+    .map(line => line.trim())
     .filter(Boolean)
 
-  const blocked = /(班表|計薪表|姓名|加時數|備註|主管)/
-  for (const line of lines) {
-    if (blocked.test(line) && !/(?:站|停車場)/.test(line)) continue
+  for (const rawLine of lines) {
+    const line = cleanCandidate(rawLine)
+    const matches = [
+      ...line.matchAll(/([\u4e00-\u9fff]{2,12}(?:停車場|站))/g),
+    ]
 
-    const matches = [...line.matchAll(/([\u4e00-\u9fff]{2,12}(?:停車場|站))/g)]
     for (const match of matches) {
-      let candidate = String(match[1] || '')
-        .replace(/^(?:年|月|月份)+/, '')
-        .replace(/^(?:班表|計薪表)+/, '')
-        .trim()
-
-      // 常見 OCR 會把「115年10月份」黏在場站前面；
-      // 數字不在這個 regex 內，但可能留下「月份」兩字。
-      candidate = candidate.replace(/^月份?/, '')
-
+      const candidate = cleanCandidate(String(match[1] || ''))
       if (
         candidate.length >= 2 &&
         candidate.length <= 12 &&
-        !blocked.test(candidate)
+        !/(班表|計薪表|姓名|加時數|備註|主管)/.test(candidate)
       ) {
         return candidate
       }
     }
   }
 
-  const compact = fullText.replace(/\s+/g, '')
-  const fallbackMatch = compact.match(/([\u4e00-\u9fff]{2,8}(?:停車場|站))/)
-  return String(fallbackMatch?.[1] || fallback || '')
-    .replace(/^月份?/, '')
-    .trim()
+  const compact = cleanCandidate(fullText)
+  const match = compact.match(/([\u4e00-\u9fff]{2,10}(?:停車場|站))/)
+  return cleanCandidate(String(match?.[1] || fallback || ''))
 }
 
 function isLikelyName(text: string) {
@@ -179,7 +180,12 @@ function applyDefaultSubstitute(row: RecognizedLeave) {
   // 樹林站固定代班規則：
   // 許健瑜或劉睿琪休假時，自動帶入陳燕秋。
   if (
-    (lot.includes('樹林站') || lot === '樹林') &&
+    (
+      lot.includes('樹七站') ||
+      lot.includes('樹林站') ||
+      lot === '樹七' ||
+      lot === '樹林'
+    ) &&
     (staff === '許健瑜' || staff === '劉睿琪')
   ) {
     return {
