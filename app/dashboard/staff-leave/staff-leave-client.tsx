@@ -31,6 +31,16 @@ type RecognizedRow = {
   confidence_note?: string
 }
 
+type RecognitionProfile = {
+  id: string
+  name: string
+  staff_name: string
+  parking_lot_name: string
+  leave_shift: string
+  match_keywords: string[]
+}
+
+
 function readFileAsBase64(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
@@ -61,6 +71,14 @@ export default function StaffLeaveClient() {
   const [importing, setImporting] = useState(false)
   const [recognizedRows, setRecognizedRows] = useState<RecognizedRow[]>([])
   const [recognizeMessage, setRecognizeMessage] = useState('')
+  const [recognizeProfiles, setRecognizeProfiles] = useState<RecognitionProfile[]>([])
+  const [profileForm, setProfileForm] = useState({
+    name: '',
+    staff_name: '',
+    parking_lot_name: '',
+    leave_shift: '全天',
+    match_keywords: '',
+  })
 
   async function load() {
     setLoading(true)
@@ -71,7 +89,55 @@ export default function StaffLeaveClient() {
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    loadRecognitionProfiles()
+  }, [])
+
+  async function loadRecognitionProfiles() {
+    try {
+      const response = await fetch('/api/admin/staff-leave-recognition-profiles', { cache: 'no-store' })
+      const data = await response.json()
+      if (!response.ok) {
+        setRecognizeMessage(data.error || '辨識設定讀取失敗')
+        return
+      }
+
+      const serverProfiles = Array.isArray(data.profiles) ? data.profiles : []
+      setRecognizeProfiles(serverProfiles)
+
+      // 若舊版瀏覽器曾存過 localStorage 設定，第一次自動搬到 Supabase。
+      if (serverProfiles.length === 0) {
+        try {
+          const saved = localStorage.getItem('staffLeaveRecognitionProfilesV1')
+          const parsed = saved ? JSON.parse(saved) : []
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            for (const profile of parsed) {
+              await fetch('/api/admin/staff-leave-recognition-profiles', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  name: String(profile?.name || '').trim(),
+                  staff_name: String(profile?.staff_name || '').trim(),
+                  parking_lot_name: String(profile?.parking_lot_name || '').trim(),
+                  leave_shift: String(profile?.leave_shift || '全天').trim() || '全天',
+                  match_keywords: Array.isArray(profile?.match_keywords) ? profile.match_keywords : [],
+                }),
+              })
+            }
+            localStorage.removeItem('staffLeaveRecognitionProfilesV1')
+            const migrated = await fetch('/api/admin/staff-leave-recognition-profiles', { cache: 'no-store' })
+            const migratedData = await migrated.json()
+            if (migrated.ok) setRecognizeProfiles(migratedData.profiles || [])
+          }
+        } catch {}
+      } else {
+        try { localStorage.removeItem('staffLeaveRecognitionProfilesV1') } catch {}
+      }
+    } catch (error) {
+      setRecognizeMessage(`辨識設定讀取失敗：${String(error instanceof Error ? error.message : error)}`)
+    }
+  }
 
   const today = useMemo(() => new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' }), [])
   const visibleItems = useMemo(() => items.filter((item) => item.leave_date >= today), [items, today])
@@ -99,6 +165,56 @@ export default function StaffLeaveClient() {
     await load()
   }
 
+  async function saveRecognitionProfile() {
+    const name = profileForm.name.trim()
+    const staffName = profileForm.staff_name.trim()
+    const lotName = profileForm.parking_lot_name.trim()
+    const keywords = profileForm.match_keywords
+      .split(/[,，\n]+/)
+      .map(value => value.trim())
+      .filter(Boolean)
+
+    if (!name || !staffName || !lotName || keywords.length === 0) {
+      return setRecognizeMessage('辨識設定請填：設定名稱、管理員姓名、停車場、至少 1 個辨識關鍵字')
+    }
+
+    const response = await fetch('/api/admin/staff-leave-recognition-profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        staff_name: staffName,
+        parking_lot_name: lotName,
+        leave_shift: profileForm.leave_shift.trim() || '全天',
+        match_keywords: keywords,
+      }),
+    })
+    const data = await response.json()
+
+    if (!response.ok) {
+      return setRecognizeMessage(data.error || '辨識設定儲存失敗')
+    }
+
+    setProfileForm({ name: '', staff_name: '', parking_lot_name: '', leave_shift: '全天', match_keywords: '' })
+    setRecognizeMessage(`已同步儲存辨識設定「${name}」。其他主管與其他電腦重新開啟此頁也會看到。`)
+    await loadRecognitionProfiles()
+  }
+
+  async function deleteRecognitionProfile(id: string) {
+    if (!confirm('確定刪除這個辨識設定？其他主管也會同步看不到。')) return
+
+    const response = await fetch(`/api/admin/staff-leave-recognition-profiles?id=${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+    const data = await response.json()
+
+    if (!response.ok) {
+      return setRecognizeMessage(data.error || '辨識設定刪除失敗')
+    }
+
+    await loadRecognitionProfiles()
+  }
+
   async function recognizeSchedules() {
     setRecognizeMessage('')
     setRecognizedRows([])
@@ -120,6 +236,7 @@ export default function StaffLeaveClient() {
             year_month: recognizeMonth,
             staff_name: recognizeStaff,
             parking_lot_name: recognizeLot,
+            profiles: recognizeProfiles,
           }),
         })
         const data = await response.json()
@@ -129,6 +246,9 @@ export default function StaffLeaveClient() {
         }
         for (const row of data.rows || []) {
           merged.push({ selected: true, ...row })
+        }
+        if (data.matched_profile?.name) {
+          errors.push(`${file.name}：已自動套用辨識設定「${data.matched_profile.name}」`)
         }
       } catch (error) {
         errors.push(`${file.name}：${String(error instanceof Error ? error.message : error)}`)
@@ -211,10 +331,31 @@ export default function StaffLeaveClient() {
     <section className={styles.card}>
       <h2>班表照片自動辨識</h2>
       <p style={{ marginTop: 0, color: '#64748b' }}>支援：月曆班表、TimeTree 月曆截圖、姓名 × 日期班表。系統只先產生辨識結果，主管確認後才匯入。</p>
+      <div style={{ marginBottom: 18, padding: 14, border: '1px solid #dbe4f0', borderRadius: 12, background: '#f8fbff' }}>
+        <h3 style={{ marginTop: 0 }}>無姓名班表－共用辨識設定（設定一次，全主管同步）</h3>
+        <p style={{ marginTop: 0, color: '#64748b' }}>適合 TimeTree 截圖或沒有姓名的個人班表。設定會儲存在 Supabase，其他主管、其他電腦登入後也會自動同步。請用照片裡固定會出現的文字當關鍵字。</p>
+        <div className={styles.formGrid}>
+          <label>設定名稱<input placeholder="例如：小王 TimeTree 班表" value={profileForm.name} onChange={e => setProfileForm(v => ({...v, name:e.target.value}))} /></label>
+          <label>管理員姓名<input placeholder="之後自動帶入" value={profileForm.staff_name} onChange={e => setProfileForm(v => ({...v, staff_name:e.target.value}))} /></label>
+          <label>預設停車場<input placeholder="例如：機動／永康" value={profileForm.parking_lot_name} onChange={e => setProfileForm(v => ({...v, parking_lot_name:e.target.value}))} /></label>
+          <label>班別／時段<input placeholder="例如：早班／00:00–08:00" value={profileForm.leave_shift} onChange={e => setProfileForm(v => ({...v, leave_shift:e.target.value}))} /></label>
+          <label className={styles.wide}>辨識關鍵字<input placeholder="例如：早康, 晚成, 早鷺, 機動" value={profileForm.match_keywords} onChange={e => setProfileForm(v => ({...v, match_keywords:e.target.value}))} /></label>
+          <div className={styles.wide}><button type="button" onClick={saveRecognitionProfile}>儲存辨識設定</button></div>
+        </div>
+        {recognizeProfiles.length > 0 && <div style={{ marginTop: 12 }}>
+          {recognizeProfiles.map(profile => <div key={profile.id} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 6 }}>
+            <strong>{profile.name}</strong>
+            <span>{profile.staff_name}｜{profile.parking_lot_name}｜{profile.leave_shift}</span>
+            <span style={{ color: '#64748b' }}>關鍵字：{profile.match_keywords.join('、')}</span>
+            <button type="button" className={styles.delete} onClick={() => deleteRecognitionProfile(profile.id)}>刪除</button>
+          </div>)}
+        </div>}
+      </div>
+
       <div className={styles.formGrid}>
         <label>班表月份<input required type="month" value={recognizeMonth} onChange={e => setRecognizeMonth(e.target.value)} /></label>
-        <label>管理員姓名（個人月曆用）<input placeholder="照片沒有姓名時先填" value={recognizeStaff} onChange={e => setRecognizeStaff(e.target.value)} /></label>
-        <label>預設停車場（個人月曆用）<input placeholder="照片休假日沒有場站時先填" value={recognizeLot} onChange={e => setRecognizeLot(e.target.value)} /></label>
+        <label>管理員姓名（臨時覆蓋）<input placeholder="有辨識設定時可留空" value={recognizeStaff} onChange={e => setRecognizeStaff(e.target.value)} /></label>
+        <label>預設停車場（臨時覆蓋）<input placeholder="有辨識設定時可留空" value={recognizeLot} onChange={e => setRecognizeLot(e.target.value)} /></label>
         <label>班表照片<input type="file" accept="image/*" multiple onChange={e => setRecognizeFiles(Array.from(e.target.files || []))} /></label>
         <div className={styles.wide}><button type="button" disabled={recognizing} onClick={recognizeSchedules}>{recognizing ? '辨識中…' : '開始辨識班表照片'}</button></div>
       </div>

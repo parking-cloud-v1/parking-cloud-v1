@@ -23,11 +23,21 @@ export type RecognizedLeave = {
   confidence_note?: string
 }
 
+export type RecognitionProfile = {
+  id?: string
+  name?: string
+  staff_name: string
+  parking_lot_name: string
+  leave_shift?: string
+  match_keywords?: string[]
+}
+
 type RecognizeOptions = {
   imageBase64: string
   yearMonth: string
   staffName?: string
   parkingLotName?: string
+  profiles?: RecognitionProfile[]
 }
 
 function textFromSymbols(word: any) {
@@ -35,12 +45,15 @@ function textFromSymbols(word: any) {
 }
 
 function bounds(vertices: Vertex[] = []) {
-  const xs = vertices.map(v => Number(v.x || 0))
-  const ys = vertices.map(v => Number(v.y || 0))
-  const left = Math.min(...xs, 0)
-  const right = Math.max(...xs, 0)
-  const top = Math.min(...ys, 0)
-  const bottom = Math.max(...ys, 0)
+  const xs = vertices.map(v => Number(v.x ?? 0))
+  const ys = vertices.map(v => Number(v.y ?? 0))
+  if (xs.length === 0 || ys.length === 0) {
+    return { left: 0, right: 0, top: 0, bottom: 0, x: 0, y: 0 }
+  }
+  const left = Math.min(...xs)
+  const right = Math.max(...xs)
+  const top = Math.min(...ys)
+  const bottom = Math.max(...ys)
   return { left, right, top, bottom, x: (left + right) / 2, y: (top + bottom) / 2 }
 }
 
@@ -92,9 +105,43 @@ function parseYearMonth(yearMonth: string) {
 }
 
 function guessLotFromText(fullText: string, fallback = '') {
+  if (fallback.trim()) return fallback.trim()
+
+  const lines = fullText
+    .split(/\r?\n/)
+    .map(line => line.replace(/\s+/g, '').trim())
+    .filter(Boolean)
+
+  const blocked = /(班表|計薪表|姓名|加時數|備註|主管)/
+  for (const line of lines) {
+    if (blocked.test(line) && !/(?:站|停車場)/.test(line)) continue
+
+    const matches = [...line.matchAll(/([\u4e00-\u9fff]{2,12}(?:停車場|站))/g)]
+    for (const match of matches) {
+      let candidate = String(match[1] || '')
+        .replace(/^(?:年|月|月份)+/, '')
+        .replace(/^(?:班表|計薪表)+/, '')
+        .trim()
+
+      // 常見 OCR 會把「115年10月份」黏在場站前面；
+      // 數字不在這個 regex 內，但可能留下「月份」兩字。
+      candidate = candidate.replace(/^月份?/, '')
+
+      if (
+        candidate.length >= 2 &&
+        candidate.length <= 12 &&
+        !blocked.test(candidate)
+      ) {
+        return candidate
+      }
+    }
+  }
+
   const compact = fullText.replace(/\s+/g, '')
-  const station = compact.match(/([\u4e00-\u9fffA-Za-z0-9]{2,12}(?:站|停車場))/)
-  return station?.[1] || fallback
+  const fallbackMatch = compact.match(/([\u4e00-\u9fff]{2,8}(?:停車場|站))/)
+  return String(fallbackMatch?.[1] || fallback || '')
+    .replace(/^月份?/, '')
+    .trim()
 }
 
 function isLikelyName(text: string) {
@@ -102,6 +149,47 @@ function isLikelyName(text: string) {
   if (!/^[\u4e00-\u9fff]{2,5}$/.test(t)) return false
   const blocked = new Set(['姓名', '加時數', '班表', '計薪表', '備註', '主管', '星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '國慶日', '光復節'])
   return !blocked.has(t) && t !== '休'
+}
+
+
+function matchRecognitionProfile(fullText: string, profiles: RecognitionProfile[] = []) {
+  const compact = normalizeChinese(fullText).toLowerCase()
+  let best: { profile: RecognitionProfile; score: number } | null = null
+
+  for (const profile of profiles) {
+    const keywords = (profile.match_keywords || [])
+      .map(value => normalizeChinese(String(value || '')).toLowerCase())
+      .filter(Boolean)
+
+    if (keywords.length === 0) continue
+    const score = keywords.reduce((count, keyword) => count + (compact.includes(keyword) ? 1 : 0), 0)
+
+    if (score > 0 && (!best || score > best.score)) {
+      best = { profile, score }
+    }
+  }
+
+  return best?.profile || null
+}
+
+function applyDefaultSubstitute(row: RecognizedLeave) {
+  const lot = normalizeChinese(row.parking_lot_name)
+  const staff = normalizeChinese(row.staff_name)
+
+  // 樹林站固定代班規則：
+  // 許健瑜或劉睿琪休假時，自動帶入陳燕秋。
+  if (
+    (lot.includes('樹林站') || lot === '樹林') &&
+    (staff === '許健瑜' || staff === '劉睿琪')
+  ) {
+    return {
+      ...row,
+      substitute_name: row.substitute_name || '陳燕秋',
+      confidence_note: `${row.confidence_note || '班表辨識'}；代班自動帶入陳燕秋`,
+    }
+  }
+
+  return row
 }
 
 function parseEmployeeTable(words: VisionWord[], fullText: string, year: number, month: number, defaultLot: string) {
@@ -129,30 +217,56 @@ function parseEmployeeTable(words: VisionWord[], fullText: string, year: number,
   for (const word of nameCandidates) {
     if (!names.some(n => Math.abs(n.y - word.y) < 12)) names.push(word)
   }
+  names.sort((a, b) => a.y - b.y)
 
   const lot = guessLotFromText(fullText, defaultLot)
-  const leaveWords = words.filter(w => normalizeChinese(w.text) === '休' && w.y > headerY && w.x >= minDateX - 10 && w.x <= maxDateX + 20)
+  const leaveWords = words.filter(
+    w =>
+      normalizeChinese(w.text) === '休' &&
+      w.y > headerY &&
+      w.x >= minDateX - 10 &&
+      w.x <= maxDateX + 20
+  )
   const result: RecognizedLeave[] = []
+
+  // 用相鄰姓名的中點建立每位員工的列範圍。
+  // 這樣第二列的「休」不會被錯配到第一列姓名。
+  const rowBands = names.map((name, index) => {
+    const previous = names[index - 1]
+    const next = names[index + 1]
+
+    const top = previous
+      ? (previous.y + name.y) / 2
+      : name.y - (next ? (next.y - name.y) / 2 : 24)
+
+    const bottom = next
+      ? (name.y + next.y) / 2
+      : name.y + (previous ? (name.y - previous.y) / 2 : 24)
+
+    return { name, top, bottom }
+  })
 
   for (const leave of leaveWords) {
     let nearestDay: number | null = null
     let bestDx = Infinity
+
     for (const [day, pos] of dateMap) {
       const dx = Math.abs(pos.x - leave.x)
-      if (dx < bestDx) { bestDx = dx; nearestDay = day }
+      if (dx < bestDx) {
+        bestDx = dx
+        nearestDay = day
+      }
     }
+
     if (!nearestDay || nearestDay > daysInMonth(year, month)) continue
 
-    let nearestName: VisionWord | null = null
-    let bestDy = Infinity
-    for (const name of names) {
-      const dy = Math.abs(name.y - leave.y)
-      if (dy < bestDy) { bestDy = dy; nearestName = name }
-    }
-    if (!nearestName || bestDy > 45) continue
+    const row = rowBands.find(
+      band => leave.y >= band.top && leave.y < band.bottom
+    )
+    if (!row) continue
 
     result.push({
-      staff_name: normalizeChinese(nearestName.text),
+      staff_name: normalizeChinese(row.name.text),
       parking_lot_name: lot,
       leave_date: isoDate(year, month, nearestDay),
       leave_shift: '全天',
@@ -160,7 +274,7 @@ function parseEmployeeTable(words: VisionWord[], fullText: string, year: number,
       substitute_name: '',
       substitute_shift: '',
       notes: '由班表照片辨識；匯入前請主管確認',
-      confidence_note: '班表「休」欄位辨識',
+      confidence_note: '班表「休」欄位依姓名列與日期欄定位',
     })
   }
 
@@ -188,7 +302,7 @@ function calendarDateRows(words: VisionWord[]) {
   return unique.slice(-6)
 }
 
-function parsePersonalCalendar(words: VisionWord[], year: number, month: number, staffName: string, defaultLot: string) {
+function parsePersonalCalendar(words: VisionWord[], year: number, month: number, staffName: string, defaultLot: string, defaultShift = '全天') {
   if (!staffName.trim()) throw new Error('這種個人月曆／TimeTree 截圖沒有姓名，請先輸入「管理員姓名」再辨識')
   if (!defaultLot.trim()) throw new Error('這種個人月曆的休假日沒有場站文字，請先輸入「預設停車場」再辨識')
 
@@ -242,7 +356,7 @@ function parsePersonalCalendar(words: VisionWord[], year: number, month: number,
         staff_name: staffName.trim(),
         parking_lot_name: defaultLot.trim(),
         leave_date: isoDate(year, month, p.day),
-        leave_shift: '全天',
+        leave_shift: defaultShift || '全天',
         leave_type: '排休',
         substitute_name: '',
         substitute_shift: '',
@@ -298,17 +412,37 @@ export async function recognizeScheduleImage(options: RecognizeOptions) {
 
   const compact = fullText.replace(/\s+/g, '')
   const looksLikeEmployeeTable = compact.includes('姓名') && words.some(w => normalizeChinese(w.text) === '休')
+  const matchedProfile = matchRecognitionProfile(fullText, options.profiles || [])
+
+  const resolvedStaffName =
+    String(options.staffName || '').trim() ||
+    String(matchedProfile?.staff_name || '').trim()
+
+  const resolvedParkingLotName =
+    String(options.parkingLotName || '').trim() ||
+    String(matchedProfile?.parking_lot_name || '').trim()
+
+  const resolvedLeaveShift =
+    String(matchedProfile?.leave_shift || '').trim() ||
+    '全天'
 
   let rows: RecognizedLeave[] = []
   let format = 'personal_calendar'
   if (looksLikeEmployeeTable) {
     format = 'employee_table'
-    rows = parseEmployeeTable(words, fullText, year, month, options.parkingLotName || '')
+    rows = parseEmployeeTable(words, fullText, year, month, resolvedParkingLotName)
   } else {
-    rows = parsePersonalCalendar(words, year, month, options.staffName || '', options.parkingLotName || '')
+    rows = parsePersonalCalendar(
+      words,
+      year,
+      month,
+      resolvedStaffName,
+      resolvedParkingLotName,
+      resolvedLeaveShift
+    )
   }
 
-  rows = dedupe(rows)
+  rows = dedupe(rows).map(applyDefaultSubstitute)
   if (rows.length === 0) {
     throw new Error('有讀到文字，但沒有找到可確認的休假日期。請確認月份是否正確，或改用清楚的完整班表截圖。')
   }
@@ -316,6 +450,13 @@ export async function recognizeScheduleImage(options: RecognizeOptions) {
   return {
     format,
     rows,
+    matched_profile: matchedProfile ? {
+      id: matchedProfile.id || '',
+      name: matchedProfile.name || '',
+      staff_name: matchedProfile.staff_name,
+      parking_lot_name: matchedProfile.parking_lot_name,
+      leave_shift: matchedProfile.leave_shift || '全天',
+    } : null,
     detected_text_preview: fullText.slice(0, 1000),
   }
 }

@@ -30,6 +30,18 @@ export async function POST(request: NextRequest) {
   const yearMonth = String(body.year_month || '').trim()
   const staffName = String(body.staff_name || '').trim()
   const parkingLotName = String(body.parking_lot_name || '').trim()
+  const profiles = Array.isArray(body.profiles)
+    ? body.profiles.slice(0, 30).map((profile: any) => ({
+        id: String(profile?.id || '').trim(),
+        name: String(profile?.name || '').trim(),
+        staff_name: String(profile?.staff_name || '').trim(),
+        parking_lot_name: String(profile?.parking_lot_name || '').trim(),
+        leave_shift: String(profile?.leave_shift || '').trim(),
+        match_keywords: Array.isArray(profile?.match_keywords)
+          ? profile.match_keywords.map((value: any) => String(value || '').trim()).filter(Boolean).slice(0, 20)
+          : [],
+      }))
+    : []
 
   if (!imageBase64 || !yearMonth) {
     return NextResponse.json({ error: '請選擇班表月份並上傳照片' }, { status: 400 })
@@ -44,6 +56,7 @@ export async function POST(request: NextRequest) {
       yearMonth,
       staffName,
       parkingLotName,
+      profiles,
     })
     return NextResponse.json(result)
   } catch (error) {
