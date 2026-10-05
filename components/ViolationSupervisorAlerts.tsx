@@ -66,6 +66,7 @@ function isDriveFolderUrl(value: string) {
   return /^https:\/\/drive\.google\.com\//i.test(value.trim())
 }
 
+
 export default function ViolationSupervisorAlerts() {
   const [rows, setRows] = useState<Row[]>([])
   const [message, setMessage] = useState('')
@@ -174,6 +175,51 @@ export default function ViolationSupervisorAlerts() {
     }, 1200)
   }
 
+  async function directUploadCase(row: Row) {
+    const folderUrl = driveFolderUrl.trim()
+
+    if (!folderUrl) {
+      setMessage('請先設定違規舉發 Google Drive 資料夾網址。')
+      return
+    }
+
+    if (!isDriveFolderUrl(folderUrl)) {
+      setMessage('Google Drive 連結格式不正確。')
+      return
+    }
+
+    const key = `drive:${row.id}`
+    setWorking(key)
+    setMessage('正在整理案件 ZIP 並直接上傳 Google Drive…')
+
+    try {
+      const response = await fetch(
+        `/api/violation-parking/${encodeURIComponent(row.id)}/drive-upload`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folderUrl }),
+        }
+      )
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result?.error || 'Google Drive 上傳失敗')
+      }
+
+      setMessage(
+        `違規案件已直接上傳 Google Drive。\n檔名：${
+          result.fileName || '案件資料.zip'
+        }`
+      )
+    } catch (error: any) {
+      setMessage(error?.message || 'Google Drive 上傳失敗')
+    } finally {
+      setWorking('')
+    }
+  }
+
   async function deleteCase(row: Row) {
     const photos = row.violation_parking_photos || []
     const confirmText = [
@@ -246,7 +292,7 @@ export default function ViolationSupervisorAlerts() {
     <div style={{ paddingBottom: 40 }}>
       <h1 style={{ marginBottom: 6 }}>違規即時通知</h1>
       <p className="muted" style={{ marginTop: 0 }}>
-        場站建立案件後會列在這裡；本頁每 10 秒自動更新。案件先下載完整 ZIP，再直接開啟公司指定的 Google Drive 資料夾手動上傳；「已舉發」就是最終處理，按下後會從現場與即時通知待處理清單消失。
+        場站建立案件後會列在這裡；本頁每 10 秒自動更新。案件可直接整理成 ZIP 並上傳到公司指定的 Google Drive 資料夾；原本下載功能仍保留備用。「已舉發」就是最終處理，按下後會從現場與即時通知待處理清單消失。
       </p>
 
       <div className="card" style={{ marginTop: 14 }}>
@@ -255,9 +301,9 @@ export default function ViolationSupervisorAlerts() {
       </div>
 
       <div className="card" style={{ marginTop: 14 }}>
-        <h2 style={{ marginTop: 0 }}>公司 Google Drive 手動上傳</h2>
+        <h2 style={{ marginTop: 0 }}>公司 Google Drive 上傳</h2>
         <div className="muted">
-          不再由系統自動傳到固定資料夾。先下載案件 ZIP，再打開你這次指定的 Drive 資料夾手動上傳。
+          設定一次違規舉發資料夾網址後，每筆案件可直接由系統整理 ZIP 並上傳。原本下載與開啟資料夾功能仍保留備用。
         </div>
         <div className="field" style={{ marginTop: 10 }}>
           <label>違規舉發資料夾網址</label>
@@ -310,6 +356,7 @@ export default function ViolationSupervisorAlerts() {
                     onStatus={(status) => void changeStatus(row.id, status)}
                     onPhoto={(photoId) => void openPhoto(row.id, photoId)}
                     onDownload={() => downloadCase(row)}
+                    onDirectUpload={() => void directUploadCase(row)}
                     onOpenDrive={openDriveFolder}
                     onDelete={() => void deleteCase(row)}
                   />
@@ -340,6 +387,7 @@ function FragmentRow({
   onStatus,
   onPhoto,
   onDownload,
+  onDirectUpload,
   onOpenDrive,
   onDelete,
 }: {
@@ -351,15 +399,18 @@ function FragmentRow({
   onStatus: (status: 'seen' | 'reported') => void
   onPhoto: (photoId: string) => void
   onDownload: () => void
+  onDirectUpload: () => void
   onOpenDrive: () => void
   onDelete: () => void
 }) {
   const deleting = working === `delete:${row.id}`
   const downloading = working === `download:${row.id}`
+  const driveUploading = working === `drive:${row.id}`
   const rowWorking =
     working === row.id ||
     deleting ||
     downloading ||
+    driveUploading ||
     working.startsWith(`${row.id}:`)
 
   return (
@@ -382,6 +433,16 @@ function FragmentRow({
 
             <button
               type="button"
+              className="btn"
+              disabled={rowWorking}
+              onClick={onDirectUpload}
+              style={{ fontWeight: 700 }}
+            >
+              {driveUploading ? '上傳中…' : '直接上傳 Google Drive'}
+            </button>
+
+            <button
+              type="button"
               disabled={rowWorking}
               onClick={onDownload}
               style={{ fontWeight: 700 }}
@@ -394,7 +455,7 @@ function FragmentRow({
               disabled={rowWorking}
               onClick={onOpenDrive}
             >
-              開啟 Drive 手動上傳
+              開啟 Google Drive
             </button>
 
             {row.supervisor_status === 'pending' && (

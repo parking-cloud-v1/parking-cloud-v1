@@ -21,5 +21,5 @@ export default async function AttendanceUploadPage() {
       .filter((x:any)=>x?.status==='active').map((x:any)=>({id:x.id,name:x.name}))
   }
 
-  return <AttendanceUploadClient parkingLots={lots} defaultParkingLotId={await getCurrentWorkParkingLotId()} />
+  return <AttendanceUploadClient parkingLots={lots} defaultParkingLotId={await getCurrentWorkParkingLotId()} role={profile.role as 'supervisor' | 'manager'} />
 }
