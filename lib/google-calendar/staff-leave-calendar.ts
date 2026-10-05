@@ -6,8 +6,6 @@ type CalendarLeaveItem = {
   leaveDate: string
   leaveShift?: string | null
   leaveType?: string | null
-  substituteName?: string | null
-  substituteShift?: string | null
   notes?: string | null
 }
 
@@ -85,8 +83,6 @@ function eventBody(item: CalendarLeaveItem) {
     `休假日期：${item.leaveDate}`,
     `休假時段：${item.leaveShift || '-'}`,
     `休假類型：${item.leaveType || '排休'}`,
-    `代班人員：${item.substituteName || '尚未安排'}`,
-    `代班時段：${item.substituteShift || '-'}`,
     item.notes ? `備註：${item.notes}` : '',
     '',
     '由智驛停車營運平台自動同步',

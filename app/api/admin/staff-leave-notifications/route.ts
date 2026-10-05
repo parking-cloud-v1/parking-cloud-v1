@@ -45,8 +45,6 @@ export async function POST(request: NextRequest) {
   const leaveDate = String(body.leave_date || '').trim()
   const leaveShift = String(body.leave_shift || '').trim()
   const leaveType = String(body.leave_type || '排休').trim() || '排休'
-  const substituteName = String(body.substitute_name || '').trim()
-  const substituteShift = String(body.substitute_shift || '').trim()
   const notes = String(body.notes || '').trim()
 
   if (!staffName || !parkingLotName || !leaveShift || !/^\d{4}-\d{2}-\d{2}$/.test(leaveDate)) {
@@ -63,8 +61,6 @@ export async function POST(request: NextRequest) {
       leave_date: leaveDate,
       leave_shift: leaveShift,
       leave_type: leaveType,
-      substitute_name: substituteName || null,
-      substitute_shift: substituteShift || null,
       notes: notes || null,
       created_by: user.id,
     })
@@ -80,8 +76,6 @@ export async function POST(request: NextRequest) {
       leaveDate,
       leaveShift,
       leaveType,
-      substituteName,
-      substituteShift,
       notes,
     })
 
@@ -134,8 +128,6 @@ export async function PATCH(request: NextRequest) {
     leave_date: 'leave_date' in body ? String(body.leave_date || '').trim() : current.leave_date,
     leave_shift: 'leave_shift' in body ? String(body.leave_shift || '').trim() : current.leave_shift,
     leave_type: 'leave_type' in body ? String(body.leave_type || '排休').trim() : current.leave_type,
-    substitute_name: 'substitute_name' in body ? String(body.substitute_name || '').trim() : (current.substitute_name || ''),
-    substitute_shift: 'substitute_shift' in body ? String(body.substitute_shift || '').trim() : (current.substitute_shift || ''),
     notes: 'notes' in body ? String(body.notes || '').trim() : (current.notes || ''),
   }
 
@@ -153,8 +145,6 @@ export async function PATCH(request: NextRequest) {
         leaveDate: merged.leave_date,
         leaveShift: merged.leave_shift,
         leaveType: merged.leave_type,
-        substituteName: merged.substitute_name,
-        substituteShift: merged.substitute_shift,
         notes: merged.notes,
       })
     } else {
@@ -164,8 +154,6 @@ export async function PATCH(request: NextRequest) {
         leaveDate: merged.leave_date,
         leaveShift: merged.leave_shift,
         leaveType: merged.leave_type,
-        substituteName: merged.substitute_name,
-        substituteShift: merged.substitute_shift,
         notes: merged.notes,
       })
       googleEventId = event.id
@@ -175,8 +163,6 @@ export async function PATCH(request: NextRequest) {
       .from('staff_leave_notifications')
       .update({
         ...merged,
-        substitute_name: merged.substitute_name || null,
-        substitute_shift: merged.substitute_shift || null,
         notes: merged.notes || null,
         google_event_id: googleEventId,
         google_calendar_synced_at: new Date().toISOString(),
