@@ -48,15 +48,97 @@ function valueAfterLabel(lines: string[], labels: RegExp[]) {
   return ''
 }
 
+const VEHICLE_FIELD_LABEL = /^(?:車牌|牌照|車號|車主|姓名|名稱|住址|地址|廠牌|型式|車型|車種|出廠|發照|排氣|引擎|車身|燃料|顏色|有效|檢驗|總重|載重|座位|統一編號|身分證)/i
+
+function multiLineValueAfterLabel(lines: string[], labels: RegExp[], maxLines = 3) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]
+    const matchedLabel = labels.find((label) => label.test(line))
+    if (!matchedLabel) continue
+
+    const parts: string[] = []
+    const sameLine = cleanLine(line.replace(matchedLabel, '').replace(/^[：:\-]/, ''))
+    if (sameLine) parts.push(sameLine)
+
+    for (let j = i + 1; j < Math.min(lines.length, i + maxLines + 1); j += 1) {
+      const next = cleanLine(lines[j])
+      if (!next) continue
+      if (VEHICLE_FIELD_LABEL.test(next) && parts.length) break
+      if (VEHICLE_FIELD_LABEL.test(next) && !parts.length) continue
+      parts.push(next)
+    }
+
+    const value = cleanLine(parts.join(' '))
+    if (value) return value
+  }
+  return ''
+}
+
+function stripFollowingLabels(value: string) {
+  return cleanLine(value).split(
+    /(?:車牌號碼|牌照號碼|車號|車主姓名或名稱|車主姓名|姓名或名稱|車主住址|戶籍地址|戶籍地|住址|地址|廠牌|型式|車型|車種|出廠年月|發照日期|排氣量|引擎號碼|車身號碼|燃料種類|顏色|有效日期|檢驗日期|總重|載重)/i
+  )[0]
+}
+
 function sanitizeName(value: string) {
-  const match = value.match(/[\u3400-\u9fff·]{2,20}/)
+  const cleaned = stripFollowingLabels(value)
+    .replace(/^(?:車主姓名或名稱|車主姓名|姓名或名稱|姓名|車主|所有人)[：:\s]*/i, '')
+    .replace(/[0-9A-ZＡ-Ｚa-z()（）]/g, ' ')
+  const match = cleaned.match(/[\u3400-\u9fff·]{2,20}/)
   return cleanLine(match?.[0] || '')
 }
 
 function sanitizeAddress(value: string) {
-  return cleanLine(value)
-    .replace(/^(?:住址|地址|戶籍地址|戶籍地)[：:\s]*/i, '')
-    .slice(0, 200)
+  const cleaned = stripFollowingLabels(value)
+    .replace(/^(?:車主住址|戶籍地址|戶籍地|住址|地址)[：:\s]*/i, '')
+    .replace(/\s+/g, '')
+  return cleanLine(cleaned).slice(0, 200)
+}
+
+function findOwnerName(fullText: string, lines: string[]) {
+  const fromLines = sanitizeName(
+    multiLineValueAfterLabel(lines, [
+      /車主姓名或名稱/i,
+      /車主姓名/i,
+      /姓名或名稱/i,
+      /所有人/i,
+      /車主/i,
+    ], 2)
+  )
+  if (fromLines) return fromLines
+
+  const compact = fullText.normalize('NFKC').replace(/[\s　]/g, '')
+  const match = compact.match(
+    /(?:車主姓名或名稱|車主姓名|姓名或名稱|所有人|車主)[：:]?([\u3400-\u9fff·]{2,20}?)(?=車主住址|住址|地址|廠牌|型式|車型|車種|牌照|車牌|引擎|車身|$)/
+  )
+  return sanitizeName(match?.[1] || '')
+}
+
+function findAddress(fullText: string, lines: string[]) {
+  const fromLines = sanitizeAddress(
+    multiLineValueAfterLabel(lines, [
+      /車主住址/i,
+      /通訊地址/i,
+      /住址/i,
+      /地址/i,
+    ], 4)
+  )
+  if (fromLines && /(?:縣|市|區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(fromLines)) {
+    return fromLines
+  }
+
+  const compact = fullText.normalize('NFKC').replace(/[\s　]/g, '')
+  const labeled = compact.match(
+    /(?:車主住址|通訊地址|住址|地址)[：:]?(.{6,100}?)(?=廠牌|型式|車型|車種|出廠|發照|排氣|引擎|車身|燃料|顏色|檢驗|總重|載重|$)/
+  )?.[1]
+  const cleanedLabeled = sanitizeAddress(labeled || '')
+  if (cleanedLabeled) return cleanedLabeled
+
+  // 最後備援：從整份 OCR 文字中找台灣常見地址型態。
+  const fallback = compact.match(
+    /(?:台|臺)?(?:北|中|南|東)?(?:北|中|南)?(?:市|縣)[\u3400-\u9fff0-9A-Za-z－\-之]{4,100}?(?:號(?:之\d+)?|樓(?:之\d+)?)/
+  )?.[0]
+  return sanitizeAddress(fallback || '')
 }
 
 function guessVehicleType(fullText: string) {
@@ -81,13 +163,8 @@ function parseVehicleRegistration(fullText: string) {
     .toUpperCase()
     .replace(/－/g, '-')
 
-  const ownerName = sanitizeName(
-    valueAfterLabel(lines, [/車主姓名/i, /車主/i, /所有人/i])
-  )
-
-  const address = sanitizeAddress(
-    valueAfterLabel(lines, [/車主住址/i, /住址/i, /地址/i])
-  )
+  const ownerName = findOwnerName(fullText, lines)
+  const address = findAddress(fullText, lines)
 
   return {
     applicant_name: ownerName,
