@@ -161,7 +161,7 @@ export default function PublicRentalApplyPage() {
   ) {
     if (!file) return
     if (!otpVerified || !challengeId) {
-      setMessage('請先完成手機驗證，再拍攝證件。')
+      setMessage('請先完成手機驗證，再拍攝或選取證件圖片。')
       return
     }
 
@@ -324,7 +324,7 @@ export default function PublicRentalApplyPage() {
     }
 
     if (!vehicleDocumentToken) {
-      setMessage('請先拍攝行照並完成辨識。')
+      setMessage('請先拍攝或從圖片庫選取行照並完成辨識。')
       return
     }
 
@@ -600,45 +600,88 @@ export default function PublicRentalApplyPage() {
             }}
           >
             <div>
-              <strong>行照拍照辨識（必填）</strong>
+              <strong>行照辨識（必填）</strong>
               <div style={{ marginTop: 5, color: '#475569', fontSize: 14, lineHeight: 1.6 }}>
-                拍攝行照後自動帶入姓名、車牌、車種及可辨識的地址。照片只用於本次辨識，
-                系統不會存入資料庫、Storage 或 Google Drive。
+                可直接拍攝行照，或從手機圖片庫選取已拍好的行照照片。辨識後會自動帶入姓名、車牌、車種及可辨識的地址。
+                照片只用於本次辨識，系統不會存入資料庫、Storage 或 Google Drive。
               </div>
             </div>
 
-            <label
+            <div
               style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                minHeight: 44,
-                padding: '10px 14px',
-                borderRadius: 10,
-                background: vehicleDocumentToken ? '#dcfce7' : '#e0f2fe',
-                border: vehicleDocumentToken ? '1px solid #86efac' : '1px solid #7dd3fc',
-                fontWeight: 800,
-                cursor: documentBusy ? 'wait' : 'pointer',
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: 10,
               }}
             >
-              {documentBusy === 'vehicle_registration'
-                ? '行照辨識中…'
-                : vehicleDocumentToken
-                  ? '✓ 行照已辨識（可重新拍攝）'
-                  : '拍攝／選擇行照'}
-              <input
-                type="file"
-                accept="image/*"
-                capture="environment"
-                disabled={Boolean(documentBusy)}
-                onChange={(e) => {
-                  const file = e.target.files?.[0]
-                  void recognizeDocument(file, 'vehicle_registration')
-                  e.currentTarget.value = ''
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minHeight: 44,
+                  padding: '10px 14px',
+                  borderRadius: 10,
+                  background: vehicleDocumentToken ? '#dcfce7' : '#e0f2fe',
+                  border: vehicleDocumentToken ? '1px solid #86efac' : '1px solid #7dd3fc',
+                  fontWeight: 800,
+                  cursor: documentBusy ? 'wait' : 'pointer',
+                  textAlign: 'center',
                 }}
-                style={{ display: 'none' }}
-              />
-            </label>
+              >
+                {documentBusy === 'vehicle_registration'
+                  ? '行照辨識中…'
+                  : vehicleDocumentToken
+                    ? '重新拍攝行照'
+                    : '拍攝行照'}
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  disabled={Boolean(documentBusy)}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    void recognizeDocument(file, 'vehicle_registration')
+                    e.currentTarget.value = ''
+                  }}
+                  style={{ display: 'none' }}
+                />
+              </label>
+
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minHeight: 44,
+                  padding: '10px 14px',
+                  borderRadius: 10,
+                  background: vehicleDocumentToken ? '#dcfce7' : '#fff',
+                  border: vehicleDocumentToken ? '1px solid #86efac' : '1px solid #7dd3fc',
+                  fontWeight: 800,
+                  cursor: documentBusy ? 'wait' : 'pointer',
+                  textAlign: 'center',
+                }}
+              >
+                {documentBusy === 'vehicle_registration'
+                  ? '行照辨識中…'
+                  : vehicleDocumentToken
+                    ? '從圖片庫重新選取'
+                    : '從圖片庫選取'}
+                <input
+                  type="file"
+                  accept="image/*"
+                  data-source="gallery"
+                  disabled={Boolean(documentBusy)}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    void recognizeDocument(file, 'vehicle_registration')
+                    e.currentTarget.value = ''
+                  }}
+                  style={{ display: 'none' }}
+                />
+              </label>
+            </div>
 
             {ocrDebug && (
               <div

@@ -575,6 +575,24 @@ function escapeHtml(
   )
 }
 
+function taxiReportTitle(filterMonth: string) {
+  const [yearText, monthText] =
+    filterMonth.split('-')
+
+  const year =
+    Number(yearText)
+
+  const month =
+    Number(monthText)
+
+  const rocYear =
+    Number.isFinite(year)
+      ? year - 1911
+      : ''
+
+  return `${rocYear} 年 ${month} 月計程車間停車2小時折抵紀錄表`
+}
+
 export default function TaxiDiscountPage() {
   const supabase =
     createClient()
@@ -1363,6 +1381,11 @@ export default function TaxiDiscountPage() {
       ]
     )
 
+  const reportTitle =
+    taxiReportTitle(
+      filterMonth
+    )
+
   async function exportExcel() {
     if (
       !officialRows.length
@@ -1380,13 +1403,11 @@ export default function TaxiDiscountPage() {
             row
           ) =>
             `<tr>` +
-            `<td>${row.dailyIndex}</td>` +
             `<td>${escapeHtml(row.date)}</td>` +
             `<td>${escapeHtml(row.plate)}</td>` +
             `<td>${escapeHtml(row.entry)}</td>` +
             `<td>${escapeHtml(row.exit)}</td>` +
             `<td>${row.discount}</td>` +
-            `<td>${escapeHtml(row.holiday)}</td>` +
             `</tr>`
         )
         .join('')
@@ -1408,8 +1429,6 @@ export default function TaxiDiscountPage() {
         '<td></td>' +
         '<td></td>' +
         '<td></td>' +
-        '<td></td>' +
-        '<td></td>' +
         '</tr>'
     }
 
@@ -1426,17 +1445,15 @@ export default function TaxiDiscountPage() {
       `.title{font-size:25px;height:58px;}` +
       `</style>` +
       `<table>` +
-      `<tr><th class="title" colspan="7">` +
-      `新北市政府交通局計程車免費停車統計表（${escapeHtml(lotName)}）` +
+      `<tr><th class="title" colspan="5">` +
+      `${escapeHtml(reportTitle)}` +
       `</th></tr>` +
       `<tr>` +
-      `<th>每日項次</th>` +
       `<th>日期</th>` +
-      `<th>車牌</th>` +
+      `<th>車號</th>` +
       `<th>進場時間</th>` +
-      `<th>離場時間</th>` +
-      `<th>銷單金額</th>` +
-      `<th>是否假日</th>` +
+      `<th>出場時間</th>` +
+      `<th>金額</th>` +
       `</tr>` +
       rows +
       blankRows +
@@ -1466,7 +1483,7 @@ export default function TaxiDiscountPage() {
 
     a.href = url
     a.download =
-      `${lotName}_計程車免費停車統計表.xls`
+      `${lotName}_${reportTitle}.xls`
 
     document.body
       .appendChild(
@@ -2201,7 +2218,7 @@ export default function TaxiDiscountPage() {
             <thead>
               <tr>
                 <th
-                  colSpan={7}
+                  colSpan={5}
                   style={{
                     border: '2px solid #000',
                     textAlign: 'center',
@@ -2210,21 +2227,17 @@ export default function TaxiDiscountPage() {
                     fontWeight: 700,
                   }}
                 >
-                  新北市政府交通局計程車免費停車統計表（
-                  {selectedLot?.name || ''}
-                  ）
+                  {reportTitle}
                 </th>
               </tr>
 
               <tr>
                 {[
-                  '每日項次',
                   '日期',
-                  '車牌',
+                  '車號',
                   '進場時間',
-                  '離場時間',
-                  '銷單金額',
-                  '是否假日',
+                  '出場時間',
+                  '金額',
                 ].map(
                   (
                     label
@@ -2255,16 +2268,6 @@ export default function TaxiDiscountPage() {
                   <tr
                     key={row.recordId}
                   >
-                    <td
-                      style={{
-                        border: '2px solid #000',
-                        textAlign: 'center',
-                        height: 34,
-                      }}
-                    >
-                      {row.dailyIndex}
-                    </td>
-
                     <td
                       style={{
                         border: '2px solid #000',
@@ -2314,16 +2317,6 @@ export default function TaxiDiscountPage() {
                     >
                       {row.discount}
                     </td>
-
-                    <td
-                      style={{
-                        border: '2px solid #000',
-                        textAlign: 'center',
-                        height: 34,
-                      }}
-                    >
-                      {row.holiday}
-                    </td>
                   </tr>
                 )
               )}
@@ -2344,7 +2337,7 @@ export default function TaxiDiscountPage() {
                     key={`blank-${index}`}
                   >
                     {Array.from({
-                      length: 7,
+                      length: 5,
                     }).map(
                       (
                         __,
