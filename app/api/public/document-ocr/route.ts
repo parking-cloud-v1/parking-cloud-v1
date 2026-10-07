@@ -144,133 +144,237 @@ function sanitizeOwnerName(value: string) {
   return cleanLine(person)
 }
 
-function findOwnerName(fullText: string, lines: string[]) {
-  // 1. 台灣汽車行照常見情況：車主為公司，通常位於文件前段。
-  //    公司名稱優先於任何 TON/VIN/引擎號碼等英數代碼。
-  for (const line of lines.slice(0, 15)) {
-    const value = cleanLine(line)
-    if (/(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行)/.test(value)) {
-      const owner = sanitizeOwnerName(value)
-      if (owner) return owner
-    }
-  }
-
-  // 2. 有明確「車主姓名／名稱」標籤時直接取值。
-  const fromLines = sanitizeOwnerName(
-    multiLineValueAfterLabel(lines, [
-      /車主姓名或名稱/i,
-      /車主姓名/i,
-      /姓名或名稱/i,
-      /所有人/i,
-      /車主/i,
-    ], 2)
-  )
-  if (fromLines) return fromLines
-
-  // 3. 台灣行照常見版型：牌照號碼所在行後的前幾行就是車主姓名／名稱。
-  const plateIndex = lines.findIndex((line) => looksLikePlateLine(line))
-  if (plateIndex >= 0) {
-    for (let i = plateIndex + 1; i < Math.min(lines.length, plateIndex + 6); i += 1) {
-      const candidate = cleanLine(lines[i])
-      if (!candidate || isLikelyFieldOrNoise(candidate)) continue
-
-      // 機車行照 OCR 常在姓名前多讀到「、『、【等符號或空白。
-      // 先清理再判斷，避免「黃東興」這類姓名被誤排除。
-      const owner = sanitizeOwnerName(candidate)
-      if (!owner) continue
-      if (/(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行)/.test(owner)) {
-        return owner
-      }
-      if (/^[\u3400-\u9fff·]{2,6}$/.test(owner)) {
-        return owner
-      }
-    }
-  }
-
-  // 4. 最後才嘗試從連續文字的標籤後抓中文姓名／名稱。
-  const compact = fullText.normalize('NFKC').replace(/[\s　]/g, '')
-  const match = compact.match(
-    /(?:車主姓名或名稱|車主姓名|姓名或名稱|所有人|車主)[：:]?([\u3400-\u9fff·]{2,40}?)(?=車主住址|住址|地址|廠牌|型式|車型|車種|牌照|車牌|引擎|車身|$)/
-  )
-  return sanitizeOwnerName(match?.[1] || '')
+function normalizePlateForCompare(value: string) {
+  return String(value || '')
+    .normalize('NFKC')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
 }
 
-function joinAddressContinuation(lines: string[], startIndex: number) {
-  const parts: string[] = []
-  for (let i = startIndex; i < Math.min(lines.length, startIndex + 4); i += 1) {
-    const line = cleanLine(lines[i])
-    if (!line) continue
-    if (i > startIndex && VEHICLE_FIELD_LABEL.test(line)) break
-    if (i > startIndex && /(?:原發照日期|發照日期|有效日期|檢驗日期|出廠年月|廠牌|型式|排氣量|引擎號碼|車身號碼)/.test(line)) break
-    parts.push(line)
-    if (/(?:號(?:之\\d+)?|樓(?:之\\d+)?)$/.test(line)) break
+type ScoredCandidate = {
+  value: string
+  score: number
+  reason: string
+}
+
+function normalizeCandidateText(value: string) {
+  return cleanLine(value)
+    .replace(/^[「『【\[\(（\s:：]+/, '')
+    .replace(/[」』】\]\)）\s]+$/, '')
+    .trim()
+}
+
+function isCompanyName(value: string) {
+  return /(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行|商號)/.test(value)
+}
+
+function isVehicleNoise(value: string) {
+  const line = normalizeCandidateText(value)
+  if (!line) return true
+  if (VEHICLE_FIELD_LABEL.test(line)) return true
+  if (/^(?:普通重型|普通輕型|大型重型|自用|營業|小客車|大客車|小貨車|大貨車|機器腳踏車|機車|汽車)/.test(line)) return true
+  if (/^(?:發照|原發照|有效|檢驗|出廠|排氣|引擎|車身|燃料|顏色|總重|載重|座位|廠牌|型式|型號|年月|日期)/.test(line)) return true
+  if (/^[A-Z0-9*<>\\\-－./ ]{5,}$/i.test(line)) return true
+  if (/\b[A-Z0-9]{7,}\b/i.test(line)) return true
+  return false
+}
+
+function ownerCandidateScore(
+  raw: string,
+  index: number,
+  plateIndex: number,
+  labeled: boolean
+): ScoredCandidate | null {
+  const value = normalizeCandidateText(raw)
+  if (!value || isVehicleNoise(value)) return null
+
+  let score = 0
+  const reasons: string[] = []
+
+  if (labeled) {
+    score += 70
+    reasons.push('label')
   }
-  return sanitizeAddress(parts.join(' '))
+
+  if (plateIndex >= 0) {
+    const distance = index - plateIndex
+    if (distance === 1) {
+      score += 45
+      reasons.push('after-plate-1')
+    } else if (distance === 2) {
+      score += 28
+      reasons.push('after-plate-2')
+    } else if (distance > 2 && distance <= 5) {
+      score += 10
+      reasons.push('near-plate')
+    }
+  }
+
+  if (isCompanyName(value)) {
+    const company = value.match(/[\u3400-\u9fff·]{2,40}(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行|商號)/)?.[0]
+    if (!company) return null
+    score += 70
+    reasons.push('company')
+    return { value: company.slice(0, 80), score, reason: reasons.join(',') }
+  }
+
+  const chineseRuns = value.match(/[\u3400-\u9fff·]{2,8}/g) || []
+  const person = chineseRuns.find((candidate) => {
+    if (candidate.length < 2 || candidate.length > 6) return false
+    if (/(?:高雄市|臺北市|台北市|新北市|桃園市|臺中市|台中市|臺南市|台南市|基隆市|新竹市|嘉義市)/.test(candidate)) return false
+    if (/(?:普通重型|普通輕型|大型重型|機車|汽車|營業|自用)/.test(candidate)) return false
+    if (/(?:縣|市|區|鄉|鎮|路|街|道|巷|弄|號|段|里|村|樓)/.test(candidate)) return false
+    return true
+  })
+
+  if (!person) return null
+  score += person.length <= 4 ? 35 : 22
+  reasons.push('person-shape')
+
+  if (/^[\u3400-\u9fff·]{2,6}$/.test(value)) {
+    score += 20
+    reasons.push('pure-person')
+  }
+
+  if (/[A-Z0-9]{3,}/i.test(value)) {
+    score -= 25
+    reasons.push('alnum-penalty')
+  }
+
+  return { value: person, score, reason: reasons.join(',') }
+}
+
+function findOwnerName(fullText: string, lines: string[], vehiclePlate = '') {
+  const targetPlate = normalizePlateForCompare(vehiclePlate)
+  let plateIndex = -1
+  if (targetPlate) {
+    plateIndex = lines.findIndex((line) => normalizePlateForCompare(line).includes(targetPlate))
+  }
+  if (plateIndex < 0) plateIndex = lines.findIndex((line) => looksLikePlateLine(line))
+
+  const candidates: ScoredCandidate[] = []
+
+  // 固定欄位標籤仍然是最高可信來源。
+  const ownerLabels = [/車主姓名或名稱/i, /車主姓名/i, /姓名或名稱/i, /所有人/i, /車主/i]
+  for (let i = 0; i < lines.length; i += 1) {
+    const label = ownerLabels.find((pattern) => pattern.test(lines[i]))
+    if (!label) continue
+    const sameLine = cleanLine(lines[i].replace(label, '').replace(/^[：:\-]/, ''))
+    if (sameLine) {
+      const candidate = ownerCandidateScore(sameLine, i, plateIndex, true)
+      if (candidate) candidates.push(candidate)
+    }
+    if (lines[i + 1]) {
+      const candidate = ownerCandidateScore(lines[i + 1], i + 1, plateIndex, true)
+      if (candidate) candidates.push(candidate)
+    }
+  }
+
+  // 通用候選：掃描前 24 行，依「與車牌距離、公司/姓名形態」評分。
+  for (let i = 0; i < Math.min(lines.length, 24); i += 1) {
+    const candidate = ownerCandidateScore(lines[i], i, plateIndex, false)
+    if (candidate) candidates.push(candidate)
+  }
+
+  candidates.sort((a, b) => b.score - a.score || b.value.length - a.value.length)
+  const best = candidates[0]
+
+  // 低於門檻就不自動填，避免把 TON / 型號 / 地址誤當姓名。
+  return best && best.score >= 55 ? best.value : ''
+}
+
+function cleanAddressPiece(value: string) {
+  return cleanLine(value)
+    .replace(/^[「『【\[\(（\s]+/, '')
+    .replace(/^(?:地\s*址|地址|住址|車主住址|通訊地址|地址變更|地|址)[：:\s]*/i, '')
+    .replace(/[」』】\]\)）]+$/g, '')
+    .trim()
+}
+
+function addressFeatureScore(value: string) {
+  const line = cleanAddressPiece(value)
+  if (!line || isVehicleNoise(line)) return -100
+  if (/[A-Z]{2,}\d{2,}|\b[A-Z0-9]{7,}\b/i.test(line)) return -80
+
+  let score = 0
+  if (/(?:臺|台)?[\u3400-\u9fff]{1,4}(?:市|縣)/.test(line)) score += 35
+  if (/(?:區|鄉|鎮|市)/.test(line)) score += 15
+  if (/(?:路|街|道|大道)/.test(line)) score += 18
+  if (/(?:段|巷|弄|號|樓|之)/.test(line)) score += 20
+  if (/(?:村|里)/.test(line)) score += 8
+  if (/\d/.test(line)) score += 8
+  if (/^[\u3400-\u9fff0-9－\-之]+$/.test(line.replace(/臺|台/g, ''))) score += 8
+  return score
+}
+
+function buildAddressCandidate(lines: string[], startIndex: number) {
+  const parts: string[] = []
+  let score = 0
+
+  for (let i = startIndex; i < Math.min(lines.length, startIndex + 4); i += 1) {
+    const raw = cleanLine(lines[i])
+    if (!raw) continue
+    if (/^(?:地|址)$/.test(raw.replace(/\s+/g, ''))) continue
+
+    const part = cleanAddressPiece(raw)
+    if (!part) continue
+    if (isVehicleNoise(part)) break
+    if (/[A-Z]{2,}\d{2,}|\b[A-Z0-9]{7,}\b/i.test(part)) break
+
+    const partScore = addressFeatureScore(part)
+    if (partScore < 0) break
+    if (parts.length > 0 && partScore < 8) break
+
+    parts.push(part)
+    score += partScore
+    if (/(?:號(?:之\d+)?|樓(?:之\d+)?)$/.test(part)) break
+  }
+
+  const value = parts.join('').replace(/\s+/g, '').slice(0, 200)
+  return { value, score }
 }
 
 function findAddress(fullText: string, lines: string[]) {
-  const fromLines = sanitizeAddress(
-    multiLineValueAfterLabel(lines, [
-      /車主住址/i,
-      /通訊地址/i,
-      /地址變更/i,
-      /住址/i,
-      /地址/i,
-    ], 4)
-  )
-  if (fromLines && /(?:縣|市|區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(fromLines)) return fromLines
+  const candidates: ScoredCandidate[] = []
 
-  const addressChangeIndex = lines.findIndex((line) => /地址變更/.test(line))
-  if (addressChangeIndex >= 0) {
-    const afterChange = joinAddressContinuation(lines, addressChangeIndex + 1)
-    if (afterChange && /(?:縣|市|區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(afterChange)) return afterChange
-  }
-
-  // 機車行照常把「地址」兩字直排辨識成「地」「址」，
-  // 實際地址可能從同一行或其後 1～3 行開始。
-  for (let i = 0; i < Math.min(lines.length, 20); i += 1) {
-    const line = cleanLine(lines[i])
-    if (!/^(?:地|址)(?:\s+|$)/.test(line)) continue
-
-    const sameLine = line.replace(/^(?:地|址)\s*/, '')
-    const parts: string[] = []
-    if (sameLine) parts.push(sameLine)
-
-    for (let j = i + 1; j < Math.min(lines.length, i + 5); j += 1) {
-      const next = cleanLine(lines[j])
-      if (!next) continue
-      if (/^(?:地|址)$/.test(next)) continue
-      if (VEHICLE_FIELD_LABEL.test(next)) break
-      if (/^(?:廠牌|型式|型號|排氣|引擎|車身|顏色|發照|有效|檢驗|出廠)/.test(next)) break
-      parts.push(next)
-      if (/(?:號(?:之\d+)?|樓(?:之\d+)?)$/.test(next)) break
-    }
-
-    const candidate = sanitizeAddress(parts.join(' '))
-    if (candidate && /(?:縣|市|區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(candidate)) {
-      return candidate
-    }
-  }
-
-  const compact = fullText.normalize('NFKC').replace(/[\s　]/g, '')
-  const labeled = compact.match(
-    /(?:車主住址|通訊地址|地址變更|住址|地址)[：:]?(.{4,120}?)(?=原發照日期|發照日期|有效日期|廠牌|型式|車型|車種|出廠|排氣|引擎|車身|燃料|顏色|檢驗|總重|載重|$)/
-  )?.[1]
-  const cleanedLabeled = sanitizeAddress(labeled || '')
-  if (cleanedLabeled && /(?:縣|市|區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(cleanedLabeled)) return cleanedLabeled
-
+  const addressLabels = [/車主住址/i, /通訊地址/i, /地址變更/i, /住址/i, /地址/i]
   for (let i = 0; i < lines.length; i += 1) {
-    const line = cleanLine(lines[i])
-    if (/(?:臺|台)?[\u3400-\u9fff]{1,4}(?:市|縣)/.test(line) && /(?:區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(line)) {
-      const candidate = joinAddressContinuation(lines, i)
-      if (candidate) return candidate
+    const label = addressLabels.find((pattern) => pattern.test(lines[i]))
+    if (!label) continue
+
+    const sameLine = cleanLine(lines[i].replace(label, '').replace(/^[：:\-]/, ''))
+    if (sameLine) {
+      const score = addressFeatureScore(sameLine) + 55
+      if (score > 0) candidates.push({ value: cleanAddressPiece(sameLine), score, reason: 'label-same-line' })
+    }
+
+    const built = buildAddressCandidate(lines, i + 1)
+    if (built.value) {
+      candidates.push({ value: built.value, score: built.score + 55, reason: 'label-following-lines' })
     }
   }
 
-  const fallback = compact.match(
-    /(?:臺|台)?[\u3400-\u9fff]{1,4}(?:市|縣)[\u3400-\u9fff0-9A-Za-z－\-之]{2,100}?(?:號(?:之\d+)?|樓(?:之\d+)?|區|鄉|鎮|市)/
-  )?.[0]
-  return sanitizeAddress(fallback || '')
+  // OCR 常把「地址」拆成「地」「址」，從「址」之後開始組候選。
+  for (let i = 0; i < Math.min(lines.length, 28); i += 1) {
+    const compact = lines[i].replace(/\s+/g, '')
+    if (!/^(?:地|址)$/.test(compact)) continue
+    const built = buildAddressCandidate(lines, i + 1)
+    if (built.value) candidates.push({ value: built.value, score: built.score + 25, reason: 'split-label' })
+  }
+
+  // 無標籤時掃描所有像台灣地址的行，並嘗試合併最多 3 行。
+  for (let i = 0; i < Math.min(lines.length, 32); i += 1) {
+    const built = buildAddressCandidate(lines, i)
+    if (built.value && built.score >= 30) {
+      candidates.push({ value: built.value, score: built.score, reason: 'address-shape' })
+    }
+  }
+
+  candidates.sort((a, b) => b.score - a.score || b.value.length - a.value.length)
+  const best = candidates[0]
+
+  // 低信心地址寧願留空；高信心才帶入。
+  return best && best.score >= 45 ? best.value : ''
 }
 
 function guessVehicleType(fullText: string) {
@@ -295,7 +399,7 @@ function parseVehicleRegistration(fullText: string) {
     .toUpperCase()
     .replace(/－/g, '-')
 
-  const ownerName = findOwnerName(fullText, lines)
+  const ownerName = findOwnerName(fullText, lines, vehiclePlate)
   const address = findAddress(fullText, lines)
 
   return {
