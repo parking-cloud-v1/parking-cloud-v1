@@ -39,6 +39,44 @@ function linesFromText(fullText: string) {
     .filter(Boolean)
 }
 
+
+// OCR 常把中文欄位名稱拆成「車 主」「地 址」「牌 照 號 碼」。
+// 只拿來做欄位比對，不直接改寫原始 OCR 內容。
+function compactOcrLine(value: unknown) {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/[\s　]+/g, '')
+    .replace(/[﹕﹔]/g, '：')
+    .trim()
+}
+
+const TAIWAN_REGION = '(?:臺北市|台北市|新北市|桃園市|臺中市|台中市|臺南市|台南市|高雄市|基隆市|新竹市|嘉義市|新竹縣|苗栗縣|彰化縣|南投縣|雲林縣|嘉義縣|屏東縣|宜蘭縣|花蓮縣|臺東縣|台東縣|澎湖縣|金門縣|連江縣)'
+const TAIWAN_REGION_RE = new RegExp(TAIWAN_REGION)
+
+function normalizeTaiwanAddress(value: string) {
+  let text = String(value || '')
+    .normalize('NFKC')
+    .replace(/[\s　]+/g, '')
+    .replace(/^(?:車主住址|通訊地址|地址變更|住址|地址|地|址)[：:]*/i, '')
+
+  // 若 OCR 在縣市前多讀到雜字（例如「世新北市」），從真正行政區起點開始。
+  const region = text.match(TAIWAN_REGION_RE)
+  if (region && typeof region.index === 'number') text = text.slice(region.index)
+
+  // 常見欄位碎片被黏進地址數字前，例如「厂址66號」「戶址66號」。
+  text = text
+    .replace(/(?:厂址|戶址|ㄏ址|广址|住址|地址)(?=\d)/g, '')
+    .replace(/[|｜]/g, '')
+
+  // 有完整門牌時，以第一個門牌號為主，避免後方廠牌／型式欄位被黏進來。
+  const door = text.match(new RegExp(`(${TAIWAN_REGION}[\\u3400-\\u9fff0-9A-Za-z－\\-之]{2,120}?號(?:之\\d+)?(?:\\d+樓(?:之\\d+)?)?)`))
+  if (door?.[1]) return door[1].slice(0, 200)
+
+  // 沒有「號」時仍保留像地址的行政區段，但遇到下一個行照欄位即停止。
+  text = text.split(/(?:原發照日期|發照日期|有效日期|檢驗日期|廠牌|型式|車型|車種|出廠|排氣|引擎|車身|燃料|顏色|總重|載重|座位)/i)[0]
+  return text.slice(0, 200)
+}
+
 function valueAfterLabel(lines: string[], labels: RegExp[]) {
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]
@@ -254,8 +292,25 @@ function findOwnerName(fullText: string, lines: string[], vehiclePlate = '') {
 
   const candidates: ScoredCandidate[] = []
 
-  // 固定欄位標籤仍然是最高可信來源。
-  const ownerLabels = [/車主姓名或名稱/i, /車主姓名/i, /姓名或名稱/i, /所有人/i, /車主/i]
+  // 0. 先處理台灣行照最常見的 OCR 斷字：車 主、車 主姓名、姓名 或 名稱。
+  //    用無空白版本比對，但候選值仍交給既有評分器，避免誤抓廠牌或地址。
+  for (let i = 0; i < Math.min(lines.length, 30); i += 1) {
+    const compact = compactOcrLine(lines[i])
+    const sameLine = compact.match(/(?:車主姓名或名稱|車主姓名|姓名或名稱|所有人|車主)[：:]?(.{2,80})/i)?.[1] || ''
+    if (sameLine) {
+      const candidate = ownerCandidateScore(sameLine, i, plateIndex, true)
+      if (candidate) candidates.push({ ...candidate, score: candidate.score + 25, reason: `${candidate.reason},compact-label` })
+    }
+
+    // 欄位標籤單獨一行，值在下一行。
+    if (/^(?:車主姓名或名稱|車主姓名|姓名或名稱|所有人|車主)[：:]?$/i.test(compact) && lines[i + 1]) {
+      const candidate = ownerCandidateScore(lines[i + 1], i + 1, plateIndex, true)
+      if (candidate) candidates.push({ ...candidate, score: candidate.score + 25, reason: `${candidate.reason},compact-label-next` })
+    }
+  }
+
+  // 1. 固定欄位標籤來源。
+  const ownerLabels = [/車\s*主\s*姓\s*名\s*或\s*名\s*稱/i, /車\s*主\s*姓\s*名/i, /姓\s*名\s*或\s*名\s*稱/i, /所\s*有\s*人/i, /車\s*主/i]
   for (let i = 0; i < lines.length; i += 1) {
     const label = ownerLabels.find((pattern) => pattern.test(lines[i]))
     if (!label) continue
@@ -270,16 +325,34 @@ function findOwnerName(fullText: string, lines: string[], vehiclePlate = '') {
     }
   }
 
-  // 通用候選：掃描前 24 行，依「與車牌距離、公司/姓名形態」評分。
-  for (let i = 0; i < Math.min(lines.length, 24); i += 1) {
+  // 2. 台灣汽車／機車行照通常在牌照號碼附近就會出現車主姓名或名稱。
+  if (plateIndex >= 0) {
+    for (let i = plateIndex + 1; i < Math.min(lines.length, plateIndex + 7); i += 1) {
+      const candidate = ownerCandidateScore(lines[i], i, plateIndex, false)
+      if (candidate) candidates.push({ ...candidate, score: candidate.score + 12, reason: `${candidate.reason},layout-near-plate` })
+    }
+  }
+
+  // 3. 通用候選：掃描文件前段，依「與車牌距離、公司/姓名形態」評分。
+  for (let i = 0; i < Math.min(lines.length, 30); i += 1) {
     const candidate = ownerCandidateScore(lines[i], i, plateIndex, false)
     if (candidate) candidates.push(candidate)
+  }
+
+  // 4. 最後再掃一次整份 OCR 的連續文字，專門容錯「車 主曹志意」這種結果。
+  const compactText = compactOcrLine(fullText)
+  const textOwner = compactText.match(
+    /(?:車主姓名或名稱|車主姓名|姓名或名稱|所有人|車主)[：:]?([\u3400-\u9fff·]{2,40}?)(?=住址|地址|廠牌|型式|車型|車種|牌照|車牌|引擎|車身|原發照|發照|有效|檢驗|$)/i
+  )?.[1]
+  if (textOwner) {
+    const candidate = ownerCandidateScore(textOwner, plateIndex >= 0 ? plateIndex + 1 : 0, plateIndex, true)
+    if (candidate) candidates.push({ ...candidate, score: candidate.score + 20, reason: `${candidate.reason},compact-document` })
   }
 
   candidates.sort((a, b) => b.score - a.score || b.value.length - a.value.length)
   const best = candidates[0]
 
-  // 低於門檻就不自動填，避免把 TON / 型號 / 地址誤當姓名。
+  // 高信心才自動填；若不夠可信，寧可讓使用者確認，不亂填姓名。
   return best && best.score >= 55 ? best.value : ''
 }
 
@@ -337,50 +410,110 @@ function buildAddressCandidate(lines: string[], startIndex: number) {
 function findAddress(fullText: string, lines: string[]) {
   const candidates: ScoredCandidate[] = []
 
-  const addressLabels = [/車主住址/i, /通訊地址/i, /地址變更/i, /住址/i, /地址/i]
+  // 0. 先抓任何含完整台灣縣市名稱的行。這可修正「世新北市...」等前綴 OCR 雜字。
+  for (let i = 0; i < Math.min(lines.length, 40); i += 1) {
+    const compact = compactOcrLine(lines[i])
+    if (!TAIWAN_REGION_RE.test(compact)) continue
+    const normalized = normalizeTaiwanAddress(compact)
+    const score = addressFeatureScore(normalized) + (/(?:路|街|道|巷|弄|號)/.test(normalized) ? 35 : 10)
+    if (normalized && score > 0) {
+      candidates.push({ value: normalized, score, reason: 'taiwan-region-line' })
+    }
+  }
+
+  // 1. 支援「地 址」「車 主 住 址」「地\n址」等斷字欄位。
+  const addressLabels = [
+    /車\s*主\s*住\s*址/i,
+    /通\s*訊\s*地\s*址/i,
+    /地\s*址\s*變\s*更/i,
+    /住\s*址/i,
+    /地\s*址/i,
+  ]
   for (let i = 0; i < lines.length; i += 1) {
     const label = addressLabels.find((pattern) => pattern.test(lines[i]))
-    if (!label) continue
+    const compact = compactOcrLine(lines[i])
+    const compactHasLabel = /(?:車主住址|通訊地址|地址變更|住址|地址)/i.test(compact)
+    if (!label && !compactHasLabel) continue
 
-    const sameLine = cleanLine(lines[i].replace(label, '').replace(/^[：:\-]/, ''))
+    let sameLine = ''
+    if (label) sameLine = cleanLine(lines[i].replace(label, '').replace(/^[：:\-]/, ''))
+    if (!sameLine && compactHasLabel) {
+      sameLine = compact.replace(/^(?:車主住址|通訊地址|地址變更|住址|地址)[：:]*/i, '')
+    }
+
     if (sameLine) {
-      const score = addressFeatureScore(sameLine) + 55
-      if (score > 0) candidates.push({ value: cleanAddressPiece(sameLine), score, reason: 'label-same-line' })
+      const normalized = normalizeTaiwanAddress(sameLine)
+      const score = addressFeatureScore(normalized) + 70
+      if (normalized && score > 0) candidates.push({ value: normalized, score, reason: 'label-same-line' })
     }
 
     const built = buildAddressCandidate(lines, i + 1)
     if (built.value) {
-      candidates.push({ value: built.value, score: built.score + 55, reason: 'label-following-lines' })
+      const normalized = normalizeTaiwanAddress(built.value)
+      candidates.push({ value: normalized, score: built.score + 65, reason: 'label-following-lines' })
     }
   }
 
-  // OCR 常把「地址」拆成「地」「址」，從「址」之後開始組候選。
-  for (let i = 0; i < Math.min(lines.length, 28); i += 1) {
-    const compact = lines[i].replace(/\s+/g, '')
+  // 2. OCR 常把「地址」拆成「地」「址」，從「址」之後開始組候選。
+  for (let i = 0; i < Math.min(lines.length, 32); i += 1) {
+    const compact = compactOcrLine(lines[i])
     if (!/^(?:地|址)$/.test(compact)) continue
     const built = buildAddressCandidate(lines, i + 1)
-    if (built.value) candidates.push({ value: built.value, score: built.score + 25, reason: 'split-label' })
-  }
-
-  // 無標籤時掃描所有像台灣地址的行，並嘗試合併最多 3 行。
-  for (let i = 0; i < Math.min(lines.length, 32); i += 1) {
-    const built = buildAddressCandidate(lines, i)
-    if (built.value && built.score >= 30) {
-      candidates.push({ value: built.value, score: built.score, reason: 'address-shape' })
+    if (built.value) {
+      candidates.push({ value: normalizeTaiwanAddress(built.value), score: built.score + 30, reason: 'split-label' })
     }
   }
 
-  candidates.sort((a, b) => b.score - a.score || b.value.length - a.value.length)
-  const best = candidates[0]
+  // 3. 無標籤時掃描所有像台灣地址的行，並嘗試合併最多 4 行。
+  for (let i = 0; i < Math.min(lines.length, 40); i += 1) {
+    const built = buildAddressCandidate(lines, i)
+    if (built.value && built.score >= 25) {
+      const normalized = normalizeTaiwanAddress(built.value)
+      candidates.push({ value: normalized, score: built.score, reason: 'address-shape' })
+    }
+  }
 
-  // 低信心地址寧願留空；高信心才帶入。
+  // 4. 連續文字 fallback：直接從縣市名開始抓，避免 OCR 換行破壞地址。
+  const compactText = compactOcrLine(fullText)
+  const regionStart = compactText.search(TAIWAN_REGION_RE)
+  if (regionStart >= 0) {
+    const tail = compactText.slice(regionStart, regionStart + 180)
+    const normalized = normalizeTaiwanAddress(tail)
+    const score = addressFeatureScore(normalized) + 20
+    if (normalized && score > 0) candidates.push({ value: normalized, score, reason: 'compact-document-region' })
+  }
+
+  // 同一地址可能從多種策略抓到，去重後再排序。
+  const unique = new Map<string, ScoredCandidate>()
+  for (const item of candidates) {
+    const value = normalizeTaiwanAddress(item.value)
+    if (!value) continue
+    const existing = unique.get(value)
+    if (!existing || item.score > existing.score) unique.set(value, { ...item, value })
+  }
+
+  const sorted = [...unique.values()].sort((a, b) => b.score - a.score || b.value.length - a.value.length)
+  const best = sorted[0]
+
   return best && best.score >= 45 ? best.value : ''
 }
 
 function guessVehicleType(fullText: string) {
-  const compact = fullText.replace(/\s+/g, '')
-  if (/大型重型機車|重型機車|重機/.test(compact)) return 'heavy_motorcycle'
-  if (/機器腳踏車|普通重型機車|普通輕型機車|機車/.test(compact)) return 'motorcycle'
+  const compact = compactOcrLine(fullText)
+
+  // 台灣行照有大型汽車、小型汽車、重型機車、輕型機車等證照類別；
+  // 系統只需映射成目前既有的 car / motorcycle / heavy_motorcycle 三類。
+  if (/(?:大型重型機車|550CC以上大型重型機車|550C\.C\.以上大型重型機車|重機)/i.test(compact)) {
+    return 'heavy_motorcycle'
+  }
+  if (/(?:普通重型機車|普通輕型機車|輕型機車|機器腳踏車|機車)/i.test(compact)) {
+    return 'motorcycle'
+  }
+  if (/(?:小型汽車|大型汽車|自用小客車|自用小貨車|營業小客車|營業小貨車|小客車|小貨車|大客車|大貨車|汽車)/i.test(compact)) {
+    return 'car'
+  }
+
+  // 版面 OCR 若漏掉車種文字，不用硬猜機車類別；沿用既有保守預設汽車。
   return 'car'
 }
 

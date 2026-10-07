@@ -467,6 +467,16 @@ export default function WaitingListPage() {
         '候補資料新增完成'
       )
 
+      // 候補資料已成功寫入後才另外送 Web Push。
+      // 通知失敗不影響候補新增，避免客服重複登記。
+      fetch('/api/monthly-waitlist/push/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parking_lot_id: selectedLotId }),
+      }).catch((notifyError) => {
+        console.error('[monthly-waitlist-push]', notifyError)
+      })
+
       await loadWaitingList(
         selectedLotId
       )

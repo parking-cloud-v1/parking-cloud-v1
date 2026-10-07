@@ -5,6 +5,7 @@ import WorkParkingLotSelector from '@/components/WorkParkingLotSelector'
 import ui from '@/components/PlatformAdmin.module.css'
 import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
 import { isOnlineOperationAccessOpen } from '@/lib/online-operations/access'
+import MonthlyWaitlistPushControl from '@/components/MonthlyWaitlistPushControl'
 
 export default async function DashboardShell({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -18,6 +19,7 @@ export default async function DashboardShell({ children }: { children: React.Rea
   let onlineOperationsOpen = profile?.role === 'supervisor'
   let currentWorkLotId = ''
   let pendingViolationCount = 0
+  let pendingWaitlistCount = 0
 
   if (user && profile?.is_active) {
     currentWorkLotId = await getCurrentWorkParkingLotId()
@@ -51,6 +53,15 @@ export default async function DashboardShell({ children }: { children: React.Rea
         onlineOperationsOpen = isOnlineOperationAccessOpen(access)
       }
     }
+
+    if (currentWorkLotId) {
+      const { count } = await supabase
+        .from('monthly_waiting_list')
+        .select('id', { count: 'exact', head: true })
+        .eq('parking_lot_id', currentWorkLotId)
+        .eq('status', 'waiting')
+      pendingWaitlistCount = count || 0
+    }
   }
 
   const Nav = ({ href, icon, children }: { href: string; icon: string; children: React.ReactNode }) => (
@@ -63,7 +74,7 @@ export default async function DashboardShell({ children }: { children: React.Rea
         <div className={ui.brandMark}>ZY</div>
         <div><div className={ui.brandText}>智驛停車營運雲端平台</div><div className={ui.brandSub}>智驛科技有限公司</div></div>
       </div>
-      <div className={ui.userBox}><span><span className={ui.userName}>{profile?.display_name || user?.email || '未登入'}</span> · {roleText}</span><LogoutButton /></div>
+      <div className={ui.userBox}><MonthlyWaitlistPushControl parkingLotId={currentWorkLotId} vapidPublicKey={process.env.NEXT_PUBLIC_WEB_PUSH_VAPID_PUBLIC_KEY || ''} /><span><span className={ui.userName}>{profile?.display_name || user?.email || '未登入'}</span> · {roleText}</span><LogoutButton /></div>
     </header>
 
     {(userError || profileError || !profile) && <div className={ui.systemWarning}>
@@ -88,7 +99,7 @@ export default async function DashboardShell({ children }: { children: React.Rea
             )}
             <div className={ui.navGroup}><div className={ui.navTitle}>現場作業</div>
               <Nav href="/dashboard/monthly-rentals" icon="月">月租管理</Nav>
-              <Nav href="/dashboard/monthly-rentals/waiting-list" icon="候">月租候補名單</Nav>
+              <Nav href="/dashboard/monthly-rentals/waiting-list" icon="候">月租候補名單{pendingWaitlistCount > 0 ? ` (${pendingWaitlistCount})` : ''}</Nav>
               <Nav href="/dashboard/monthly-rentals/sms-list" icon="簡">每月簡訊名單</Nav>
               <Nav href="/dashboard/taxi-discounts" icon="計">計程車折扣</Nav>
               <Nav href="/dashboard/disaster-inspections" icon="防">防災檢查</Nav>
