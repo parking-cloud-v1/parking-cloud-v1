@@ -23,6 +23,11 @@ const ALLOWED_TYPES = new Set([
   'image/heif',
 ])
 
+function debugOcrText(fullText: string) {
+  if (String(process.env.OTP_DEV_MODE || '').toLowerCase() !== 'true') return undefined
+  return fullText.slice(0, 5000)
+}
+
 function cleanLine(value: unknown) {
   return String(value || '').replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim()
 }
@@ -313,6 +318,7 @@ export async function POST(request: NextRequest) {
         token,
         data: parsed,
         image_stored: false,
+        debug_ocr: debugOcrText(fullText),
       })
     }
 

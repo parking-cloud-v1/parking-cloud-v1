@@ -96,6 +96,7 @@ export default function PublicRentalApplyPage() {
   const [verifyingOtp, setVerifyingOtp] = useState(false)
   const [vehicleDocumentToken, setVehicleDocumentToken] = useState('')
   const [identityDocumentToken, setIdentityDocumentToken] = useState('')
+  const [ocrDebug, setOcrDebug] = useState('')
   const [documentBusy, setDocumentBusy] = useState<'vehicle_registration' | 'id_card' | ''>('')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
@@ -151,6 +152,7 @@ export default function PublicRentalApplyPage() {
     setDebugCode('')
     setVehicleDocumentToken('')
     setIdentityDocumentToken('')
+    setOcrDebug('')
   }
 
   async function recognizeDocument(
@@ -182,6 +184,8 @@ export default function PublicRentalApplyPage() {
         setMessage(result?.error || '證件辨識失敗，請重新拍攝。')
         return
       }
+
+      setOcrDebug(String(result?.debug_ocr || ''))
 
       if (documentType === 'vehicle_registration') {
         setVehicleDocumentToken(result.token || '')
@@ -635,6 +639,38 @@ export default function PublicRentalApplyPage() {
                 style={{ display: 'none' }}
               />
             </label>
+
+            {ocrDebug && (
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 10,
+                  background: '#fffbeb',
+                  border: '1px solid #fcd34d',
+                }}
+              >
+                <strong>OCR 測試原始文字（僅 OTP_DEV_MODE=true 顯示）</strong>
+                <div style={{ marginTop: 5, color: '#92400e', fontSize: 13, lineHeight: 1.5 }}>
+                  請把這一段截圖給我即可。照片本身仍不會儲存。
+                </div>
+                <pre
+                  style={{
+                    marginTop: 8,
+                    padding: 10,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    background: '#fff',
+                    borderRadius: 8,
+                    border: '1px solid #fde68a',
+                    fontSize: 12,
+                    maxHeight: 280,
+                    overflow: 'auto',
+                  }}
+                >
+                  {ocrDebug}
+                </pre>
+              </div>
+            )}
 
             {qualificationType === 'resident' && (
               <div
