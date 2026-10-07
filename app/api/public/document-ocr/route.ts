@@ -100,8 +100,50 @@ function sanitizeAddress(value: string) {
   return cleanLine(cleaned).slice(0, 200)
 }
 
+
+function looksLikePlateLine(line: string) {
+  return /[A-Z0-9]{2,4}[-－]?[A-Z0-9]{2,4}/i.test(line)
+}
+
+function isLikelyFieldOrNoise(line: string) {
+  const value = cleanLine(line)
+  if (!value) return true
+  if (VEHICLE_FIELD_LABEL.test(value)) return true
+  if (/^(?:普通重型|普通輕型|大型重型|自用|營業|小客車|大客車|小貨車|大貨車|機車|汽車)/.test(value)) return true
+  if (/^(?:發照|原發照|有效|檢驗|出廠|排氣|引擎|車身|燃料|顏色|總重|載重|座位|廠牌|型式|型號|年月|日期)/.test(value)) return true
+  if (/^[A-Z0-9*<>\\-－./ ]{5,}$/i.test(value)) return true
+  return false
+}
+
+function isLikelyOwnerText(line: string) {
+  const value = cleanLine(line)
+  if (!value || isLikelyFieldOrNoise(value)) return false
+  if (/(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行)$/.test(value)) return true
+  const chinese = value.match(/[\\u3400-\\u9fff·]{2,12}/)?.[0] || ''
+  if (chinese.length >= 2 && chinese.length <= 12) {
+    if (/^(?:臺|台)?(?:北|中|南|東)?(?:北|中|南)?(?:市|縣|區|鄉|鎮|路|街|道|村|里)$/.test(chinese)) return false
+    if (/(?:市|縣|區|鄉|鎮|路|街|道|巷|弄|號)$/.test(chinese) && chinese.length <= 6) return false
+    return true
+  }
+  return false
+}
+
+function sanitizeOwnerName(value: string) {
+  const cleaned = stripFollowingLabels(value)
+    .replace(/^(?:車主姓名或名稱|車主姓名|姓名或名稱|姓名|車主|所有人)[：:\\s]*/i, '')
+    .replace(/^[「『【\\[\\s]+/, '')
+    .replace(/[」』】\\]\\s]+$/, '')
+    .trim()
+
+  if (/(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行)$/.test(cleaned)) {
+    return cleaned.slice(0, 80)
+  }
+  const match = cleaned.match(/[\\u3400-\\u9fff·]{2,12}/)
+  return cleanLine(match?.[0] || '')
+}
+
 function findOwnerName(fullText: string, lines: string[]) {
-  const fromLines = sanitizeName(
+  const fromLines = sanitizeOwnerName(
     multiLineValueAfterLabel(lines, [
       /車主姓名或名稱/i,
       /車主姓名/i,
@@ -112,11 +154,42 @@ function findOwnerName(fullText: string, lines: string[]) {
   )
   if (fromLines) return fromLines
 
-  const compact = fullText.normalize('NFKC').replace(/[\s　]/g, '')
+  const compact = fullText.normalize('NFKC').replace(/[\\s　]/g, '')
   const match = compact.match(
-    /(?:車主姓名或名稱|車主姓名|姓名或名稱|所有人|車主)[：:]?([\u3400-\u9fff·]{2,20}?)(?=車主住址|住址|地址|廠牌|型式|車型|車種|牌照|車牌|引擎|車身|$)/
+    /(?:車主姓名或名稱|車主姓名|姓名或名稱|所有人|車主)[：:]?([\\u3400-\\u9fff·]{2,40}?)(?=車主住址|住址|地址|廠牌|型式|車型|車種|牌照|車牌|引擎|車身|$)/
   )
-  return sanitizeName(match?.[1] || '')
+  const compactName = sanitizeOwnerName(match?.[1] || '')
+  if (compactName) return compactName
+
+  // 台灣行照常見版型：車牌所在行的下一行就是車主姓名／公司名稱。
+  const plateIndex = lines.findIndex((line) => looksLikePlateLine(line))
+  if (plateIndex >= 0) {
+    for (let i = plateIndex + 1; i < Math.min(lines.length, plateIndex + 6); i += 1) {
+      const candidate = cleanLine(lines[i])
+      if (!candidate) continue
+      if (isLikelyOwnerText(candidate)) return sanitizeOwnerName(candidate)
+    }
+  }
+
+  for (const line of lines.slice(0, 12)) {
+    if (/(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行)/.test(line)) {
+      return cleanLine(line).slice(0, 80)
+    }
+  }
+  return ''
+}
+
+function joinAddressContinuation(lines: string[], startIndex: number) {
+  const parts: string[] = []
+  for (let i = startIndex; i < Math.min(lines.length, startIndex + 4); i += 1) {
+    const line = cleanLine(lines[i])
+    if (!line) continue
+    if (i > startIndex && VEHICLE_FIELD_LABEL.test(line)) break
+    if (i > startIndex && /(?:原發照日期|發照日期|有效日期|檢驗日期|出廠年月|廠牌|型式|排氣量|引擎號碼|車身號碼)/.test(line)) break
+    parts.push(line)
+    if (/(?:號(?:之\\d+)?|樓(?:之\\d+)?)$/.test(line)) break
+  }
+  return sanitizeAddress(parts.join(' '))
 }
 
 function findAddress(fullText: string, lines: string[]) {
@@ -124,24 +197,36 @@ function findAddress(fullText: string, lines: string[]) {
     multiLineValueAfterLabel(lines, [
       /車主住址/i,
       /通訊地址/i,
+      /地址變更/i,
       /住址/i,
       /地址/i,
     ], 4)
   )
-  if (fromLines && /(?:縣|市|區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(fromLines)) {
-    return fromLines
+  if (fromLines && /(?:縣|市|區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(fromLines)) return fromLines
+
+  const addressChangeIndex = lines.findIndex((line) => /地址變更/.test(line))
+  if (addressChangeIndex >= 0) {
+    const afterChange = joinAddressContinuation(lines, addressChangeIndex + 1)
+    if (afterChange && /(?:縣|市|區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(afterChange)) return afterChange
   }
 
-  const compact = fullText.normalize('NFKC').replace(/[\s　]/g, '')
+  const compact = fullText.normalize('NFKC').replace(/[\\s　]/g, '')
   const labeled = compact.match(
-    /(?:車主住址|通訊地址|住址|地址)[：:]?(.{6,100}?)(?=廠牌|型式|車型|車種|出廠|發照|排氣|引擎|車身|燃料|顏色|檢驗|總重|載重|$)/
+    /(?:車主住址|通訊地址|地址變更|住址|地址)[：:]?(.{4,120}?)(?=原發照日期|發照日期|有效日期|廠牌|型式|車型|車種|出廠|排氣|引擎|車身|燃料|顏色|檢驗|總重|載重|$)/
   )?.[1]
   const cleanedLabeled = sanitizeAddress(labeled || '')
-  if (cleanedLabeled) return cleanedLabeled
+  if (cleanedLabeled && /(?:縣|市|區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(cleanedLabeled)) return cleanedLabeled
 
-  // 最後備援：從整份 OCR 文字中找台灣常見地址型態。
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = cleanLine(lines[i])
+    if (/(?:臺|台)?[\\u3400-\\u9fff]{1,4}(?:市|縣)/.test(line) && /(?:區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(line)) {
+      const candidate = joinAddressContinuation(lines, i)
+      if (candidate) return candidate
+    }
+  }
+
   const fallback = compact.match(
-    /(?:台|臺)?(?:北|中|南|東)?(?:北|中|南)?(?:市|縣)[\u3400-\u9fff0-9A-Za-z－\-之]{4,100}?(?:號(?:之\d+)?|樓(?:之\d+)?)/
+    /(?:臺|台)?[\\u3400-\\u9fff]{1,4}(?:市|縣)[\\u3400-\\u9fff0-9A-Za-z－\\-之]{2,100}?(?:號(?:之\\d+)?|樓(?:之\\d+)?|區|鄉|鎮|市)/
   )?.[0]
   return sanitizeAddress(fallback || '')
 }
@@ -319,6 +404,10 @@ export async function POST(request: NextRequest) {
         data: parsed,
         image_stored: false,
         debug_ocr: debugOcrText(fullText),
+        debug_parsed:
+          String(process.env.OTP_DEV_MODE || '').toLowerCase() === 'true'
+            ? parsed
+            : undefined,
       })
     }
 
