@@ -170,12 +170,19 @@ function findOwnerName(fullText: string, lines: string[]) {
   // 3. 台灣行照常見版型：牌照號碼所在行後的前幾行就是車主姓名／名稱。
   const plateIndex = lines.findIndex((line) => looksLikePlateLine(line))
   if (plateIndex >= 0) {
-    for (let i = plateIndex + 1; i < Math.min(lines.length, plateIndex + 5); i += 1) {
+    for (let i = plateIndex + 1; i < Math.min(lines.length, plateIndex + 6); i += 1) {
       const candidate = cleanLine(lines[i])
-      if (!candidate) continue
-      if (isLikelyOwnerText(candidate)) {
-        const owner = sanitizeOwnerName(candidate)
-        if (owner) return owner
+      if (!candidate || isLikelyFieldOrNoise(candidate)) continue
+
+      // 機車行照 OCR 常在姓名前多讀到「、『、【等符號或空白。
+      // 先清理再判斷，避免「黃東興」這類姓名被誤排除。
+      const owner = sanitizeOwnerName(candidate)
+      if (!owner) continue
+      if (/(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行)/.test(owner)) {
+        return owner
+      }
+      if (/^[\u3400-\u9fff·]{2,6}$/.test(owner)) {
+        return owner
       }
     }
   }
@@ -219,7 +226,33 @@ function findAddress(fullText: string, lines: string[]) {
     if (afterChange && /(?:縣|市|區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(afterChange)) return afterChange
   }
 
-  const compact = fullText.normalize('NFKC').replace(/[\\s　]/g, '')
+  // 機車行照常把「地址」兩字直排辨識成「地」「址」，
+  // 實際地址可能從同一行或其後 1～3 行開始。
+  for (let i = 0; i < Math.min(lines.length, 20); i += 1) {
+    const line = cleanLine(lines[i])
+    if (!/^(?:地|址)(?:\s+|$)/.test(line)) continue
+
+    const sameLine = line.replace(/^(?:地|址)\s*/, '')
+    const parts: string[] = []
+    if (sameLine) parts.push(sameLine)
+
+    for (let j = i + 1; j < Math.min(lines.length, i + 5); j += 1) {
+      const next = cleanLine(lines[j])
+      if (!next) continue
+      if (/^(?:地|址)$/.test(next)) continue
+      if (VEHICLE_FIELD_LABEL.test(next)) break
+      if (/^(?:廠牌|型式|型號|排氣|引擎|車身|顏色|發照|有效|檢驗|出廠)/.test(next)) break
+      parts.push(next)
+      if (/(?:號(?:之\d+)?|樓(?:之\d+)?)$/.test(next)) break
+    }
+
+    const candidate = sanitizeAddress(parts.join(' '))
+    if (candidate && /(?:縣|市|區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(candidate)) {
+      return candidate
+    }
+  }
+
+  const compact = fullText.normalize('NFKC').replace(/[\s　]/g, '')
   const labeled = compact.match(
     /(?:車主住址|通訊地址|地址變更|住址|地址)[：:]?(.{4,120}?)(?=原發照日期|發照日期|有效日期|廠牌|型式|車型|車種|出廠|排氣|引擎|車身|燃料|顏色|檢驗|總重|載重|$)/
   )?.[1]
@@ -228,14 +261,14 @@ function findAddress(fullText: string, lines: string[]) {
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = cleanLine(lines[i])
-    if (/(?:臺|台)?[\\u3400-\\u9fff]{1,4}(?:市|縣)/.test(line) && /(?:區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(line)) {
+    if (/(?:臺|台)?[\u3400-\u9fff]{1,4}(?:市|縣)/.test(line) && /(?:區|鄉|鎮|路|街|道|巷|弄|號|村|里)/.test(line)) {
       const candidate = joinAddressContinuation(lines, i)
       if (candidate) return candidate
     }
   }
 
   const fallback = compact.match(
-    /(?:臺|台)?[\\u3400-\\u9fff]{1,4}(?:市|縣)[\\u3400-\\u9fff0-9A-Za-z－\\-之]{2,100}?(?:號(?:之\\d+)?|樓(?:之\\d+)?|區|鄉|鎮|市)/
+    /(?:臺|台)?[\u3400-\u9fff]{1,4}(?:市|縣)[\u3400-\u9fff0-9A-Za-z－\-之]{2,100}?(?:號(?:之\d+)?|樓(?:之\d+)?|區|鄉|鎮|市)/
   )?.[0]
   return sanitizeAddress(fallback || '')
 }
