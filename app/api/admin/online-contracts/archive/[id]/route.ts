@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
+import { auditRequestContext } from '@/lib/security/auditContext'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -52,7 +53,7 @@ async function authenticatedContract(id: string) {
 }
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   const { id } = await context.params
@@ -113,6 +114,19 @@ export async function GET(
   }
 
   const pdfFilename = `${safeFileName(row.contract_no)}_正式留存.pdf`
+
+  await admin.from('online_audit_logs').insert({
+    actor_user_id: access.user.id,
+    parking_lot_id: access.row.parking_lot_id,
+    contract_id: id,
+    action: 'CONTRACT_PDF_DOWNLOADED',
+    detail: {
+      contract_no: row.contract_no,
+      pdf_hash: actualPdfHash,
+      source: 'admin_contract_detail',
+      ...auditRequestContext(request),
+    },
+  })
 
   return new NextResponse(pdfBytes, {
     status: 200,

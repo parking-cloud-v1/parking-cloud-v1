@@ -1,0 +1,27 @@
+線上簽約安全鎖 V1.2 部署說明
+============================
+
+本版只加強線上簽約安全，不變更月租計算、現場作業、報表中心或其他既有流程。
+
+新增內容：
+1. 已簽契約正式作廢前，先封存舊版本契約 / 簽名 / 正式 PDF / SHA-256。
+2. 正式作廢只允許 supervisor（主管）執行。
+3. 作廢後原申請退回 pending，可沿用既有重新審核建立新版本契約。
+4. 舊 Storage PDF 與簽名檔不刪除；由 contract_revision_archives 保留永久參照。
+5. 已建立的正式 PDF 核心欄位禁止覆寫。
+6. 主管查看手寫簽名前重新計算 SHA-256，比對失敗即拒絕顯示。
+7. 正式 PDF 下載、手寫簽名查看、民眾 OTP 後下載 PDF 都寫入 online_audit_logs。
+8. 稽核紀錄保存雜湊後 IP（不存明文 IP）與 User-Agent。
+
+部署順序（重要）：
+A. 先到 Supabase SQL Editor 執行：sql/migrations/06_online_contract_security_lock_v12.sql
+B. SQL 執行成功後，再部署本專案到 Vercel。
+C. 用主管帳號測試一筆測試契約：已簽署 -> 填作廢原因 -> 封存舊版本並正式作廢。
+D. 回原申請重新審核，建立新版本並重新簽署。
+E. 回契約詳細頁確認「正式作廢版本封存」仍看得到舊 Hash。
+
+注意：
+- 不要先部署程式再漏掉 SQL migration，否則正式作廢按鈕會因資料表/RPC 尚未建立而失敗。
+- 本打包檔刻意不包含 .env.local；沿用你 Vercel 已設定的環境變數即可。
+- 完整 Next.js build 在本工作環境因無網路、缺 Linux SWC binary 無法跑到底；
+  但本次修改的 TypeScript/TSX 檔案已逐一做語法轉譯檢查並通過。

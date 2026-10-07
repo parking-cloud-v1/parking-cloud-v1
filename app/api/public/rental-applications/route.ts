@@ -4,6 +4,11 @@ import { qualificationTypeForRentalType } from '@/lib/online-contracts/qualifica
 import { getLotApplicationAvailability } from '@/lib/online-contracts/applicationAvailability'
 import { normalizeOnlineVehicleType } from '@/lib/online-contracts/capacity'
 import { consumePublicRateLimit, publicFailure, rateLimitResponse } from '@/lib/security/publicSecurity'
+import {
+  normalizeVerificationPlate,
+  normalizeVerificationText,
+  verifyDocumentVerificationToken,
+} from '@/lib/online-contracts/documentVerification'
 
 export async function POST(request: NextRequest) {
   try {
@@ -169,6 +174,88 @@ export async function POST(request: NextRequest) {
         { error: '手機驗證已逾時，請重新驗證。' },
         { status: 410 }
       )
+    }
+
+    const vehicleDocument = verifyDocumentVerificationToken(
+      body.vehicle_document_token
+    )
+
+    if (
+      !vehicleDocument ||
+      vehicleDocument.document_type !== 'vehicle_registration' ||
+      vehicleDocument.challenge_id !== challenge.id ||
+      vehicleDocument.parking_lot_id !== body.parking_lot_id
+    ) {
+      return NextResponse.json(
+        { error: '請先拍攝並完成行照辨識。' },
+        { status: 400 }
+      )
+    }
+
+    if (
+      vehicleDocument.vehicle_plate &&
+      vehicleDocument.vehicle_plate !== normalizeVerificationPlate(plate)
+    ) {
+      return NextResponse.json(
+        { error: '目前車牌與行照辨識結果不同，請重新拍攝行照。' },
+        { status: 400 }
+      )
+    }
+
+    const submittedName = normalizeVerificationText(body.applicant_name)
+    if (
+      vehicleDocument.applicant_name &&
+      vehicleDocument.applicant_name !== submittedName
+    ) {
+      return NextResponse.json(
+        { error: '申請人姓名與行照辨識結果不同，請確認資料或重新拍攝。' },
+        { status: 400 }
+      )
+    }
+
+    const identityDocument = body.identity_document_token
+      ? verifyDocumentVerificationToken(body.identity_document_token)
+      : null
+
+    if (body.identity_document_token && !identityDocument) {
+      return NextResponse.json(
+        { error: '身分證辨識資料已失效，請重新辨識。' },
+        { status: 400 }
+      )
+    }
+
+    if (identityDocument) {
+      if (
+        identityDocument.document_type !== 'id_card' ||
+        identityDocument.challenge_id !== challenge.id ||
+        identityDocument.parking_lot_id !== body.parking_lot_id
+      ) {
+        return NextResponse.json(
+          { error: '身分證辨識資料無效，請重新辨識。' },
+          { status: 400 }
+        )
+      }
+
+      if (
+        identityDocument.applicant_name &&
+        identityDocument.applicant_name !== submittedName
+      ) {
+        return NextResponse.json(
+          { error: '申請人姓名與身分證辨識結果不同，請重新確認。' },
+          { status: 400 }
+        )
+      }
+
+      if (
+        qualificationType === 'resident' &&
+        identityDocument.address &&
+        identityDocument.address !== normalizeVerificationText(body.address)
+      ) {
+        return NextResponse.json(
+          { error: '目前地址與身分證戶籍地辨識結果不同，請重新確認。' },
+          { status: 400 }
+        )
+      }
     }
 
     const { data: existing } = await admin

@@ -1,6 +1,8 @@
+import { createHash } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createAdminClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
+import { auditRequestContext } from '@/lib/security/auditContext'
 
 export const runtime = 'nodejs'
 
@@ -14,7 +16,7 @@ function serviceClient() {
 }
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -90,6 +92,26 @@ export async function GET(
     }
 
     const bytes = await file.arrayBuffer()
+    const actualHash = createHash('sha256').update(Buffer.from(bytes)).digest('hex')
+
+    if (signature.handwritten_signature_hash && actualHash !== signature.handwritten_signature_hash) {
+      return NextResponse.json(
+        { error: '手寫簽名完整性驗證失敗。' },
+        { status: 409 }
+      )
+    }
+
+    await admin.from('online_audit_logs').insert({
+      actor_user_id: actorUserId,
+      parking_lot_id: contract.parking_lot_id,
+      contract_id: id,
+      action: 'CONTRACT_SIGNATURE_VIEWED',
+      detail: {
+        signature_hash: actualHash,
+        source: 'admin_contract_detail',
+        ...auditRequestContext(request),
+      },
+    })
 
     return new NextResponse(bytes, {
       status: 200,
@@ -98,7 +120,7 @@ export async function GET(
         'Content-Disposition': `inline; filename="signature-${id}.png"`,
         'Cache-Control': 'private, no-store, max-age=0',
         'X-Content-Type-Options': 'nosniff',
-        'X-Signature-SHA256': signature.handwritten_signature_hash || '',
+        'X-Signature-SHA256': actualHash,
       },
     })
   } catch (error: any) {

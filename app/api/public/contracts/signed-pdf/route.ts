@@ -6,6 +6,7 @@ import {
   publicFailure,
   rateLimitResponse,
 } from '@/lib/security/publicSecurity'
+import { auditRequestContext } from '@/lib/security/auditContext'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -123,6 +124,17 @@ export async function GET(request: NextRequest) {
     )
 
     const filename = `${safeFileName(contract.contract_no)}_正式簽約留存.pdf`
+
+    await admin.from('online_audit_logs').insert({
+      actor_user_id: null,
+      contract_id: contract.id,
+      action: 'CONTRACT_PDF_PUBLIC_DOWNLOADED',
+      detail: {
+        contract_no: contract.contract_no,
+        source: 'signed_link_grace_window',
+        ...auditRequestContext(request),
+      },
+    })
 
     return new NextResponse(bytes, {
       status: 200,

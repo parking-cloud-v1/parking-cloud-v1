@@ -94,6 +94,9 @@ export default function PublicRentalApplyPage() {
   const [debugCode, setDebugCode] = useState('')
   const [sendingOtp, setSendingOtp] = useState(false)
   const [verifyingOtp, setVerifyingOtp] = useState(false)
+  const [vehicleDocumentToken, setVehicleDocumentToken] = useState('')
+  const [identityDocumentToken, setIdentityDocumentToken] = useState('')
+  const [documentBusy, setDocumentBusy] = useState<'vehicle_registration' | 'id_card' | ''>('')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [completed, setCompleted] = useState(false)
@@ -146,6 +149,65 @@ export default function PublicRentalApplyPage() {
     setChallengeId('')
     setOtpCode('')
     setDebugCode('')
+    setVehicleDocumentToken('')
+    setIdentityDocumentToken('')
+  }
+
+  async function recognizeDocument(
+    file: File | undefined,
+    documentType: 'vehicle_registration' | 'id_card'
+  ) {
+    if (!file) return
+    if (!otpVerified || !challengeId) {
+      setMessage('請先完成手機驗證，再拍攝證件。')
+      return
+    }
+
+    setMessage('')
+    setDocumentBusy(documentType)
+
+    try {
+      const data = new FormData()
+      data.append('document_type', documentType)
+      data.append('challenge_id', challengeId)
+      data.append('parking_lot_id', lotId)
+      data.append('file', file)
+
+      const response = await fetch('/api/public/document-ocr', {
+        method: 'POST',
+        body: data,
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        setMessage(result?.error || '證件辨識失敗，請重新拍攝。')
+        return
+      }
+
+      if (documentType === 'vehicle_registration') {
+        setVehicleDocumentToken(result.token || '')
+        setIdentityDocumentToken('')
+        setForm((current) => ({
+          ...current,
+          applicant_name: result?.data?.applicant_name || current.applicant_name,
+          vehicle_plate: (result?.data?.vehicle_plate || current.vehicle_plate).toUpperCase(),
+          vehicle_type: result?.data?.vehicle_type || current.vehicle_type,
+          address: result?.data?.address || current.address,
+        }))
+        setMessage('行照辨識完成。請確認自動帶入的文字是否正確；照片不會儲存在系統。')
+      } else {
+        setIdentityDocumentToken(result.token || '')
+        setForm((current) => ({
+          ...current,
+          applicant_name: result?.data?.applicant_name || current.applicant_name,
+          address: result?.data?.address || current.address,
+        }))
+        setMessage('身分證補充辨識完成，只取姓名與戶籍地文字，照片不會儲存在系統。')
+      }
+    } catch (error: any) {
+      setMessage(error?.message || '證件辨識服務連線失敗。')
+    } finally {
+      setDocumentBusy('')
+    }
   }
 
   async function requestOtp() {
@@ -257,6 +319,11 @@ export default function PublicRentalApplyPage() {
       return
     }
 
+    if (!vehicleDocumentToken) {
+      setMessage('請先拍攝行照並完成辨識。')
+      return
+    }
+
     if (!form.privacy_agreed) {
       setMessage('請先閱讀並同意個資蒐集告知事項。')
       return
@@ -272,6 +339,8 @@ export default function PublicRentalApplyPage() {
           ...form,
           parking_lot_id: lotId,
           otp_challenge_id: challengeId,
+          vehicle_document_token: vehicleDocumentToken,
+          identity_document_token: identityDocumentToken || undefined,
         }),
       })
 
@@ -459,7 +528,11 @@ export default function PublicRentalApplyPage() {
           姓名
           <input
             value={form.applicant_name}
-            onChange={(e) => setForm({ ...form, applicant_name: e.target.value })}
+            onChange={(e) => {
+              setVehicleDocumentToken('')
+              setIdentityDocumentToken('')
+              setForm({ ...form, applicant_name: e.target.value })
+            }}
             style={{ width: '100%', padding: 10 }}
           />
         </label>
@@ -511,6 +584,107 @@ export default function PublicRentalApplyPage() {
           </div>
         )}
 
+        {otpVerified && (
+          <div
+            style={{
+              padding: 16,
+              borderRadius: 12,
+              background: '#f8fafc',
+              border: '1px solid #cbd5e1',
+              display: 'grid',
+              gap: 12,
+            }}
+          >
+            <div>
+              <strong>行照拍照辨識（必填）</strong>
+              <div style={{ marginTop: 5, color: '#475569', fontSize: 14, lineHeight: 1.6 }}>
+                拍攝行照後自動帶入姓名、車牌、車種及可辨識的地址。照片只用於本次辨識，
+                系統不會存入資料庫、Storage 或 Google Drive。
+              </div>
+            </div>
+
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                minHeight: 44,
+                padding: '10px 14px',
+                borderRadius: 10,
+                background: vehicleDocumentToken ? '#dcfce7' : '#e0f2fe',
+                border: vehicleDocumentToken ? '1px solid #86efac' : '1px solid #7dd3fc',
+                fontWeight: 800,
+                cursor: documentBusy ? 'wait' : 'pointer',
+              }}
+            >
+              {documentBusy === 'vehicle_registration'
+                ? '行照辨識中…'
+                : vehicleDocumentToken
+                  ? '✓ 行照已辨識（可重新拍攝）'
+                  : '拍攝／選擇行照'}
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                disabled={Boolean(documentBusy)}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  void recognizeDocument(file, 'vehicle_registration')
+                  e.currentTarget.value = ''
+                }}
+                style={{ display: 'none' }}
+              />
+            </label>
+
+            {qualificationType === 'resident' && (
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 10,
+                  background: '#fff7ed',
+                  border: '1px solid #fed7aa',
+                }}
+              >
+                <strong>只有行照地址不是目前戶籍地時才需要</strong>
+                <div style={{ marginTop: 4, color: '#475569', fontSize: 13, lineHeight: 1.6 }}>
+                  若行照尚未更新地址，才補拍身分證。系統只取「姓名、戶籍地」文字，
+                  不留照片，也不需要身分證字號。
+                </div>
+                <label
+                  style={{
+                    display: 'inline-block',
+                    marginTop: 8,
+                    padding: '8px 12px',
+                    borderRadius: 9,
+                    background: identityDocumentToken ? '#dcfce7' : '#fff',
+                    border: '1px solid #fdba74',
+                    fontWeight: 700,
+                    cursor: documentBusy ? 'wait' : 'pointer',
+                  }}
+                >
+                  {documentBusy === 'id_card'
+                    ? '身分證辨識中…'
+                    : identityDocumentToken
+                      ? '✓ 戶籍地已補充辨識（可重新拍攝）'
+                      : '補拍身分證（必要時）'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    disabled={Boolean(documentBusy)}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      void recognizeDocument(file, 'id_card')
+                      e.currentTarget.value = ''
+                    }}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+              </div>
+            )}
+          </div>
+        )}
+
         <label>
           Email（選填）
           <input
@@ -524,9 +698,10 @@ export default function PublicRentalApplyPage() {
           車牌
           <input
             value={form.vehicle_plate}
-            onChange={(e) =>
+            onChange={(e) => {
+              setVehicleDocumentToken('')
               setForm({ ...form, vehicle_plate: e.target.value.toUpperCase() })
-            }
+            }}
             placeholder="ABC-1234"
             style={{ width: '100%', padding: 10 }}
           />
@@ -582,7 +757,10 @@ export default function PublicRentalApplyPage() {
           聯絡地址
           <input
             value={form.address}
-            onChange={(e) => setForm({ ...form, address: e.target.value })}
+            onChange={(e) => {
+              setIdentityDocumentToken('')
+              setForm({ ...form, address: e.target.value })
+            }}
             placeholder={qualificationType === 'resident' ? '里民／住戶資格申請必填' : '選填'}
             style={{ width: '100%', padding: 10 }}
           />
@@ -637,7 +815,13 @@ export default function PublicRentalApplyPage() {
         </div>
 
         <button
-          disabled={saving || !otpVerified || lotLoading || !allowedRentalTypes.length}
+          disabled={
+            saving ||
+            !otpVerified ||
+            !vehicleDocumentToken ||
+            lotLoading ||
+            !allowedRentalTypes.length
+          }
           type="submit"
           style={{ padding: 12, fontWeight: 700 }}
         >

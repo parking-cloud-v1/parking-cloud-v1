@@ -23,6 +23,7 @@ function statusText(value?: string | null) {
   if (value === 'sent') return '待簽約'
   if (value === 'signed') return '已簽署'
   if (value === 'cancelled') return '已取消／退回審核'
+  if (value === 'voided') return '已正式作廢'
   return value || '-'
 }
 
@@ -33,6 +34,7 @@ function eventText(value?: string | null) {
     CANCELLED_FOR_REVIEW: '取消待簽並退回審核',
     REISSUED_AFTER_REVIEW: '重新審核並重建契約',
     SIGNED: '完成電子簽署',
+    FORMALLY_VOIDED_FOR_REISSUE: '正式作廢並封存舊版本',
   }
   return map[value || ''] || value || '-'
 }
@@ -49,6 +51,14 @@ export default async function OnlineContractDetailPage({
   } = await supabase.auth.getUser()
 
   if (!user) redirect('/login')
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('role,is_active')
+    .eq('id', user.id)
+    .maybeSingle()
+
+  const canVoidSigned = Boolean(profile?.is_active && profile?.role === 'supervisor')
 
   const { data: row, error } = await supabase
     .from('contracts')
@@ -80,6 +90,12 @@ export default async function OnlineContractDetailPage({
     .maybeSingle()
 
   if (error || !row) notFound()
+
+  const { data: revisionArchives } = await supabase
+    .from('contract_revision_archives')
+    .select('id,revision_no,contract_no,document_hash,pdf_hash,signature_hash,void_reason,voided_at,created_at')
+    .eq('contract_id', id)
+    .order('revision_no', { ascending: false })
 
   const { data: lifecycleEvents } = await supabase
     .from('contract_lifecycle_events')
@@ -282,6 +298,7 @@ export default async function OnlineContractDetailPage({
         contractId={row.id}
         status={row.status}
         applicationId={row.application_id}
+        canVoidSigned={canVoidSigned}
       />
 
       {row.status === 'signed' && (
@@ -375,6 +392,43 @@ export default async function OnlineContractDetailPage({
               <ContractMonthlySyncRetryButton contractId={row.id} />
             </div>
           )}
+        </div>
+      )}
+
+      {revisionArchives && revisionArchives.length > 0 && (
+        <div className="card" style={{ marginTop: 20 }}>
+          <h2 style={{ marginTop: 0 }}>正式作廢版本封存</h2>
+          <p className="muted">
+            舊版本的契約內容、簽名與正式 PDF 證據已獨立封存，重新簽約不會覆蓋。
+          </p>
+          <div style={{ display: 'grid', gap: 12 }}>
+            {revisionArchives.map((revision: any) => (
+              <div
+                key={revision.id}
+                style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12 }}
+              >
+                <strong>封存版本 #{revision.revision_no}</strong>
+                <div className="muted" style={{ marginTop: 6 }}>
+                  作廢時間：
+                  {revision.voided_at
+                    ? new Date(revision.voided_at).toLocaleString('zh-TW')
+                    : '-'}
+                </div>
+                <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>
+                  原因：{revision.void_reason || '-'}
+                </div>
+                <div style={{ marginTop: 6, wordBreak: 'break-all' }}>
+                  文件 SHA-256：{revision.document_hash || '-'}
+                </div>
+                <div style={{ marginTop: 6, wordBreak: 'break-all' }}>
+                  簽名 SHA-256：{revision.signature_hash || '-'}
+                </div>
+                <div style={{ marginTop: 6, wordBreak: 'break-all' }}>
+                  PDF SHA-256：{revision.pdf_hash || '-'}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
