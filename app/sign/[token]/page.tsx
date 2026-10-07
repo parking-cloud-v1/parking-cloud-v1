@@ -72,6 +72,7 @@ export default function PublicContractSignPage() {
   })
 
   const [privacyAgreed, setPrivacyAgreed] = useState(false)
+  const [showPrivacyNotice, setShowPrivacyNotice] = useState(false)
   const [electronicAgreed, setElectronicAgreed] = useState(false)
   const [electronicSignatureConsent, setElectronicSignatureConsent] = useState(false)
   const [contractReadConfirmed, setContractReadConfirmed] = useState(false)
@@ -864,15 +865,39 @@ export default function PublicContractSignPage() {
             本人確認所填姓名、車牌及其他申請資料均正確
           </label>
 
-          <label>
-            <input
-              type="checkbox"
-              checked={privacyAgreed}
-              disabled={!readComplete}
-              onChange={(e) => setPrivacyAgreed(e.target.checked)}
-            />{' '}
-            本人已閱讀並了解個人資料蒐集告知事項
-          </label>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              flexWrap: 'wrap',
+            }}
+          >
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <input
+                type="checkbox"
+                checked={privacyAgreed}
+                disabled={!readComplete}
+                onChange={(e) => setPrivacyAgreed(e.target.checked)}
+              />
+              本人已閱讀並了解
+            </label>
+            <button
+              type="button"
+              onClick={() => setShowPrivacyNotice(true)}
+              style={{
+                border: 0,
+                padding: 0,
+                background: 'transparent',
+                color: '#2563eb',
+                textDecoration: 'underline',
+                fontWeight: 800,
+                cursor: 'pointer',
+              }}
+            >
+              個人資料保護聲明
+            </button>
+          </div>
 
           <label>
             <input
@@ -970,6 +995,108 @@ export default function PublicContractSignPage() {
           </div>
         )}
       </form>
+
+      {showPrivacyNotice && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="privacy-notice-title"
+          onClick={() => setShowPrivacyNotice(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            background: 'rgba(15, 23, 42, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 'min(760px, 100%)',
+              maxHeight: '85vh',
+              overflowY: 'auto',
+              background: '#fff',
+              borderRadius: 14,
+              boxShadow: '0 20px 60px rgba(15, 23, 42, 0.28)',
+              border: '1px solid #e2e8f0',
+            }}
+          >
+            <div
+              style={{
+                position: 'sticky',
+                top: 0,
+                zIndex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                padding: '16px 18px',
+                background: '#fff',
+                borderBottom: '1px solid #e2e8f0',
+              }}
+            >
+              <h2 id="privacy-notice-title" style={{ margin: 0, fontSize: 20 }}>
+                個人資料保護聲明
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowPrivacyNotice(false)}
+                aria-label="關閉個人資料保護聲明"
+                style={{
+                  border: '1px solid #cbd5e1',
+                  borderRadius: 8,
+                  background: '#fff',
+                  padding: '7px 11px',
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                }}
+              >
+                關閉
+              </button>
+            </div>
+
+            <div style={{ padding: 20, lineHeight: 1.9, color: '#334155' }}>
+              <p style={{ marginTop: 0 }}>
+                本場為保護登記者的個人資料，依據個人資料保護法規定，於下列事由與目的範圍內，說明本場直接或間接蒐集、處理及利用登記者的個人資料，當登記者完成登記程序時，表示登記者同意以下內容，敬請詳閱。
+              </p>
+
+              <h3>（一）蒐集目的及類別</h3>
+              <p>
+                本場基於個人資料保護法及相關法令之規定，取得登記者的個人資料，目的在於提供良好服務、執行職務、內部行政管理、陳報主管機關(新北市政府交通局)或停車營運業務之必要範圍內蒐集、處理及利用登記者的個人資料。登記者同意本場以登記者所提供的個人資料確認登記者的身分、與登記者進行聯絡、提供登記者停車相關服務及資訊，包括後續通知等用途。而需獲取登記者姓名、聯絡方式(如電話號碼、電子信箱、居住或工作地址等)、車號、身分證統一編號，或其他得以直接或間接識別登記者個人之資料。
+              </p>
+
+              <h3>（二）個人資料利用之期間、地區、對象及方式</h3>
+              <p>
+                登記者的個人資料僅供本場及主管機關於 1 年內在中華民國領域，在前述蒐集目的之必要範圍內，以電話、電子郵件、紙本或其他合於當時科技之適當方式作個人資料之利用。
+              </p>
+
+              <h3>（三）當事人權利</h3>
+              <p>登記者可依前述業務、活動所定規則或向本場行使下列權利：</p>
+              <ol style={{ paddingLeft: 24 }}>
+                <li>查詢或請求閱覽。</li>
+                <li>請求製給複製本。</li>
+                <li>請求補充或更正。</li>
+                <li>請求停止蒐集、處理及利用。</li>
+                <li>請求刪除登記者的個人資料。</li>
+              </ol>
+
+              <h3>（四）不提供個人資料之權益影響</h3>
+              <p>
+                登記者得自由選擇是否提供相關個人資料予本場蒐集、處理及利用，惟登記者若選擇不提供，或只提供部分/不完全/不真實/不正確個人資料予本場，或提供後向本場請求刪除部分或全部個人資料，或登記者所提供的個人資料，經檢舉或發現不足以確認登記者的身分真實性或其他個人資料冒用、盜用等情形時，導致本場無法進行必要之審核及處理，本場有權暫時停止提供對登記者的服務，若有不便之處尚請見諒。
+              </p>
+
+              <h3>（五）同意效果</h3>
+              <p style={{ marginBottom: 0 }}>
+                登記者已清楚瞭解此一同意符合個人資料保護法及相關法規之要求，具有書面同意本場蒐集、處理及利用登記者的個人資料之效果。
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
