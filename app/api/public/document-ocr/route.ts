@@ -118,31 +118,44 @@ function isLikelyFieldOrNoise(line: string) {
 function isLikelyOwnerText(line: string) {
   const value = cleanLine(line)
   if (!value || isLikelyFieldOrNoise(value)) return false
-  if (/(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行)$/.test(value)) return true
-  const chinese = value.match(/[\\u3400-\\u9fff·]{2,12}/)?.[0] || ''
-  if (chinese.length >= 2 && chinese.length <= 12) {
-    if (/^(?:臺|台)?(?:北|中|南|東)?(?:北|中|南)?(?:市|縣|區|鄉|鎮|路|街|道|村|里)$/.test(chinese)) return false
-    if (/(?:市|縣|區|鄉|鎮|路|街|道|巷|弄|號)$/.test(chinese) && chinese.length <= 6) return false
+
+  // 公司／商號名稱優先，避免後面的英數代碼被誤判成姓名。
+  if (/(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行)/.test(value)) {
     return true
   }
-  return false
+
+  // 個人姓名只接受 2～6 個中文字（含「·」），不接受 TON、VIN 等英數代碼。
+  return /^[\u3400-\u9fff·]{2,6}$/.test(value)
 }
 
 function sanitizeOwnerName(value: string) {
   const cleaned = stripFollowingLabels(value)
-    .replace(/^(?:車主姓名或名稱|車主姓名|姓名或名稱|姓名|車主|所有人)[：:\\s]*/i, '')
-    .replace(/^[「『【\\[\\s]+/, '')
-    .replace(/[」』】\\]\\s]+$/, '')
+    .replace(/^(?:車主姓名或名稱|車主姓名|姓名或名稱|姓名|車主|所有人)[：:\s]*/i, '')
+    .replace(/^[「『【\[\s]+/, '')
+    .replace(/[」』】\]\s]+$/, '')
     .trim()
 
-  if (/(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行)$/.test(cleaned)) {
-    return cleaned.slice(0, 80)
+  if (/(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行)/.test(cleaned)) {
+    const company = cleaned.match(/[\u3400-\u9fff·]{2,40}(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行)/)?.[0]
+    return cleanLine(company || cleaned).slice(0, 80)
   }
-  const match = cleaned.match(/[\\u3400-\\u9fff·]{2,12}/)
-  return cleanLine(match?.[0] || '')
+
+  const person = cleaned.match(/[\u3400-\u9fff·]{2,6}/)?.[0] || ''
+  return cleanLine(person)
 }
 
 function findOwnerName(fullText: string, lines: string[]) {
+  // 1. 台灣汽車行照常見情況：車主為公司，通常位於文件前段。
+  //    公司名稱優先於任何 TON/VIN/引擎號碼等英數代碼。
+  for (const line of lines.slice(0, 15)) {
+    const value = cleanLine(line)
+    if (/(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行)/.test(value)) {
+      const owner = sanitizeOwnerName(value)
+      if (owner) return owner
+    }
+  }
+
+  // 2. 有明確「車主姓名／名稱」標籤時直接取值。
   const fromLines = sanitizeOwnerName(
     multiLineValueAfterLabel(lines, [
       /車主姓名或名稱/i,
@@ -154,29 +167,25 @@ function findOwnerName(fullText: string, lines: string[]) {
   )
   if (fromLines) return fromLines
 
-  const compact = fullText.normalize('NFKC').replace(/[\\s　]/g, '')
-  const match = compact.match(
-    /(?:車主姓名或名稱|車主姓名|姓名或名稱|所有人|車主)[：:]?([\\u3400-\\u9fff·]{2,40}?)(?=車主住址|住址|地址|廠牌|型式|車型|車種|牌照|車牌|引擎|車身|$)/
-  )
-  const compactName = sanitizeOwnerName(match?.[1] || '')
-  if (compactName) return compactName
-
-  // 台灣行照常見版型：車牌所在行的下一行就是車主姓名／公司名稱。
+  // 3. 台灣行照常見版型：牌照號碼所在行後的前幾行就是車主姓名／名稱。
   const plateIndex = lines.findIndex((line) => looksLikePlateLine(line))
   if (plateIndex >= 0) {
-    for (let i = plateIndex + 1; i < Math.min(lines.length, plateIndex + 6); i += 1) {
+    for (let i = plateIndex + 1; i < Math.min(lines.length, plateIndex + 5); i += 1) {
       const candidate = cleanLine(lines[i])
       if (!candidate) continue
-      if (isLikelyOwnerText(candidate)) return sanitizeOwnerName(candidate)
+      if (isLikelyOwnerText(candidate)) {
+        const owner = sanitizeOwnerName(candidate)
+        if (owner) return owner
+      }
     }
   }
 
-  for (const line of lines.slice(0, 12)) {
-    if (/(?:股份有限公司|有限公司|公司|商行|企業社|合作社|交通行|車行)/.test(line)) {
-      return cleanLine(line).slice(0, 80)
-    }
-  }
-  return ''
+  // 4. 最後才嘗試從連續文字的標籤後抓中文姓名／名稱。
+  const compact = fullText.normalize('NFKC').replace(/[\s　]/g, '')
+  const match = compact.match(
+    /(?:車主姓名或名稱|車主姓名|姓名或名稱|所有人|車主)[：:]?([\u3400-\u9fff·]{2,40}?)(?=車主住址|住址|地址|廠牌|型式|車型|車種|牌照|車牌|引擎|車身|$)/
+  )
+  return sanitizeOwnerName(match?.[1] || '')
 }
 
 function joinAddressContinuation(lines: string[], startIndex: number) {
