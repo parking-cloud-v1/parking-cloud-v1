@@ -136,9 +136,7 @@ export async function middleware(
   if (
     user &&
     (
-      path === '/time-clock' ||
-    path.startsWith('/api/time-clock/kiosk') ||
-    path === '/login' ||
+      path === '/login' ||
       path.startsWith('/login/')
     )
   ) {
