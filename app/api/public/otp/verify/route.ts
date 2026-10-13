@@ -17,10 +17,10 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const challengeId = String(body?.challenge_id || '').trim()
-    const code = String(body?.code || '').trim()
+    const code = String(body?.code || '').trim().toUpperCase().replace(/\s+/g, '')
 
-    if (!challengeId || !/^\d{6}$/.test(code)) {
-      return NextResponse.json({ error: '驗證資料不完整。' }, { status: 400 })
+    if (!challengeId || !/^[A-Z2-9]{6}$/.test(code)) {
+      return NextResponse.json({ error: '請輸入圖片中的 6 碼驗證碼。' }, { status: 400 })
     }
 
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -29,12 +29,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '服務暫時無法使用，請稍後再試。' }, { status: 500 })
     }
 
-    const admin = createClient(url, serviceKey, {
-      auth: { persistSession: false },
-    })
+    const admin = createClient(url, serviceKey, { auth: { persistSession: false } })
 
     const verifyLimit = await consumePublicRateLimit(admin, request, {
-      scope: 'otp_verify_ip', subject: challengeId, limit: 30, windowSeconds: 600,
+      scope: 'web_captcha_verify_ip', subject: challengeId, limit: 20, windowSeconds: 600,
     })
     if (!verifyLimit.allowed) return rateLimitResponse(verifyLimit)
 
@@ -45,23 +43,17 @@ export async function POST(request: NextRequest) {
       .maybeSingle()
 
     if (!challenge) {
-      return NextResponse.json({ error: '驗證碼不存在或已失效。' }, { status: 404 })
+      return NextResponse.json({ error: '驗證碼不存在或已失效，請重新取得。' }, { status: 404 })
     }
-
     if (challenge.consumed_at) {
-      return NextResponse.json({ error: '此驗證碼已使用。' }, { status: 409 })
+      return NextResponse.json({ error: '此驗證碼已使用，請重新取得。' }, { status: 409 })
     }
-
-    if (challenge.verified_at) {
-      return NextResponse.json({ ok: true })
-    }
-
+    if (challenge.verified_at) return NextResponse.json({ ok: true })
     if (new Date(challenge.expires_at).getTime() < Date.now()) {
-      return NextResponse.json({ error: '驗證碼已過期，請重新發送。' }, { status: 410 })
+      return NextResponse.json({ error: '驗證碼已過期，請重新取得。' }, { status: 410 })
     }
-
     if ((challenge.attempts || 0) >= 5) {
-      return NextResponse.json({ error: '驗證錯誤次數過多，請重新發送。' }, { status: 429 })
+      return NextResponse.json({ error: '驗證錯誤次數過多，請重新取得一組驗證碼。' }, { status: 429 })
     }
 
     const expected = hashOtpCode(challengeId, code)
@@ -70,7 +62,6 @@ export async function POST(request: NextRequest) {
         .from('public_otp_challenges')
         .update({ attempts: Number(challenge.attempts || 0) + 1 })
         .eq('id', challengeId)
-
       return NextResponse.json({ error: '驗證碼錯誤。' }, { status: 400 })
     }
 
@@ -81,12 +72,12 @@ export async function POST(request: NextRequest) {
       .eq('id', challengeId)
 
     if (error) {
-      console.error('[otp-verify] update failed', error)
+      console.error('[web-captcha-verify] update failed', error)
       return NextResponse.json({ error: '驗證服務暫時無法使用，請稍後再試。' }, { status: 503 })
     }
 
     return NextResponse.json({ ok: true, verified_at: verifiedAt })
   } catch (error: any) {
-    return publicFailure('otp-verify', error, '驗證服務暫時無法使用，請稍後再試。', 503)
+    return publicFailure('web-captcha-verify', error, '驗證服務暫時無法使用，請稍後再試。', 503)
   }
 }

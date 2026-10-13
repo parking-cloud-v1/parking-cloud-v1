@@ -91,7 +91,7 @@ export default function PublicRentalApplyPage() {
   const [challengeId, setChallengeId] = useState('')
   const [otpCode, setOtpCode] = useState('')
   const [otpVerified, setOtpVerified] = useState(false)
-  const [debugCode, setDebugCode] = useState('')
+  const [captchaImage, setCaptchaImage] = useState('')
   const [sendingOtp, setSendingOtp] = useState(false)
   const [verifyingOtp, setVerifyingOtp] = useState(false)
   const [vehicleDocumentToken, setVehicleDocumentToken] = useState('')
@@ -149,7 +149,7 @@ export default function PublicRentalApplyPage() {
     setOtpVerified(false)
     setChallengeId('')
     setOtpCode('')
-    setDebugCode('')
+    setCaptchaImage('')
     setVehicleDocumentToken('')
     setIdentityDocumentToken('')
     setOcrDebug('')
@@ -161,7 +161,7 @@ export default function PublicRentalApplyPage() {
   ) {
     if (!file) return
     if (!otpVerified || !challengeId) {
-      setMessage('請先完成手機驗證，再拍攝或選取證件圖片。')
+      setMessage('請先完成網頁驗證，再拍攝證件。')
       return
     }
 
@@ -241,14 +241,14 @@ export default function PublicRentalApplyPage() {
 
       const result = await response.json()
       if (!response.ok) {
-        setMessage(result?.error || '驗證碼發送失敗。')
+        setMessage(result?.error || '驗證碼取得失敗。')
         return
       }
 
       setChallengeId(result.challenge_id)
-      setDebugCode(result.debug_code || '')
+      setCaptchaImage(result.captcha_image || '')
       setOtpVerified(false)
-      setMessage('驗證碼已發送，請在 5 分鐘內完成驗證。')
+      setMessage('驗證碼已產生，請在 5 分鐘內完成驗證。')
     } catch (error: any) {
       setMessage(error?.message || '無法連線到驗證服務。')
     } finally {
@@ -257,8 +257,8 @@ export default function PublicRentalApplyPage() {
   }
 
   async function verifyOtp() {
-    if (!challengeId || !/^\d{6}$/.test(otpCode)) {
-      setMessage('請先取得驗證碼並輸入 6 位數驗證碼。')
+    if (!challengeId || !/^[A-Z2-9]{6}$/.test(otpCode.trim().toUpperCase())) {
+      setMessage('請先取得驗證碼並輸入圖片中的 6 碼英數驗證碼。')
       return
     }
 
@@ -271,7 +271,7 @@ export default function PublicRentalApplyPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           challenge_id: challengeId,
-          code: otpCode,
+          code: otpCode.trim().toUpperCase(),
         }),
       })
 
@@ -282,7 +282,7 @@ export default function PublicRentalApplyPage() {
       }
 
       setOtpVerified(true)
-      setMessage('手機驗證完成。')
+      setMessage('網頁驗證完成。')
     } catch (error: any) {
       setMessage(error?.message || '驗證服務連線失敗。')
     } finally {
@@ -319,12 +319,12 @@ export default function PublicRentalApplyPage() {
     }
 
     if (!otpVerified || !challengeId) {
-      setMessage('請先完成手機 OTP 驗證。')
+      setMessage('請先完成網頁驗證。')
       return
     }
 
     if (!vehicleDocumentToken) {
-      setMessage('請先拍攝或從圖片庫選取行照並完成辨識。')
+      setMessage('請先拍攝行照並完成辨識。')
       return
     }
 
@@ -491,7 +491,7 @@ export default function PublicRentalApplyPage() {
       </div>
 
       <p style={{ color: '#64748b' }}>
-        手機驗證完成後才能送出申請。可申請的月租類型由停車場管理端設定，資格驗證方式由系統自動判斷。
+        完成網頁驗證後才能送出申請。手機號碼僅作聯絡使用，不進行簡訊驗證。可申請的月租類型由停車場管理端設定，資格驗證方式由系統自動判斷。
       </p>
 
       {selectedCapacity && selectedCapacity.limit !== null && (
@@ -556,7 +556,7 @@ export default function PublicRentalApplyPage() {
               onClick={requestOtp}
               disabled={sendingOtp || otpVerified || lotLoading}
             >
-              {otpVerified ? '已驗證' : sendingOtp ? '發送中…' : '發送驗證碼'}
+              {otpVerified ? '驗證完成' : sendingOtp ? '產生中…' : '取得驗證碼'}
             </button>
           </div>
         </label>
@@ -564,12 +564,12 @@ export default function PublicRentalApplyPage() {
         {challengeId && !otpVerified && (
           <div style={{ padding: 14, background: '#eff6ff', borderRadius: 10 }}>
             <label>
-              手機驗證碼
+              網頁驗證碼
               <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                 <input
                   value={otpCode}
-                  onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  inputMode="numeric"
+                  onChange={(e) => setOtpCode(e.target.value.toUpperCase().replace(/[^A-Z2-9]/g, '').slice(0, 6))}
+                  autoCapitalize="characters"
                   maxLength={6}
                   style={{ flex: 1, padding: 10 }}
                 />
@@ -579,10 +579,26 @@ export default function PublicRentalApplyPage() {
               </div>
             </label>
 
-            {debugCode && (
-              <div style={{ marginTop: 8, fontSize: 13, color: '#9a3412' }}>
-                開發測試驗證碼：<strong>{debugCode}</strong>
-                （正式上線請關閉 OTP_DEV_MODE）
+            {captchaImage && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ marginBottom: 6, fontSize: 13, color: '#475569' }}>
+                  請輸入圖片中的 6 碼英數驗證碼。看不清楚可重新取得。
+                </div>
+                <img
+                  src={captchaImage}
+                  alt="網頁驗證碼"
+                  width={230}
+                  height={68}
+                  style={{ display: 'block', maxWidth: '100%', borderRadius: 10, border: '1px solid #cbd5e1' }}
+                />
+                <button
+                  type="button"
+                  onClick={requestOtp}
+                  disabled={sendingOtp}
+                  style={{ marginTop: 8 }}
+                >
+                  {sendingOtp ? '重新產生中…' : '看不清楚，換一組'}
+                </button>
               </div>
             )}
           </div>
@@ -600,88 +616,45 @@ export default function PublicRentalApplyPage() {
             }}
           >
             <div>
-              <strong>行照辨識（必填）</strong>
+              <strong>行照拍照辨識（必填）</strong>
               <div style={{ marginTop: 5, color: '#475569', fontSize: 14, lineHeight: 1.6 }}>
-                可直接拍攝行照，或從手機圖片庫選取已拍好的行照照片。辨識後會自動帶入姓名、車牌、車種及可辨識的地址。
-                照片只用於本次辨識，系統不會存入資料庫、Storage 或 Google Drive。
+                拍攝行照後自動帶入姓名、車牌、車種及可辨識的地址。照片只用於本次辨識，
+                系統不會存入資料庫、Storage 或 Google Drive。
               </div>
             </div>
 
-            <div
+            <label
               style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-                gap: 10,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                minHeight: 44,
+                padding: '10px 14px',
+                borderRadius: 10,
+                background: vehicleDocumentToken ? '#dcfce7' : '#e0f2fe',
+                border: vehicleDocumentToken ? '1px solid #86efac' : '1px solid #7dd3fc',
+                fontWeight: 800,
+                cursor: documentBusy ? 'wait' : 'pointer',
               }}
             >
-              <label
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  minHeight: 44,
-                  padding: '10px 14px',
-                  borderRadius: 10,
-                  background: vehicleDocumentToken ? '#dcfce7' : '#e0f2fe',
-                  border: vehicleDocumentToken ? '1px solid #86efac' : '1px solid #7dd3fc',
-                  fontWeight: 800,
-                  cursor: documentBusy ? 'wait' : 'pointer',
-                  textAlign: 'center',
+              {documentBusy === 'vehicle_registration'
+                ? '行照辨識中…'
+                : vehicleDocumentToken
+                  ? '✓ 行照已辨識（可重新拍攝）'
+                  : '拍攝／選擇行照'}
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                disabled={Boolean(documentBusy)}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  void recognizeDocument(file, 'vehicle_registration')
+                  e.currentTarget.value = ''
                 }}
-              >
-                {documentBusy === 'vehicle_registration'
-                  ? '行照辨識中…'
-                  : vehicleDocumentToken
-                    ? '重新拍攝行照'
-                    : '拍攝行照'}
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  disabled={Boolean(documentBusy)}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    void recognizeDocument(file, 'vehicle_registration')
-                    e.currentTarget.value = ''
-                  }}
-                  style={{ display: 'none' }}
-                />
-              </label>
-
-              <label
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  minHeight: 44,
-                  padding: '10px 14px',
-                  borderRadius: 10,
-                  background: vehicleDocumentToken ? '#dcfce7' : '#fff',
-                  border: vehicleDocumentToken ? '1px solid #86efac' : '1px solid #7dd3fc',
-                  fontWeight: 800,
-                  cursor: documentBusy ? 'wait' : 'pointer',
-                  textAlign: 'center',
-                }}
-              >
-                {documentBusy === 'vehicle_registration'
-                  ? '行照辨識中…'
-                  : vehicleDocumentToken
-                    ? '從圖片庫重新選取'
-                    : '從圖片庫選取'}
-                <input
-                  type="file"
-                  accept="image/*"
-                  data-source="gallery"
-                  disabled={Boolean(documentBusy)}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    void recognizeDocument(file, 'vehicle_registration')
-                    e.currentTarget.value = ''
-                  }}
-                  style={{ display: 'none' }}
-                />
-              </label>
-            </div>
+                style={{ display: 'none' }}
+              />
+            </label>
 
             {ocrDebug && (
               <div

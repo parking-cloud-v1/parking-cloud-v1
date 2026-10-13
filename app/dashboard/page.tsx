@@ -16,6 +16,7 @@ export default async function DashboardPage(){
     ['/dashboard/monthly-rentals/waiting-list','候','月租候補名單','查看候補順序、聯絡狀態及轉正式月租。'],
     ['/dashboard/shift-closing','結','當日結班報表','完成每日班別收入與匯款相關紀錄。'],
     ['/dashboard/disaster-inspections','防','防災檢查','颱風、豪雨等防災自主檢查與紀錄。'],
+    ...(profile.role === 'supervisor' ? [['/dashboard/time-clock','卡','電子打卡管理','主管設定員工PIN啟用碼、授權設備及檢視工時。']] as const : []),
     ['/dashboard/attendance-upload','簽','簽到表上傳','依月份上傳現場簽到表，供報表中心統一下載。'],
     ['/dashboard/dengue-photos','登','登革熱照片上傳','上傳登革熱防治作業照片，供公司彙整下載。'],
     ...(profile.role === 'supervisor' ? [['/dashboard/reports','報','報表中心','跨場下載防災、計程車、簽到表、月租、契約與登革熱照片。']] : []),

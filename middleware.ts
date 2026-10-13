@@ -15,6 +15,8 @@ type CookieToSet = {
 
 function isPublicPath(path: string) {
   return (
+    path === '/time-clock' ||
+    path.startsWith('/api/time-clock/kiosk') ||
     path === '/login' ||
     path.startsWith('/login/') ||
     path === '/apply' ||
@@ -134,7 +136,9 @@ export async function middleware(
   if (
     user &&
     (
-      path === '/login' ||
+      path === '/time-clock' ||
+    path.startsWith('/api/time-clock/kiosk') ||
+    path === '/login' ||
       path.startsWith('/login/')
     )
   ) {
