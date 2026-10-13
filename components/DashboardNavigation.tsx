@@ -56,6 +56,7 @@ export default function DashboardNavigation({ isSupervisor, isAccountant = false
         { href: '/dashboard/taxi-discounts', label: '計程車折扣', icon: '計' },
         { href: '/dashboard/disaster-inspections', label: '防災檢查', icon: '防' },
         { href: '/dashboard/attendance-upload', label: '簽到表上傳', icon: '簽' },
+        { href: '/time-clock', label: '上下班打卡（授權電腦）', icon: '卡' },
         { href: '/dashboard/dengue-photos', label: '登革熱照片上傳', icon: '登' },
         { href: '/dashboard/shift-closing', label: '當日結班報表', icon: '班' },
       ],
@@ -71,6 +72,7 @@ export default function DashboardNavigation({ isSupervisor, isAccountant = false
     sections.push({
       title: '系統管理',
       items: [
+        { href: '/dashboard/time-clock', label: '電子打卡管理', icon: '卡' },
         { href: '/dashboard/settings', label: '系統設定', icon: '設' },
         { href: '/dashboard/online/audit', label: '操作紀錄', icon: '錄' },
         { href: '/dashboard/online/health', label: '上線安全檢查', icon: '安' },

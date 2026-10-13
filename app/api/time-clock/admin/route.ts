@@ -7,14 +7,19 @@ export async function GET(req:Request){
  if(!await requireSupervisor())return fail('僅主管可查看',403)
  const lot=new URL(req.url).searchParams.get('lot')||''
  const d=db()
+ const month=new URL(req.url).searchParams.get('month')||new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Taipei'}).slice(0,7)
+ if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))return fail('月份錯誤')
+ const [yy,mm]=month.split('-').map(Number)
+ const startUtc=new Date(Date.UTC(yy,mm-1,1)-8*3600000).toISOString()
+ const endUtc=new Date(Date.UTC(yy,mm+0,2)-8*3600000).toISOString() // 多取一日，支援月底跨日簽退
  const [lots,staff,devices,events]=await Promise.all([
  d.from('parking_lots').select('id,name').order('name'),
  d.from('time_clock_staff').select('id,name,parking_lot_id,is_active,pin_hash').order('name'),
  d.from('time_clock_devices').select('id,label,parking_lot_id,ip_address,enabled,created_at').order('created_at',{ascending:false}),
- lot?d.from('time_clock_events').select('id,staff_id,device_id,event_type,punched_at').in('staff_id',(await d.from('time_clock_staff').select('id').eq('parking_lot_id',lot)).data?.map(x=>x.id)||[]).order('punched_at',{ascending:false}).limit(2000):d.from('time_clock_events').select('id,staff_id,device_id,event_type,punched_at').order('punched_at',{ascending:false}).limit(2000)
+ d.from('time_clock_events').select('id,staff_id,device_id,event_type,punched_at').gte('punched_at',startUtc).lt('punched_at',endUtc).order('punched_at',{ascending:true}).limit(10000)
  ])
  for(const r of [lots,staff,devices,events])if(r.error)return fail(r.error.message,500)
- return NextResponse.json({lots:lots.data,staff:(staff.data||[]).map(({pin_hash,...s})=>({...s,activated:!!pin_hash})),devices:devices.data,events:events.data,ip:clientIp(req)})
+ return NextResponse.json({lots:lots.data,staff:(staff.data||[]).map(({pin_hash,...s})=>({...s,activated:!!pin_hash})),devices:devices.data,events:events.data,month,eventsTruncated:(events.data||[]).length>=10000,ip:clientIp(req)})
 }
 export async function POST(req:Request){
  const user=await requireSupervisor(); if(!user)return fail('僅主管可設定',403)
