@@ -1,0 +1,15 @@
+{
+ "id":"/quick-leave",
+ "name":"停車場員工快速排休",
+ "short_name":"快速排休",
+ "description":"主管及授權管理員快速更新員工休假",
+ "start_url":"/quick-leave",
+ "scope":"/quick-leave",
+ "display":"standalone",
+ "background_color":"#f3f8ff",
+ "theme_color":"#2374cf",
+ "icons":[
+  {"src":"/quick-leave/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+  {"src":"/quick-leave/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+ ]
+}

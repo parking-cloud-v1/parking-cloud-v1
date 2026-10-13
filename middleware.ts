@@ -16,6 +16,8 @@ type CookieToSet = {
 function isPublicPath(path: string) {
   return (
     path === '/time-clock' ||
+    path === '/quick-leave' ||
+    path.startsWith('/quick-leave/') ||
     path.startsWith('/api/time-clock/kiosk') ||
     path === '/login' ||
     path.startsWith('/login/') ||
