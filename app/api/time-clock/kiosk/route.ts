@@ -8,7 +8,10 @@ async function device(req:NextRequest){
  if(!/^[a-f0-9-]{36}$/.test(id||'')||! /^[a-f0-9]{64}$/.test(secret||''))return null
  const {data}=await db().from('time_clock_devices').select('*').eq('id',id).eq('secret_hash',digest(secret)).eq('enabled',true).maybeSingle()
  const ip=clientIp(req)
- return data && ip && data.ip_address===ip?data:null
+ if(!data || !ip || data.ip_address!==ip)return null
+ const {data:lot,error:lotError}=await db().from('parking_lots').select('id').eq('id',data.parking_lot_id).eq('status','active').maybeSingle()
+ if(lotError||!lot)return null
+ return data
 }
 export async function GET(req:NextRequest){
  const dev=await device(req);if(!dev)return fail('此電腦尚未授權，或外部 IP 已變更，請聯絡主管重新授權。',403)

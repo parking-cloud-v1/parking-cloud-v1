@@ -13,9 +13,9 @@ export async function GET(req:Request){
  const startUtc=new Date(Date.UTC(yy,mm-1,1)-8*3600000).toISOString()
  const endUtc=new Date(Date.UTC(yy,mm+0,2)-8*3600000).toISOString() // 多取一日，支援月底跨日簽退
  const [lots,staff,devices,events]=await Promise.all([
- d.from('parking_lots').select('id,name').order('name'),
- d.from('time_clock_staff').select('id,name,parking_lot_id,is_active,pin_hash').order('name'),
- d.from('time_clock_devices').select('id,label,parking_lot_id,ip_address,enabled,created_at').order('created_at',{ascending:false}),
+ d.from('parking_lots').select('id,name').eq('status','active').order('name'),
+ d.from('time_clock_staff').select('id,name,parking_lot_id,is_active,pin_hash').eq('is_active',true).order('name'),
+ d.from('time_clock_devices').select('id,label,parking_lot_id,ip_address,enabled,created_at').eq('enabled',true).order('created_at',{ascending:false}),
  d.from('time_clock_events').select('id,staff_id,device_id,event_type,punched_at').gte('punched_at',startUtc).lt('punched_at',endUtc).order('punched_at',{ascending:true}).limit(10000)
  ])
  for(const r of [lots,staff,devices,events])if(r.error)return fail(r.error.message,500)
@@ -28,17 +28,23 @@ export async function POST(req:Request){
  if(action==='addStaff'){
   const name=String(body.name||'').trim(),parking_lot_id=String(body.lot||'')
   if(!name||name.length>50||!parking_lot_id)return fail('請選擇場站及姓名')
+  const {data:activeLot,error:lotError}=await d.from('parking_lots').select('id').eq('id',parking_lot_id).eq('status','active').maybeSingle()
+  if(lotError)return fail(lotError.message,500)
+  if(!activeLot)return fail('此停車場已停用或不存在',400)
   const {data,error}=await d.from('time_clock_staff').insert({name,parking_lot_id}).select('id').single()
   return error?fail(error.message):NextResponse.json({ok:true,id:data.id})
  }
  if(action==='activation'){
   const id=String(body.id||'');const code=randomCode()
-  const {error}=await d.from('time_clock_staff').update({activation_hash:digest(code),activation_expires_at:new Date(Date.now()+24*3600*1000).toISOString(),pin_hash:null}).eq('id',id)
+  const {error}=await d.from('time_clock_staff').update({activation_hash:digest(code),activation_expires_at:new Date(Date.now()+24*3600*1000).toISOString(),pin_hash:null}).eq('id',id).eq('is_active',true)
   return error?fail(error.message):NextResponse.json({ok:true,code,note:'啟用碼只顯示一次，有效24小時；重發會清除舊PIN'})
  }
  if(action==='authorizeDevice'){
   const label=String(body.label||'').trim(),lot=String(body.lot||''),ip=clientIp(req)
   if(!label||!lot||!ip)return fail('請在要授權的中控電腦操作，並填寫裝置名稱及場站')
+  const {data:activeLot,error:lotError}=await d.from('parking_lots').select('id').eq('id',lot).eq('status','active').maybeSingle()
+  if(lotError)return fail(lotError.message,500)
+  if(!activeLot)return fail('此停車場已停用或不存在',400)
   const secret=token()
   const {data,error}=await d.from('time_clock_devices').insert({label,parking_lot_id:lot,ip_address:ip,secret_hash:digest(secret)}).select('id').single()
   if(error)return fail(error.message)
