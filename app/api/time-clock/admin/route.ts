@@ -19,12 +19,34 @@ export async function GET(req:Request){
  d.from('time_clock_events').select('id,staff_id,device_id,event_type,punched_at').gte('punched_at',startUtc).lt('punched_at',endUtc).order('punched_at',{ascending:true}).limit(10000)
  ])
  for(const r of [lots,staff,devices,events])if(r.error)return fail(r.error.message,500)
- return NextResponse.json({lots:lots.data,staff:(staff.data||[]).map(({pin_hash,...s})=>({...s,activated:!!pin_hash})),devices:devices.data,events:events.data,month,eventsTruncated:(events.data||[]).length>=10000,ip:clientIp(req)})
+ const {data:access,error:accessError}=await d.from('time_clock_staff_lot_access').select('staff_id,parking_lot_id,access_type,start_date,end_date').order('created_at',{ascending:false})
+ if(accessError)return fail('請先執行跨場站授權 SQL：'+accessError.message,500)
+ return NextResponse.json({access:access||[],lots:lots.data,staff:(staff.data||[]).map(({pin_hash,...s})=>({...s,activated:!!pin_hash})),devices:devices.data,events:events.data,month,eventsTruncated:(events.data||[]).length>=10000,ip:clientIp(req)})
 }
 export async function POST(req:Request){
  const user=await requireSupervisor(); if(!user)return fail('僅主管可設定',403)
  let body:any;try{body=await req.json()}catch{return fail('資料錯誤')}
  const d=db();const action=String(body.action||'')
+ if(action==='saveAccess'){
+  const id=String(body.id||''),type=String(body.type||''),lots=body.lots,from=String(body.from||''),to=String(body.to||'')
+  if(!/^[a-f0-9-]{36}$/i.test(id)||!['fixed','mobile','temporary'].includes(type))return fail('員工或類型錯誤')
+  const {data:person,error:pe}=await d.from('time_clock_staff').select('id,parking_lot_id').eq('id',id).eq('is_active',true).maybeSingle()
+  if(pe||!person)return fail('找不到有效員工')
+  if(!Array.isArray(lots)||lots.length>100||lots.some((x:unknown)=>typeof x!=='string'||!/^[a-f0-9-]{36}$/i.test(x as string))||new Set(lots).size!==lots.length)return fail('場站資料錯誤')
+  const otherLots=lots.filter((x:string)=>x!==person.parking_lot_id)
+  if(type==='temporary' && (!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to||Number.isNaN(Date.parse(from))||Number.isNaN(Date.parse(to))))return fail('調動期間有誤')
+  if(type==='fixed' && otherLots.length)return fail('固定員工不需選其他場站')
+  if(type!=='fixed' && otherLots.length===0)return fail('至少選一個支援場站')
+  if(otherLots.length){const {data:live,error:le}=await d.from('parking_lots').select('id').in('id',otherLots).eq('status','active');if(le||live?.length!==otherLots.length)return fail('支援場站必須營運中')}
+  // 先清除先前授權後寫入目前設定；資料庫操作若中途失敗會顯示錯誤供主管重試。
+  const {error:de}=await d.from('time_clock_staff_lot_access').delete().eq('staff_id',id)
+  if(de)return fail(de.message,500)
+  if(otherLots.length){const rows=otherLots.map((parking_lot_id:string)=>({staff_id:id,parking_lot_id,access_type:type==='temporary'?'temporary':'mobile',start_date:type==='temporary'?from:null,end_date:type==='temporary'?to:null}))
+   const {error:ie}=await d.from('time_clock_staff_lot_access').insert(rows)
+   if(ie)return fail('授權寫入失敗，請重試：'+ie.message,500)
+  }
+  return NextResponse.json({ok:true,note:'打卡場站授權已更新；原本PIN不變'})
+ }
  if(action==='addStaff'){
   const name=String(body.name||'').trim(),parking_lot_id=String(body.lot||'')
   if(!name||name.length>50||!parking_lot_id)return fail('請選擇場站及姓名')

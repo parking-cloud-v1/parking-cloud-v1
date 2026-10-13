@@ -13,17 +13,35 @@ async function device(req:NextRequest){
  if(lotError||!lot)return null
  return data
 }
+async function eligibleStaff(lotId:string,kind:'in'|'out'='in'){
+ const d=db()
+ const {data:direct,error:e1}=await d.from('time_clock_staff').select('id,name,parking_lot_id,pin_hash').eq('parking_lot_id',lotId).eq('is_active',true)
+ if(e1)throw new Error(e1.message)
+ const localDay=new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Taipei'})
+ const {data:access,error:e2}=await d.from('time_clock_staff_lot_access').select('staff_id,access_type,start_date,end_date').eq('parking_lot_id',lotId)
+ if(e2)throw new Error(e2.message)
+ const ids=(access||[]).filter(a=>a.access_type==='mobile'||(a.start_date<=localDay && a.end_date>=localDay)).map(a=>a.staff_id)
+ // 跨午夜簽退允許前一日調動授權，但限仍有未結束班次者。
+ if(kind==='out'){
+  const yesterday=new Date(Date.now()-24*3600000).toLocaleDateString('sv-SE',{timeZone:'Asia/Taipei'})
+  for(const a of access||[])if(a.access_type==='temporary'&&a.start_date<=yesterday&&a.end_date>=yesterday)ids.push(a.staff_id)
+ }
+ const unique=[...new Set(ids)]
+ const {data:more,error:e3}=unique.length?await d.from('time_clock_staff').select('id,name,parking_lot_id,pin_hash').in('id',unique).eq('is_active',true):{data:[],error:null}
+ if(e3)throw new Error(e3.message)
+ return [...new Map([...(direct||[]),...(more||[])].map(v=>[v.id,v])).values()].sort((a,b)=>a.name.localeCompare(b.name,'zh-TW'))
+}
 export async function GET(req:NextRequest){
  const dev=await device(req);if(!dev)return fail('此電腦尚未授權，或外部 IP 已變更，請聯絡主管重新授權。',403)
- const {data,error}=await db().from('time_clock_staff').select('id,name,parking_lot_id,pin_hash').eq('parking_lot_id',dev.parking_lot_id).eq('is_active',true).order('name')
- return error?fail(error.message,500):NextResponse.json({device:dev.label,staff:(data||[]).map(({pin_hash,...s})=>({...s,activated:!!pin_hash}))})
+ try{const staff=await eligibleStaff(dev.parking_lot_id);return NextResponse.json({device:dev.label,staff:staff.map(({pin_hash,...s})=>({...s,activated:!!pin_hash}))})}catch(e){return fail(e instanceof Error?e.message:'讀取失敗',500)}
 }
 export async function POST(req:NextRequest){
  const dev=await device(req);if(!dev)return fail('此電腦或 IP 未授權',403)
  let b:any;try{b=await req.json()}catch{return fail('資料格式錯誤')}
  const id=String(b.staffId||'')
- const d=db();const {data:s}=await d.from('time_clock_staff').select('*').eq('id',id).eq('parking_lot_id',dev.parking_lot_id).eq('is_active',true).maybeSingle()
- if(!s)return fail('沒有此場站員工')
+ const d=db();const {data:s}=await d.from('time_clock_staff').select('*').eq('id',id).eq('is_active',true).maybeSingle()
+ if(!s)return fail('找不到有效員工')
+ try{const allowed=await eligibleStaff(dev.parking_lot_id,b.kind==='out'?'out':'in');if(!allowed.some(x=>x.id===id))return fail('此員工尚未授權於本場打卡',403)}catch(e){return fail(e instanceof Error?e.message:'授權檢查失敗',500)}
  // Restrict repeated guesses; failed attempts are recorded server-side.
  const windowStart=new Date(Date.now()-10*60*1000).toISOString()
  const {count}=await d.from('time_clock_attempts').select('id',{count:'exact',head:true}).eq('staff_id',id).gte('attempted_at',windowStart)
