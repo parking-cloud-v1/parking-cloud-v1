@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import AttendanceUploadClient from '@/components/AttendanceUploadClient'
+import AttendanceHubClient from '@/components/AttendanceHubClient'
 import { getCurrentWorkParkingLotId } from '@/lib/current-work-parking-lot'
 
 export default async function AttendanceUploadPage() {
@@ -21,5 +21,5 @@ export default async function AttendanceUploadPage() {
       .filter((x:any)=>x?.status==='active').map((x:any)=>({id:x.id,name:x.name}))
   }
 
-  return <AttendanceUploadClient parkingLots={lots} defaultParkingLotId={await getCurrentWorkParkingLotId()} role={profile.role as 'supervisor' | 'manager'} />
+  return <AttendanceHubClient parkingLots={lots} defaultParkingLotId={await getCurrentWorkParkingLotId()} role={profile.role as 'supervisor' | 'manager'} />
 }
