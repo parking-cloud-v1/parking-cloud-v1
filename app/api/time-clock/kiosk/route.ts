@@ -26,6 +26,9 @@ async function eligibleStaff(lotId:string,kind:'in'|'out'='in'){
   const yesterday=new Date(Date.now()-24*3600000).toLocaleDateString('sv-SE',{timeZone:'Asia/Taipei'})
   for(const a of access||[])if(a.access_type==='temporary'&&a.start_date<=yesterday&&a.end_date>=yesterday)ids.push(a.staff_id)
  }
+ const {data:allMobile,error:mobileError}=await d.from('time_clock_mobile_staff').select('staff_id')
+ if(mobileError)throw new Error(mobileError.message)
+ ids.push(...(allMobile||[]).map(x=>x.staff_id))
  const unique=[...new Set(ids)]
  const {data:more,error:e3}=unique.length?await d.from('time_clock_staff').select('id,name,parking_lot_id,pin_hash').in('id',unique).eq('is_active',true):{data:[],error:null}
  if(e3)throw new Error(e3.message)
