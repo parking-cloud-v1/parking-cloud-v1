@@ -31,30 +31,24 @@ type TokenCacheEntry = {
 }
 
 const accessTokenCache =
-  new Map<
-    string,
-    TokenCacheEntry
-  >()
+  new Map<string, TokenCacheEntry>()
 
 let serviceAccountTokenCache:
   | TokenCacheEntry
   | null = null
 
-function env(
-  name: string
-) {
+function env(name: string) {
   return String(
-    process.env[name] ||
-      ''
+    process.env[name] || ''
   ).trim()
 }
 
 /**
- * Service Account
- * 優先使用新的 Drive 專用變數。
+ * Service Account 設定仍保留，
+ * 避免其他舊程式 import 此函式時發生錯誤。
  *
- * 另外保留舊變數名稱作為相容備援，
- * 避免既有 Vercel 設定突然失效。
+ * 但 Google Drive 實際上傳流程
+ * 已經不會再自動使用 Service Account。
  */
 function serviceAccountEmail() {
   return (
@@ -88,32 +82,19 @@ export function configuredGoogleDriveServiceAccount() {
 function base64url(
   input: string | Buffer
 ) {
-  return Buffer.from(
-    input
-  )
-    .toString(
-      'base64'
-    )
-    .replace(
-      /\+/g,
-      '-'
-    )
-    .replace(
-      /\//g,
-      '_'
-    )
-    .replace(
-      /=+$/g,
-      ''
-    )
+  return Buffer.from(input)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '')
 }
 
 /**
- * 使用 Google Service Account JWT
- * 取得 Google OAuth access token。
+ * 舊 Service Account 函式保留相容性。
  *
- * Service Account 本身不依賴使用者 refresh token，
- * 因此不會因原本 OAuth refresh token 被撤銷而失效。
+ * 注意：
+ * getGoogleDriveAccessToken()
+ * 已經不會呼叫這個函式。
  */
 async function getGoogleDriveServiceAccountAccessToken() {
   const email =
@@ -122,10 +103,7 @@ async function getGoogleDriveServiceAccountAccessToken() {
   const rawKey =
     serviceAccountPrivateKey()
 
-  if (
-    !email ||
-    !rawKey
-  ) {
+  if (!email || !rawKey) {
     throw new Error(
       'Vercel 尚未設定 GOOGLE_DRIVE_SERVICE_ACCOUNT_EMAIL / GOOGLE_DRIVE_PRIVATE_KEY'
     )
@@ -134,17 +112,11 @@ async function getGoogleDriveServiceAccountAccessToken() {
   if (
     serviceAccountTokenCache &&
     Date.now() <
-      serviceAccountTokenCache
-        .expiresAt
+      serviceAccountTokenCache.expiresAt
   ) {
-    return serviceAccountTokenCache
-      .accessToken
+    return serviceAccountTokenCache.accessToken
   }
 
-  /**
-   * Vercel 的環境變數有時會把換行存成 \n，
-   * 這裡統一還原成真正換行。
-   */
   const privateKey =
     rawKey.replace(
       /\\n/g,
@@ -153,8 +125,7 @@ async function getGoogleDriveServiceAccountAccessToken() {
 
   const now =
     Math.floor(
-      Date.now() /
-        1000
+      Date.now() / 1000
     )
 
   const header =
@@ -169,14 +140,11 @@ async function getGoogleDriveServiceAccountAccessToken() {
     base64url(
       JSON.stringify({
         iss: email,
-        scope:
-          DRIVE_SCOPE,
+        scope: DRIVE_SCOPE,
         aud:
           'https://oauth2.googleapis.com/token',
         iat: now,
-        exp:
-          now +
-          3600,
+        exp: now + 3600,
       })
     )
 
@@ -188,32 +156,16 @@ async function getGoogleDriveServiceAccountAccessToken() {
       'RSA-SHA256'
     )
 
-  signer.update(
-    unsigned
-  )
-
+  signer.update(unsigned)
   signer.end()
 
   const signature =
     signer
-      .sign(
-        privateKey
-      )
-      .toString(
-        'base64'
-      )
-      .replace(
-        /\+/g,
-        '-'
-      )
-      .replace(
-        /\//g,
-        '_'
-      )
-      .replace(
-        /=+$/g,
-        ''
-      )
+      .sign(privateKey)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '')
 
   const assertion =
     `${unsigned}.${signature}`
@@ -222,8 +174,7 @@ async function getGoogleDriveServiceAccountAccessToken() {
     await fetch(
       'https://oauth2.googleapis.com/token',
       {
-        method:
-          'POST',
+        method: 'POST',
 
         headers: {
           'Content-Type':
@@ -234,12 +185,10 @@ async function getGoogleDriveServiceAccountAccessToken() {
           new URLSearchParams({
             grant_type:
               'urn:ietf:params:oauth:grant-type:jwt-bearer',
-
             assertion,
           }),
 
-        cache:
-          'no-store',
+        cache: 'no-store',
       }
     )
 
@@ -251,8 +200,7 @@ async function getGoogleDriveServiceAccountAccessToken() {
     !json?.access_token
   ) {
     throw new Error(
-      json
-        ?.error_description ||
+      json?.error_description ||
         json?.error ||
         'Google Drive Service Account 授權失敗'
     )
@@ -267,31 +215,30 @@ async function getGoogleDriveServiceAccountAccessToken() {
     Math.max(
       60,
       Number(
-        json.expires_in ||
-          3600
+        json.expires_in || 3600
       )
     )
 
-  serviceAccountTokenCache =
-    {
-      accessToken,
+  serviceAccountTokenCache = {
+    accessToken,
 
-      expiresAt:
-        Date.now() +
-        Math.max(
-          60,
-          expiresIn -
-            120
-        ) *
-          1000,
-    }
+    expiresAt:
+      Date.now() +
+      Math.max(
+        60,
+        expiresIn - 120
+      ) *
+        1000,
+  }
 
   return accessToken
 }
 
 /**
- * 原本 OAuth 設定保留。
- * 目前只作為 Service Account 沒設定時的備援。
+ * Google Drive OAuth 設定。
+ *
+ * 現在正式的 Drive 上傳
+ * 一律使用主管 Google 帳號 OAuth。
  */
 export function getGoogleDriveOAuthConfig(): OAuthConfig {
   return {
@@ -329,9 +276,7 @@ function encryptionKey() {
   } =
     getGoogleDriveOAuthConfig()
 
-  if (
-    !clientSecret
-  ) {
+  if (!clientSecret) {
     throw new Error(
       'Vercel 尚未設定 GOOGLE_DRIVE_OAUTH_CLIENT_SECRET'
     )
@@ -362,9 +307,7 @@ export function encryptGoogleDriveRefreshToken(
   }
 
   const iv =
-    randomBytes(
-      12
-    )
+    randomBytes(12)
 
   const cipher =
     createCipheriv(
@@ -379,7 +322,6 @@ export function encryptGoogleDriveRefreshToken(
         token,
         'utf8'
       ),
-
       cipher.final(),
     ])
 
@@ -402,15 +344,13 @@ export function decryptGoogleDriveRefreshToken(
     const packed =
       Buffer.from(
         String(
-          value ||
-            ''
+          value || ''
         ),
         'base64url'
       )
 
     if (
-      packed.length <=
-      28
+      packed.length <= 28
     ) {
       return ''
     }
@@ -428,9 +368,7 @@ export function decryptGoogleDriveRefreshToken(
       )
 
     const encrypted =
-      packed.subarray(
-        28
-      )
+      packed.subarray(28)
 
     const decipher =
       createDecipheriv(
@@ -439,15 +377,12 @@ export function decryptGoogleDriveRefreshToken(
         iv
       )
 
-    decipher.setAuthTag(
-      tag
-    )
+    decipher.setAuthTag(tag)
 
     return Buffer.concat([
       decipher.update(
         encrypted
       ),
-
       decipher.final(),
     ]).toString(
       'utf8'
@@ -471,19 +406,16 @@ export const googleDriveOAuthCookieNames =
 
 export function googleDriveOAuthCookieOptions() {
   return {
-    httpOnly:
-      true,
+    httpOnly: true,
 
     secure:
-      process.env
-        .NODE_ENV ===
+      process.env.NODE_ENV ===
       'production',
 
     sameSite:
       'lax' as const,
 
-    path:
-      '/',
+    path: '/',
   }
 }
 
@@ -539,6 +471,11 @@ export function buildGoogleDriveAuthorizationUrl(
     'offline'
   )
 
+  /*
+   * 每次重新授權都要求 Google 回傳 refresh token。
+   * 這樣就算之前的 token 被撤銷，
+   * 重新按連結 Google Drive 後也能恢復。
+   */
   url.searchParams.set(
     'prompt',
     'consent'
@@ -575,8 +512,7 @@ export async function exchangeGoogleDriveCode(
     await fetch(
       'https://oauth2.googleapis.com/token',
       {
-        method:
-          'POST',
+        method: 'POST',
 
         headers: {
           'Content-Type':
@@ -613,8 +549,7 @@ export async function exchangeGoogleDriveCode(
     !json?.access_token
   ) {
     throw new Error(
-      json
-        ?.error_description ||
+      json?.error_description ||
         json?.error ||
         'Google OAuth 授權交換失敗'
     )
@@ -628,14 +563,12 @@ export async function exchangeGoogleDriveCode(
 
     refreshToken:
       String(
-        json.refresh_token ||
-          ''
+        json.refresh_token || ''
       ),
 
     expiresIn:
       Number(
-        json.expires_in ||
-          3600
+        json.expires_in || 3600
       ),
   }
 }
@@ -658,36 +591,53 @@ export async function storedGoogleDriveRefreshToken() {
   )
 }
 
+/**
+ * Google Drive 是否真的已經授權。
+ *
+ * 不再因為 Service Account 有設定
+ * 就誤判成「Google Drive 已連結」。
+ *
+ * 這裡會實際嘗試取得 access token，
+ * refresh token 如果已過期或被撤銷，
+ * 就直接回傳 false。
+ */
 export async function hasGoogleDriveOAuthConnection() {
-  /**
-   * 有 Service Account 時，
-   * 視同 Google Drive 已可使用。
-   */
   if (
-    configuredGoogleDriveServiceAccount()
+    !configuredGoogleDriveOAuth()
   ) {
-    return true
+    return false
   }
 
-  return Boolean(
+  const refreshToken =
     await storedGoogleDriveRefreshToken()
-  )
+
+  if (!refreshToken) {
+    return false
+  }
+
+  try {
+    await getGoogleDriveAccessToken()
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
- * 所有 Google Drive API
- * 都從這個函式取得 access token。
+ * Google Drive 正式上傳權限來源。
  *
- * 1. 優先 Service Account
- * 2. 沒有 Service Account 才退回舊 OAuth
+ * ★ 現在只使用主管本人 Google OAuth。
+ *
+ * 不再：
+ * - 優先 Service Account
+ * - 自動切換 Service Account
+ * - 要求每個 Drive 資料夾分享給 Service Account
+ *
+ * 主管授權自己的 Google 帳號一次之後，
+ * 只要該 Google 帳號本身能存取資料夾，
+ * 系統就能直接上傳。
  */
 export async function getGoogleDriveAccessToken() {
-  if (
-    configuredGoogleDriveServiceAccount()
-  ) {
-    return getGoogleDriveServiceAccountAccessToken()
-  }
-
   const config =
     getGoogleDriveOAuthConfig()
 
@@ -695,18 +645,16 @@ export async function getGoogleDriveAccessToken() {
     !configuredGoogleDriveOAuth()
   ) {
     throw new Error(
-      'Google Drive 尚未設定 Service Account，OAuth 環境變數也不完整'
+      'Google Drive OAuth 環境變數尚未設定完整'
     )
   }
 
   const refreshToken =
     await storedGoogleDriveRefreshToken()
 
-  if (
-    !refreshToken
-  ) {
+  if (!refreshToken) {
     throw new Error(
-      '尚未設定 Google Drive Service Account，且尚未連結 Google Drive。'
+      '尚未連結 Google Drive，請主管先完成 Google 帳號授權。'
     )
   }
 
@@ -739,8 +687,7 @@ export async function getGoogleDriveAccessToken() {
     await fetch(
       'https://oauth2.googleapis.com/token',
       {
-        method:
-          'POST',
+        method: 'POST',
 
         headers: {
           'Content-Type':
@@ -774,11 +721,15 @@ export async function getGoogleDriveAccessToken() {
     !response.ok ||
     !json?.access_token
   ) {
+    /*
+     * 如果 Google 把 refresh token 撤銷，
+     * 不再自動退回 Service Account。
+     * 直接要求主管重新授權即可。
+     */
     throw new Error(
-      json
-        ?.error_description ||
+      json?.error_description ||
         json?.error ||
-        'Google Drive OAuth 授權已失效，請改用 Service Account 或重新連結。'
+        'Google Drive OAuth 授權已失效，請重新連結 Google Drive。'
     )
   }
 
@@ -791,8 +742,7 @@ export async function getGoogleDriveAccessToken() {
     Math.max(
       60,
       Number(
-        json.expires_in ||
-          3600
+        json.expires_in || 3600
       )
     )
 
@@ -805,8 +755,7 @@ export async function getGoogleDriveAccessToken() {
         Date.now() +
         Math.max(
           60,
-          expiresIn -
-            120
+          expiresIn - 120
         ) *
           1000,
     }
