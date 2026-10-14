@@ -51,10 +51,6 @@ type DailyFolder = {
   workTypes: string[]
 }
 
-function driveStorageKey(parkingLotId: string) {
-  return `manual-google-drive-folder:dengue:${parkingLotId}`
-}
-
 function isDriveFolderUrl(value: string) {
   return /^https:\/\/drive\.google\.com\//i.test(value.trim())
 }
@@ -120,30 +116,10 @@ export default function DenguePhotoUpload({
 
   useEffect(() => {
     void loadRows()
-    setDriveFolderUrl(
-      parkingLotId
-        ? window.localStorage.getItem(driveStorageKey(parkingLotId)) || ''
-        : ''
-    )
+    // 每次切換停車場都清空 Google Drive 網址；
+    // 不再讀取或保存舊的瀏覽器資料夾設定，實際上傳以主管本次貼入的網址為準。
+    setDriveFolderUrl('')
   }, [parkingLotId])
-
-  function saveDriveFolder() {
-    const value = driveFolderUrl.trim()
-    if (!parkingLotId) return
-
-    if (value && !isDriveFolderUrl(value)) {
-      setMessage('請貼上正確的 Google Drive 資料夾網址。')
-      return
-    }
-
-    if (value) {
-      window.localStorage.setItem(driveStorageKey(parkingLotId), value)
-      setMessage('這個停車場的 Google Drive 連結已儲存在目前瀏覽器，可隨時更改。')
-    } else {
-      window.localStorage.removeItem(driveStorageKey(parkingLotId))
-      setMessage('已清除這個停車場的 Google Drive 連結。')
-    }
-  }
 
   function openDriveFolder() {
     const value = driveFolderUrl.trim()
@@ -378,7 +354,7 @@ export default function DenguePhotoUpload({
 
     const folderUrl = driveFolderUrl.trim()
     if (!folderUrl) {
-      setMessage('請先貼上這間停車場要上傳的 Google Drive 資料夾網址。')
+      setMessage('請先貼上這次要上傳的 Google Drive 資料夾網址。')
       return
     }
     if (!isDriveFolderUrl(folderUrl)) {
@@ -413,7 +389,6 @@ export default function DenguePhotoUpload({
         throw new Error(json?.error || 'Google Drive 上傳失敗')
       }
 
-      window.localStorage.setItem(driveStorageKey(parkingLotId), folderUrl)
       setMessage(
         `${date} 已直接上傳 Google Drive（共 ${json?.fileCount || 0} 個檔案）` +
           (json?.fileUrl ? '。可按「開啟資料夾」確認。' : '。')
@@ -530,7 +505,7 @@ export default function DenguePhotoUpload({
         >
           <h2 style={{ margin: 0 }}>主管｜Google Drive 直接上傳</h2>
           <div className="muted" style={{ marginTop: 6 }}>
-            每一間停車場都可指定不同的 Google Drive 資料夾。貼上目前要使用的資料夾網址後，直接按每日資料夾的「直接上傳 Google Drive」，不需要先下載再人工上傳。
+            每次上傳前直接貼上這次要使用的 Google Drive 資料夾網址，再按每日資料夾的「直接上傳 Google Drive」。系統不會記住舊網址，也不需要到後台修改資料夾設定。
           </div>
 
           <div
@@ -592,7 +567,7 @@ export default function DenguePhotoUpload({
           </div>
 
           <div className="field" style={{ marginTop: 12 }}>
-            <label>{parkingLotName || '目前停車場'}－Google Drive 資料夾網址</label>
+            <label>本次要上傳的 Google Drive 資料夾網址</label>
             <input
               value={driveFolderUrl}
               onChange={(event) => setDriveFolderUrl(event.target.value)}
@@ -601,16 +576,13 @@ export default function DenguePhotoUpload({
           </div>
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-            <button type="button" onClick={saveDriveFolder}>
-              儲存／更新此場連結
-            </button>
             <button type="button" onClick={openDriveFolder}>
               開啟資料夾
             </button>
           </div>
 
           <div className="muted" style={{ marginTop: 8 }}>
-            連結只記在目前瀏覽器，可隨時改成新的公司資料夾；實際上傳時系統會再次檢查該資料夾是否有寫入權限。
+            這個網址只用於本次操作，不會儲存在瀏覽器。換資料夾時直接貼上新的網址即可；實際上傳時系統仍會檢查該資料夾是否有寫入權限。
           </div>
         </div>
       )}
