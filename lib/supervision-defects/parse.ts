@@ -1,0 +1,51 @@
+export type Token={text:string;left:number;right:number;top:number;bottom:number}
+export type Page={photoTimes?:Array<{text:string;x:number;y:number}>;pageNumber:number;result:'fail'|'pass'|'na'|'unknown';lotName:string;inspectionDate:string;caseNumber:string;itemText:string;location:string;description:string;photoCount:number|null;contentBottom:number;warnings:string[];sourcePages:number[]}
+export function parsePage({tokens,width:w,height:h,pageNumber}:{tokens:Token[];width:number;height:number;pageNumber:number}):Page {
+ const rows:Array<{y:number;tokens:Token[]}>=[]
+ for(const t of [...tokens].filter(t=>t.text&&t.top<h*.62).sort((a,b)=>a.top-b.top||a.left-b.left)){let r=rows.find(r=>Math.abs(r.y-t.top)<h*.005);if(!r){r={y:t.top,tokens:[]};rows.push(r)}r.tokens.push(t)}
+ rows.forEach(r=>r.tokens.sort((a,b)=>a.left-b.left))
+ const aliases:Record<string,string[]>={'地點':['地點','地点','地黛'],'說明':['說明','说明','語明'],'督導日期':['督導日期','督导日期','賢導日期'],'廠商':['廠商','厂商','廂商']};const labelWarnings:string[]=[];
+ const clean=(s:string)=>s.normalize('NFKC').replace(/[\s：:]/g,'');
+ function label(name:string,right=false){const accepted=aliases[name]||[name];for(const r of rows){if(!right){const ts=r.tokens.filter(t=>t.left<w*.19),raw=clean(ts.map(t=>t.text).join(''));if(accepted.includes(raw)&&ts.length){if(raw!==name)labelWarnings.push(name+'欄標籤需核對');return{y:r.y,right:Math.max(...ts.map(t=>t.right)),left:Math.min(...ts.map(t=>t.left)),bottom:Math.max(...ts.map(t=>t.bottom))}}}else{const itemRow=rows.find(x=>clean(x.tokens.filter(t=>t.left<w*.19).map(t=>t.text).join(''))==='項目說明');if(name==='是否合格'&&itemRow&&r.y>=itemRow.y)continue;const ts=r.tokens.filter(t=>t.left>w*.25);for(let a=0;a<ts.length;a++)for(let b=a;b<Math.min(ts.length,a+8);b++){const raw=clean(ts.slice(a,b+1).map(t=>t.text).join(''));if(accepted.includes(raw)){if(raw!==name)labelWarnings.push(name+'欄標籤需核對');return{y:r.y,right:ts[b].right,left:ts[a].left,bottom:Math.max(...ts.slice(a,b+1).map(t=>t.bottom))}}}}}return null}
+ function value(name:string,right=false,stop=''){const l=label(name,right),end=stop?label(stop,true):null;if(!l)return '';return rows.filter(r=>Math.abs(r.y-l.y)<h*.005).flatMap(r=>r.tokens).filter(t=>t.left>=l.right-1&&(!end||t.left<end.left)).sort((a,b)=>a.left-b.left).map(t=>t.text).join('').trim()}
+ const raw=value('是否合格',true).replace(/[\s：:]/g,''),result=raw==='不合格'?'fail':raw==='合格'?'pass':['不適用','不适用'].includes(raw)?'na':'unknown'
+ const item=label('項目說明'),check=label('查核處'),loc=label('地點'),desc=label('說明'),end=(desc?.y||h*.34)+h*.05
+ function band(start:ReturnType<typeof label>,stop:number){if(!start)return '';return rows.filter(r=>r.y>=start.y-h*.003&&r.y<stop-h*.003).map(r=>r.tokens.filter(t=>t.left>=start.right+1).map(t=>t.text).join('')).filter(Boolean).join('\n').trim()}
+ const lotName=lotNameFromTokens(tokens,w,h)||reportLotName(rows.filter(r=>r.y<h*.22).map(r=>r.tokens.map(t=>t.text).join('')).join(' '))||value('停車場',false,'廠商'),dateRaw=value('督導日期',true),m=dateRaw.match(/(\d{3,4})[年/.-](\d{1,2})[月/.-](\d{1,2})/);let inspectionDate=''
+ if(m){let y=+m[1];if(y<1911)y+=1911;const mo=+m[2],d=+m[3],dt=new Date(Date.UTC(y,mo-1,d));if(dt.getUTCFullYear()===y&&dt.getUTCMonth()===mo-1&&dt.getUTCDate()===d)inspectionDate=`${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`}
+ const itemText=band(item,check?.y||loc?.y||end),location=band(loc,desc?.y||end),description=band(desc,end),n=value('照片數',true),warnings:string[]=[...new Set(labelWarnings)]
+ if(result==='unknown')warnings.push('是否合格待確認，請檢視原頁');if(!lotName)warnings.push('場名待確認');if(!inspectionDate)warnings.push('日期待確認');if(!itemText)warnings.push('原始查核項目待確認');if(result==='fail'&&!description)warnings.push('說明未讀取，請檢視原頁；不會使用查核問句代替')
+ return {pageNumber,result,lotName,inspectionDate,caseNumber:value('案號',false,'督導日期'),itemText,location,description,photoCount:/^\d+$/.test(n)?+n:null,contentBottom:Math.min(.65,(desc?Math.max(desc.bottom,...rows.filter(r=>r.y>=desc.y&&r.y<end).flatMap(r=>r.tokens.map(t=>t.bottom)))+h*.008:h*.36)/h),warnings,sourcePages:[pageNumber]}
+}
+export function mergePages(pages:Page[]){const out:Page[]=[];const key=(p:Page)=>[p.caseNumber,p.lotName,p.inspectionDate,p.itemText,p.location,p.description,p.result].map(x=>x.replace(/\s/g,'')).join('|');for(const p of [...pages].sort((a,b)=>a.pageNumber-b.pageNumber)){if(p.result==='pass'||p.result==='na')continue;const prev=out.at(-1);if(prev&&p.result==='fail'&&p.lotName&&p.inspectionDate&&p.itemText&&key(prev)===key(p)&&prev.sourcePages.at(-1)===p.pageNumber-1)prev.sourcePages.push(p.pageNumber);else out.push({...p,sourcePages:[p.pageNumber]})}return out}
+export type Box={left:number;top:number;width:number;height:number}
+export function photoBoxes(data:Uint8ClampedArray,w:number,h:number,start:number):Box[]{const out:Box[]=[];const gray=(x:number,y:number)=>{const p=(y*w+x)*4;return data[p]>145&&data[p]<242&&Math.abs(data[p]-data[p+1])<8&&Math.abs(data[p]-data[p+2])<8};for(const [a,b]of [[.077,.483],[.5,.907]]){const l=Math.round(w*a),r=Math.round(w*b),ys:number[]=[];for(let y=Math.floor(h*start);y<h*.94;y++){let hits=0,n=0;for(let x=l+3;x<r-3;x+=2){n++;if(gray(x,y))hits++}if(hits/n>.66&&(!ys.length||y-ys.at(-1)!>5))ys.push(y)}for(let i=0;i<ys.length-1;i++){const t=ys[i],bottom=ys[i+1],height=bottom-t;if(height<h*.075||height>h*.29)continue;let ink=0,n=0;for(let y=t+6;y<bottom-6;y+=4)for(let x=l+6;x<r-6;x+=4){n++;const p=(y*w+x)*4;if(Math.min(data[p],data[p+1],data[p+2])<230)ink++}if(ink/n>.018)out.push({left:l+2,top:t+2,width:r-l-4,height:height-4})}}return out.sort((a,b)=>Math.abs(a.top-b.top)<10?a.left-b.left:a.top-b.top)}
+export function mergeReviews<T extends {include:boolean;merged?:boolean;confirmed:boolean;pages:number[];photos:unknown[];sources:unknown[];warnings:string[]}>(rows:T[],index:number):T[]{const current=rows[index];if(!current?.include||current.merged)return rows;let previous=index-1;while(previous>=0&&!rows[previous].include)previous--;if(previous<0)return rows;const a=rows[previous];return rows.map((r,i)=>i===index?{...r,include:false,merged:true}:i===previous?{...a,pages:[...new Set([...a.pages,...current.pages])].sort((a,b)=>a-b),photos:[...a.photos,...current.photos],sources:[...a.sources,...current.sources],confirmed:false,warnings:[...a.warnings,'已手動合併照片，請重新核對']}:r)}
+export function photoTimes(tokens:Token[],w:number,h:number,start:number){const rows:Array<{y:number;tokens:Token[]}>=[];for(const t of tokens.filter(t=>t.top>start*h).sort((a,b)=>a.top-b.top)){let r=rows.find(r=>Math.abs(r.y-t.top)<h*.003);if(!r){r={y:t.top,tokens:[]};rows.push(r)}r.tokens.push(t)}const out:Array<{text:string;x:number;y:number}>=[];for(const row of rows){const ts=row.tokens.sort((a,b)=>a.left-b.left),chars:Array<{c:string;t:Token}>=[];for(const t of ts)for(const c of Array.from(t.text))chars.push({c,t});const text=chars.map(c=>c.c).join('');const re=/((?:20\d{2}|1\d{2}))[/.年-](\d{1,2})[/.月-](\d{1,2})(?:日|\s)*(\d{1,2}):(\d{2})(?::(\d{2}))?/g;for(const m of text.matchAll(re)){if(+m[4]>23||+m[5]>59||+(m[6]||0)>59)continue;const first=chars[m.index!]?.t,last=chars[m.index!+m[0].length-1]?.t;if(first&&last)out.push({text:`${m[1]}/${m[2]}/${m[3]} ${m[4]}:${m[5]}${m[6]?':'+m[6]:''}`,x:(first.left+last.right)/2/w,y:(first.top+last.bottom)/2/h})}}return out}
+// Reports use official full names; existing lot names remain untouched.
+export function reportLotName(text:string){const compact=text.normalize('NFKC').replace(/停车场|停車塲/g,'停車場').replace(/\s/g,'');const m=compact.match(/停車場[：:]?(.{2,100}?)(?=廠商|厂商|承攬廠商|管理廠商)/);return m?.[1]?.replace(/^[：:]/,'')||''}
+export function matchLot<T extends {id:string;name:string}>(name:string,lots:T[]):T|null{
+ const norm=(s:string)=>s.normalize('NFKC').replace(/[\s()（）:：·、,，-]/g,'').replace(/臺/g,'台').toLowerCase();
+ const value=norm(name);if(!value)return null;
+ const exact=lots.filter(l=>norm(l.name)===value);if(exact.length)return exact.length===1?exact[0]:null;
+ const core=(s:string)=>norm(s.replace(/[（(][^）)]*[）)]/g,'')).replace(/國民小學/g,'國小').replace(/(?:公有|地下|地上|平面|立體|機車|汽車|路外|停車場)/g,'');
+ const target=core(name);if(target.length<2)return null;
+ const same=lots.filter(l=>core(l.name)===target);if(same.length)return same.length===1?same[0]:null;
+ const possible=lots.filter(l=>{const n=core(l.name);return n.length>=2&&(target.includes(n)||n.includes(target))});
+ if(possible.length)return possible.length===1?possible[0]:null;
+ const distance=(a:string,b:string)=>{let row=Array.from({length:b.length+1},(_,i)=>i);for(let i=0;i<a.length;i++){const next=[i+1];for(let j=0;j<b.length;j++)next.push(Math.min(next[j]+1,row[j+1]+1,row[j]+(a[i]===b[j]?0:1)));row=next}return row[b.length]};
+ const similar=lots.filter(l=>{const n=core(l.name);return Math.min(n.length,target.length)>=4&&Math.abs(n.length-target.length)<=1&&distance(n,target)<=1});
+ return similar.length===1?similar[0]:null;
+}
+export function lotNameFromTokens(tokens:Token[],w:number,h:number){
+ const rows:Array<{y:number;tokens:Token[]}>=[];
+ for(const t of tokens.filter(t=>t.top<h*.25).sort((a,b)=>a.top-b.top||a.left-b.left)){const y=(t.top+t.bottom)/2;let r=rows.find(r=>Math.abs(r.y-y)<h*.009);if(!r){r={y,tokens:[]};rows.push(r)}r.tokens.push(t)}
+ for(const r of rows){const ts=r.tokens.sort((a,b)=>a.left-b.left),raw=reportLotName(ts.map(t=>t.text).join(''));if(raw)return raw;
+  for(let i=0;i<ts.length;i++)for(let j=i;j<Math.min(ts.length,i+4);j++){if(ts[i].left>w*.2)continue;if(ts.slice(i,j+1).map(t=>t.text).join('')!=='停車場')continue;let previous=ts[j].right;const name:Token[]=[];for(const t of ts.slice(j+1)){if(name.length&&t.left-previous>w*.08)break;if(t.left>w*.7)break;name.push(t);previous=t.right}const text=name.map(t=>t.text).join('').trim();if(text.length>=2)return text}
+
+  // If the lot label is unreadable, the vendor label still bounds its adjacent value cell.
+  let boundary:number|null=null;for(let i=0;i<ts.length;i++)for(let j=i;j<Math.min(ts.length,i+5);j++){const text=ts.slice(i,j+1).map(t=>t.text).join('').replace(/\s/g,'');if(['廠商','厂商'].includes(text)&&ts[i].left>w*.4)boundary=ts[i].left}
+  if(boundary!==null){const name=ts.filter(t=>t.left>w*.14&&t.right<boundary!).map(t=>t.text).join('').replace(/\s/g,'');if(name.length>=2&&name.length<100)return name}
+ }
+ return '';
+}
